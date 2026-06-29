@@ -527,7 +527,7 @@ function CookieDialog({ session, onClose, onSaved }: { session?: ProviderSession
         <textarea
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          placeholder="Dán cookie dạng Netscape hoặc header Cookie từ trình duyệt…"
+          placeholder='Dán cookie JSON từ Cookie-Editor ({"cookies":[…]}), file cookies.txt, hoặc header Cookie…'
           rows={6}
         />
         {error ? <p className="fault">{error}</p> : null}

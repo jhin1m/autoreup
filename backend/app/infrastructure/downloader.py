@@ -40,7 +40,11 @@ class YtDlpDownloader:
         if cookies_file:
             options["cookiefile"] = cookies_file
         if cookie_header:
-            options["http_headers"] = {"Cookie": cookie_header, "User-Agent": "Mozilla/5.0"}
+            options["http_headers"] = {
+                "Cookie": cookie_header,
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                "Referer": "https://www.douyin.com/",
+            }
 
         try:
             with yt_dlp.YoutubeDL(options) as ydl:

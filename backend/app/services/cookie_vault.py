@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -61,7 +62,7 @@ class CookieVault:
 
     def save(self, platform: str, cookie_header: str) -> dict:
         self._spec(platform)
-        normalized = self._normalize_cookie_header(cookie_header)
+        normalized = self._to_cookie_header(cookie_header)
         if not normalized:
             raise ValueError("Cookie không hợp lệ.")
         path = self._path(platform)
@@ -103,12 +104,55 @@ class CookieVault:
         return self.cookies_dir / f"{platform}.cookie"
 
     @staticmethod
-    def _normalize_cookie_header(cookie_header: str) -> str:
-        lines = [line.strip() for line in cookie_header.strip().splitlines() if line.strip()]
-        if not lines:
+    def _to_cookie_header(raw: str) -> str:
+        """Accept several cookie paste formats and reduce to a Cookie header.
+
+        Supported: Cookie-Editor / EditThisCookie JSON (an array of
+        ``{name,value,…}`` or ``{"cookies":[…]}``), a Netscape ``cookies.txt``
+        export (tab-separated), and a plain ``name=value; …`` header.
+        """
+        raw = (raw or "").strip()
+        if not raw:
             return ""
-        header = "; ".join(lines)
+
+        if raw[0] in "[{":
+            pairs = CookieVault._pairs_from_json(raw)
+            if pairs:
+                return "; ".join(pairs)
+
+        if "\t" in raw:
+            pairs = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                fields = line.split("\t")
+                if len(fields) >= 7 and fields[5]:
+                    pairs.append(f"{fields[5]}={fields[6]}")
+            if pairs:
+                return "; ".join(pairs)
+
+        header = "; ".join(line.strip() for line in raw.splitlines() if line.strip())
         return "; ".join(part.strip() for part in header.split(";") if "=" in part)
+
+    @staticmethod
+    def _pairs_from_json(raw: str) -> list[str]:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        items = data.get("cookies") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            return []
+        pairs: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            value = str(item.get("value", "")).strip()
+            if name:
+                pairs.append(f"{name}={value}")
+        return pairs
 
     @staticmethod
     def _spec(platform: str) -> ProviderSpec:
