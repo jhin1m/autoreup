@@ -136,16 +136,15 @@ class GlossaryStage(PipelineStage):
         anchors: list[Anchor] = context.artifacts["anchors"]
         glossary = extract_glossary(anchors, _translate_llm(settings), genre=context.config.content_genre)
         context.artifacts["glossary"] = glossary
-        path = settings.subtitles_dir / f"{context.job_id}.glossary.tsv"
-        write_tsv(
-            path,
-            [{"TERM_ZH": g.term_zh, "TERM_VI": g.term_vi, "KIND": g.kind, "NOTE": g.note} for g in glossary],
-            ["TERM_ZH", "TERM_VI", "KIND", "NOTE"],
-        )
+        rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
+        tsv_path = settings.subtitles_dir / f"{context.job_id}.glossary.tsv"
+        json_path = settings.subtitles_dir / f"{context.job_id}.glossary.json"
+        write_tsv(tsv_path, [{k.upper(): v for k, v in row.items()} for row in rows], ["TERM_ZH", "TERM_VI", "KIND", "NOTE"])
+        write_json(json_path, rows)
         return StageResult(
             name=self.name,
-            artifacts=[_artifact(ArtifactKind.pipeline_audit, path, settings.data_dir)],
-            metrics={"terms": len(glossary)},
+            artifacts=[_artifact(ArtifactKind.glossary, json_path, settings.data_dir)],
+            metrics={"terms": len(glossary), "by_kind": _count_kinds(glossary)},
             logs=[format_glossary(glossary)[:2000]],
         )
 
@@ -202,7 +201,7 @@ class QAStage(PipelineStage):
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
-        cues = build_display_cues(speech_rows, min_duration=settings.min_duration)
+        cues = build_display_cues(speech_rows, min_duration=settings.min_duration, anchors=anchors)
         report = qa_report(speech_rows, anchors, cues, max_display_chars=settings.display_max_chars)
 
         subtitle_json = settings.subtitles_dir / f"{context.job_id}.vi.display.json"
@@ -268,7 +267,7 @@ class VoiceoverStage(PipelineStage):
             logs.append(f"render round {rounds}: {result.summary}")
 
         context.artifacts["speech_rows"] = speech_rows
-        cues = build_display_cues(speech_rows, min_duration=settings.min_duration)
+        cues = build_display_cues(speech_rows, min_duration=settings.min_duration, anchors=anchors)
         write_subtitles(cues, context.artifacts["subtitle_json"], context.artifacts["subtitle_srt"])
         context.artifacts["display_cues"] = cues
 
@@ -306,6 +305,7 @@ def _artifact(kind: ArtifactKind, path: Path, data_dir: Path) -> Artifact:
         ArtifactKind.subtitle_json: "application/json",
         ArtifactKind.subtitle_srt: "application/x-subrip",
         ArtifactKind.qa_report: "application/json",
+        ArtifactKind.glossary: "application/json",
         ArtifactKind.pipeline_audit: "text/tab-separated-values",
         ArtifactKind.tts_manifest: "application/json",
         ArtifactKind.voice_track: "audio/mp4",
@@ -316,6 +316,14 @@ def _artifact(kind: ArtifactKind, path: Path, data_dir: Path) -> Artifact:
         mime_type=mime,
         size_bytes=path.stat().st_size if path.exists() else None,
     )
+
+
+def _count_kinds(glossary: list[GlossaryEntry]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in glossary:
+        key = entry.kind or "term"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def _run_asr(context: PipelineContext, output_srt: Path) -> list[str]:

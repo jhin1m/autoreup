@@ -10,12 +10,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.app.services.subtitle_formats import write_srt, write_vtt
-from .models import SpeechRow
+from .models import Anchor, SpeechRow
 from .text import strip_explicit_turn_markers
 from .tsv_io import write_json
 
 
-def build_display_cues(speech_rows: list[SpeechRow], min_duration: float = 0.4) -> list[dict]:
+def build_display_cues(
+    speech_rows: list[SpeechRow], min_duration: float = 0.4, anchors: list[Anchor] | None = None
+) -> list[dict]:
+    source_by_anchor = {a.id: a.source_zh for a in (anchors or [])}
     by_anchor: dict[int, list[SpeechRow]] = {}
     order: list[int] = []
     for row in speech_rows:
@@ -41,6 +44,7 @@ def build_display_cues(speech_rows: list[SpeechRow], min_duration: float = 0.4) 
                     "end": round(max(cue_end, cursor + 0.001), 3),
                     "text": text,
                     "translated": text,
+                    "source": source_by_anchor.get(anchor_id, ""),
                     "anchor_id": anchor_id,
                     "source_ids": row.source_ids,
                 }

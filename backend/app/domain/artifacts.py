@@ -11,6 +11,7 @@ class ArtifactKind(StrEnum):
     subtitle_srt = "subtitle_srt"
     subtitle_vtt = "subtitle_vtt"
     qa_report = "qa_report"
+    glossary = "glossary"
     pipeline_audit = "pipeline_audit"
     tts_manifest = "tts_manifest"
     voice_track = "voice_track"
