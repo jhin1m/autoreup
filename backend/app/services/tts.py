@@ -39,12 +39,18 @@ def clean_tts_text(text: str, text_mode: str = "natural") -> str:
     text = TAG_RE.sub(" ", str(text))
     text = BRACKET_RE.sub(" ", text)
     text = text.replace("\n", " ")
-    # "continuous" strips punctuation so the voice never pauses; the default
-    # "natural" keeps commas/periods so the dub pauses like real speech.
     if text_mode == "continuous":
+        # No pauses at all.
         text = TTS_PUNCT_RE.sub(" ", text)
+    else:
+        # "natural": flow as one utterance. Keep light comma pauses, but turn the
+        # heavy stops (. ? ! ; : …) into commas so the voice doesn't halt
+        # mid-block when an anchor spans several sentences. Display keeps the real
+        # punctuation; only the spoken text is smoothed.
+        text = re.sub(r"[.!?;:…—–。！？；：]+", ",", text)
     text = " ".join(text.split())
-    text = re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text).strip()
+    text = re.sub(r"(\s*[,，]\s*)+", ", ", text)  # collapse/normalize commas
+    text = re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text)
     # Drop trailing punctuation: a phrase's end-pause is wasted (the scheduled gap
     # to the next anchor already provides it) and only overruns the window.
     return text.rstrip(".,!?…;:，。！？；：、 ").strip()
