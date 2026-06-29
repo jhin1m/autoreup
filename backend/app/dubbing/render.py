@@ -32,8 +32,13 @@ class RenderConfig:
     pitch: float = 1.0
     volume: float = 1.0
     text_mode: str = "natural"  # keep punctuation -> natural pauses in the voice-over
-    min_tempo: float = 0.92  # slow a short line slightly to fill the original window
-    max_tempo: float = 1.18  # speed up a long line; beyond this, repair shortens the text
+    # Tempo stability: never slow below 1.0 (no dragging) — slowing short lines to
+    # fill made the rate lurch between phrases. Only speed up long lines, up to
+    # max; the repair loop shortens anything past that. Set fixed_tempo to force a
+    # single rate for every clip (rigidly stable, but costs more overflow/repair).
+    fixed_tempo: float | None = None
+    min_tempo: float = 1.0
+    max_tempo: float = 1.18
     timeout: float = 30.0
     attempts: int = 3
     repair_over_ms: int = 300  # overflow above this flags an anchor for repair
@@ -145,7 +150,9 @@ def render(
 
         target = block.duration + config.voice_lead
         aligned = work_dir / "aligned" / f"block-{index:05d}.m4a"
-        timing = align_audio(raw_path, aligned, target, min_tempo=config.min_tempo, max_tempo=config.max_tempo)
+        timing = align_audio(
+            raw_path, aligned, target, min_tempo=config.min_tempo, max_tempo=config.max_tempo, fixed_tempo=config.fixed_tempo
+        )
         overflow_ms = int(timing["overflow_ms"])
         playback = float(timing["playback_duration"])
         return (block.start, aligned, playback), AnchorTiming(

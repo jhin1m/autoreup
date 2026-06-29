@@ -246,6 +246,7 @@ class VoiceoverStage(PipelineStage):
             text_mode=settings.tts_text_mode,
             min_tempo=settings.tts_min_tempo,
             max_tempo=settings.tts_max_tempo,
+            fixed_tempo=settings.tts_fixed_tempo,
         )
         work_dir = context.job_dir / "tts"
         cache_dir = settings.tts_cache_dir

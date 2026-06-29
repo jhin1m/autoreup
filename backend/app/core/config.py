@@ -47,11 +47,12 @@ class Settings(BaseSettings):
     tts_text_mode: str = "natural"  # keep punctuation so the voice-over pauses naturally
     tts_target_chars_per_second: float = 12.0
     tts_post_tempo: float = 1.12
-    # Two-sided tempo fit (validated 0.92–1.18): a short Vietnamese line is slowed
-    # slightly to fill the original phrase's window, a long one is sped up; beyond
-    # 1.18 the repair loop shortens the text instead of speeding further.
-    tts_min_tempo: float = 0.92
+    # Stable forward pace: never slow below 1.0 (no dragging), speed up to 1.18 to
+    # fit long lines; beyond that the repair loop shortens the text. Set
+    # tts_fixed_tempo to force one rigid rate for every clip (costs more repair).
+    tts_min_tempo: float = 1.0
     tts_max_tempo: float = 1.18
+    tts_fixed_tempo: float | None = None
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True
     tts_group_max_gap: float = 2.0

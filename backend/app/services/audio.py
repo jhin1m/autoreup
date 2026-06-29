@@ -65,10 +65,21 @@ def atempo_chain(tempo: float) -> str:
     return ",".join(f"atempo={part:.6f}" for part in parts)
 
 
-def align_audio(raw_path: Path, output_path: Path, target_duration: float, min_tempo: float, max_tempo: float) -> dict:
-    """Tempo-fit a raw clip toward ``target_duration`` within tempo bounds."""
+def align_audio(
+    raw_path: Path, output_path: Path, target_duration: float, min_tempo: float, max_tempo: float, fixed_tempo: float | None = None
+) -> dict:
+    """Tempo-fit a raw clip toward ``target_duration``.
+
+    With ``fixed_tempo`` set, every clip is played at exactly that tempo — one
+    stable speaking rate across the whole dub — and timing is fitted by the text
+    repair loop instead of by varying the tempo per phrase. Otherwise the tempo is
+    clamped to ``[min_tempo, max_tempo]`` to fit each clip's window.
+    """
     raw_duration = probe_duration(raw_path)
-    tempo = clamp(raw_duration / max(0.001, target_duration), min_tempo, max_tempo)
+    if fixed_tempo:
+        tempo = fixed_tempo
+    else:
+        tempo = clamp(raw_duration / max(0.001, target_duration), min_tempo, max_tempo)
     playback_duration = raw_duration / tempo
     output_path.parent.mkdir(parents=True, exist_ok=True)
     run_command([
