@@ -23,7 +23,8 @@ from backend.app.pipeline.production import (
 
 
 def _context(root: Path) -> PipelineContext:
-    settings = Settings(root_dir=root)
+    # Hermetic: ignore any developer .env (e.g. TTS toggles) so the test is deterministic.
+    settings = Settings(root_dir=root, _env_file=None, tts_enabled=False, tts_server_url=None)
     settings.ensure_directories()
     anchors = [Anchor(0, 0.0, 2.0, "0-1", "源一"), Anchor(1, 2.0, 4.0, "2-3", "源二")]
     return PipelineContext(

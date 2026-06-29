@@ -13,6 +13,7 @@ client (an external-service adapter, like yt-dlp/ffmpeg).
 from __future__ import annotations
 
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from backend.app.core.config import Settings
@@ -272,7 +273,7 @@ class VoiceoverStage(PipelineStage):
         context.artifacts["display_cues"] = cues
 
         manifest = settings.tts_dir / f"{context.job_id}.tts.json"
-        write_json(manifest, {"summary": result.summary, "timings": [t.__dict__ for t in result.timings]})
+        write_json(manifest, {"summary": result.summary, "timings": [asdict(t) for t in result.timings]})
         artifacts = []
         if result.voice_track:
             context.artifacts["voice_track"] = result.voice_track
