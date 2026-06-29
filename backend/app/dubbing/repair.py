@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from .glossary import format_glossary
 from .llm import LLMConfig, complete, parse_tsv_rows
 from .models import Anchor, GlossaryEntry, SpeechRow
-from .prompts import REPAIR_SYSTEM, REPAIR_USER
+from .prompts import EXPAND_SYSTEM, EXPAND_USER, REPAIR_SYSTEM, REPAIR_USER
 from .text import clean, has_han, split_text_for_explicit_turns
 from .weights import vi_speech_weight
 
@@ -120,3 +120,59 @@ def repair(
             row.sub_id = len(out)
             out.append(row)
     return out, repaired
+
+
+def _format_expand_rows(anchor_ids: list[int], amap: dict[int, Anchor], grouped: dict[int, list[SpeechRow]], window: dict[int, float]) -> str:
+    lines = []
+    for anchor_id in anchor_ids:
+        current = " ⟂ ".join(r.text for r in grouped[anchor_id])
+        lines.append(f"{anchor_id}\t{window[anchor_id]:.1f}\t{amap[anchor_id].source_zh}\t{current}")
+    return "\n".join(lines)
+
+
+def expand(
+    speech_rows: list[SpeechRow],
+    anchors: list[Anchor],
+    glossary: list[GlossaryEntry],
+    underfull_by_anchor: dict[int, tuple[float, float]],
+    llm: LLMConfig,
+    config: RepairConfig | None = None,
+) -> tuple[list[SpeechRow], int]:
+    """Complete anchors whose voice is far shorter than the source window.
+
+    ``underfull_by_anchor`` maps anchor_id -> (window_seconds, tts_duration). The
+    voice being much shorter than the source usually means the translation dropped
+    content; ask the LLM to restore the full source meaning (no invention). Accept
+    only a meaningfully longer rewrite; if the LLM judges the line complete and
+    keeps it, leave it unchanged.
+    """
+    config = config or RepairConfig()
+    amap = {a.id: a for a in anchors}
+    grouped = _group(speech_rows)
+    ids = [aid for aid in underfull_by_anchor if aid in amap and aid in grouped]
+    if not ids:
+        return speech_rows, 0
+    window = {aid: underfull_by_anchor[aid][0] for aid in ids}
+
+    expanded = 0
+    for start in range(0, len(ids), config.batch_anchors):
+        batch = ids[start : start + config.batch_anchors]
+        user = EXPAND_USER.format(glossary=format_glossary(glossary), anchors=_format_expand_rows(batch, amap, grouped, window))
+        raw = complete(EXPAND_SYSTEM, user, llm)
+        rewrites = {int(c[0]): clean(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
+        for anchor_id in batch:
+            text = rewrites.get(anchor_id)
+            if not text or has_han(text):
+                continue
+            current_weight = sum(vi_speech_weight(r.text) for r in grouped[anchor_id])
+            if vi_speech_weight(text) <= current_weight * 1.1:
+                continue  # not meaningfully longer -> keep current (line was complete)
+            grouped[anchor_id] = _rebuild_rows(amap[anchor_id], text, config.max_caption_chars)
+            expanded += 1
+
+    out: list[SpeechRow] = []
+    for anchor in anchors:
+        for row in grouped.get(anchor.id, []):
+            row.sub_id = len(out)
+            out.append(row)
+    return out, expanded

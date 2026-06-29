@@ -35,7 +35,7 @@ from backend.app.dubbing.models import (
 from backend.app.dubbing.qa import qa_report
 from backend.app.dubbing.rail import AnchorConfig, build_anchors, segments_from_srt
 from backend.app.dubbing.render import RenderConfig, assemble_voice, render
-from backend.app.dubbing.repair import RepairConfig, repair
+from backend.app.dubbing.repair import RepairConfig, expand, repair
 from backend.app.dubbing.translate import TranslateConfig, translate
 from backend.app.dubbing.tsv_io import write_json, write_tsv
 from backend.app.infrastructure.downloader import YtDlpDownloader
@@ -253,16 +253,30 @@ class VoiceoverStage(PipelineStage):
 
         result = render(speech_rows, anchors, render_config, work_dir, cache_dir)
         logs = [f"render round 0: {result.summary}"]
+        repair_cfg = RepairConfig(max_caption_chars=settings.display_max_chars)
         rounds = 0
-        while result.anchors_need_repair() and rounds < _VOICEOVER_REPAIR_ROUNDS:
+        while rounds < _VOICEOVER_REPAIR_ROUNDS:
+            # Overflow: voice overruns the window -> shorten. Underfull: voice far
+            # shorter than the source (often dropped content) -> complete it.
             overflow = {t.anchor_id: (t.target_duration, t.tts_duration) for t in result.timings if t.needs_repair}
-            speech_rows, repaired = repair(
-                speech_rows, anchors, glossary, overflow, _polish_llm(settings),
-                RepairConfig(max_caption_chars=settings.display_max_chars),
-            )
+            underfull = {
+                t.anchor_id: (t.target_duration, t.tts_duration)
+                for t in result.timings
+                if t.target_duration >= 2.0 and t.tts_duration < t.target_duration * 0.6
+            }
+            if not overflow and not underfull:
+                break
+            changed = 0
+            if overflow:
+                speech_rows, n = repair(speech_rows, anchors, glossary, overflow, _polish_llm(settings), repair_cfg)
+                changed += n
+                logs.append(f"round {rounds + 1}: shortened {n} overflow anchors")
+            if underfull:
+                speech_rows, n = expand(speech_rows, anchors, glossary, underfull, _polish_llm(settings), repair_cfg)
+                changed += n
+                logs.append(f"round {rounds + 1}: completed {n} underfull anchors")
             rounds += 1
-            logs.append(f"repair round {rounds}: repaired {repaired} anchors")
-            if not repaired:
+            if not changed:
                 break
             result = render(speech_rows, anchors, render_config, work_dir, cache_dir)
             logs.append(f"render round {rounds}: {result.summary}")

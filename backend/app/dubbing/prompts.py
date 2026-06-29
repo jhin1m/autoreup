@@ -87,3 +87,21 @@ REPAIR_USER = (
     "CÁC ANCHOR QUÁ DÀI (ANCHOR_ID<TAB>TARGET_CHARS<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{anchors}\n\n"
     "Viết lại ngắn hơn cho mọi ANCHOR_ID. Chỉ TSV."
 )
+
+# --- Completeness repair (expand lines that dropped source content) ----------
+
+EXPAND_SYSTEM = (
+    "Bạn là biên tập lồng tiếng Việt. Mỗi anchor có lời Việt hiện đọc QUÁ NGẮN so với câu gốc — "
+    "thường vì đã BỎ SÓT ý của câu gốc.\n"
+    "Với mỗi anchor: nếu lời Việt đã truyền đạt ĐỦ ý câu gốc thì GIỮ NGUYÊN; nếu còn THIẾU ý, viết lại "
+    "ĐẦY ĐỦ toàn bộ ý của câu gốc, tự nhiên, dài hơn cho khớp thời lượng thoại gốc. "
+    "TUYỆT ĐỐI không bịa thông tin ngoài câu gốc; giữ tên/thuật ngữ theo glossary.\n"
+    "Output DUY NHẤT là TSV, KHÔNG Hán tự, mỗi dòng:\n"
+    "ANCHOR_ID<TAB>TEXT"
+)
+
+EXPAND_USER = (
+    "GLOSSARY:\n{glossary}\n\n"
+    "CÁC ANCHOR ĐỌC QUÁ NGẮN (ANCHOR_ID<TAB>GIÂY_GỐC<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{anchors}\n\n"
+    "Trả về lời Việt đầy đủ (hoặc giữ nguyên) cho mọi ANCHOR_ID. Chỉ TSV."
+)

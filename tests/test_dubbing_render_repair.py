@@ -63,3 +63,22 @@ def test_render_config_defaults():
     cfg = RenderConfig(provider_url="http://x")
     assert cfg.speaker == "BV421_vivn_streaming"
     assert cfg.repair_over_ms == 300
+
+
+def test_expand_completes_underfull_keeps_complete(monkeypatch):
+    from backend.app.dubbing.repair import expand
+
+    anchor = Anchor(5, 0.0, 6.0, "10-13", "源")
+    rows = [SpeechRow(0, 5, 0.0, 6.0, "10-13", "Lời ngắn")]
+
+    # LLM restores dropped content (much longer) -> accepted
+    monkeypatch.setattr(repair_mod, "complete", lambda s, u, c: "5\tLời đầy đủ hơn nhiều với toàn bộ ý của câu gốc được khôi phục lại")
+    out, n = expand(rows, [anchor], [], {5: (6.0, 2.0)}, LLM, RepairConfig())
+    assert n == 1
+    assert "đầy đủ" in out[0].text
+
+    # LLM judges it complete and returns roughly the same -> kept unchanged
+    monkeypatch.setattr(repair_mod, "complete", lambda s, u, c: "5\tLời ngắn")
+    out, n = expand(rows, [anchor], [], {5: (6.0, 2.0)}, LLM, RepairConfig())
+    assert n == 0
+    assert out[0].text == "Lời ngắn"
