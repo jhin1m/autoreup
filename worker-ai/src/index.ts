@@ -238,8 +238,17 @@ export default {
       end: (segment.end || 0) + offset,
       text: segment.text || "",
     }));
+    // Word-level timestamps (when the model provides them) let the client snap
+    // cue boundaries to when each word is actually spoken, instead of estimating.
+    const words = (result.words || [])
+      .map((word) => ({
+        start: (word.start || 0) + offset,
+        end: (word.end || 0) + offset,
+        word: (word.word || word.text || "").trim(),
+      }))
+      .filter((word) => word.word);
 
-    return json({ text: result.text || "", offset, model, segments });
+    return json({ text: result.text || "", offset, model, segments, words });
   },
 } satisfies ExportedHandler<Env>;
 

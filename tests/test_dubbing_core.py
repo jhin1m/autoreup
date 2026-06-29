@@ -76,20 +76,19 @@ def test_speech_row_roundtrip():
     assert abs(again.anchor_duration - 1.5) < 1e-9
 
 
-def test_display_cues_follow_segment_timeline():
+def test_display_cues_split_at_clauses_and_follow_segments():
     from backend.app.dubbing.display import build_display_cues
 
-    # Anchor spans 2 segments with a gap between them; the second cue should be
-    # timed to the second segment, not the middle of the anchor window.
+    # Anchor spans 2 segments with a gap between them. The Vietnamese text splits
+    # at its comma into two clauses; the second clause should be timed near the
+    # second segment (14s), not the middle of the anchor window — and words must
+    # not be broken across cues.
     segments = [AsrSegment(0, 10.0, 11.0, "甲甲甲"), AsrSegment(1, 14.0, 15.0, "乙乙乙")]
     anchor = Anchor(0, 10.0, 15.0, "0-1", "甲甲甲乙乙乙")
-    rows = [
-        SpeechRow(0, 0, 10.0, 15.0, "0-1", "phần một ba ký"),
-        SpeechRow(1, 0, 10.0, 15.0, "0-1", "phần hai ba ký"),
-    ]
+    rows = [SpeechRow(0, 0, 10.0, 15.0, "0-1", "phần một ba, phần hai bốn")]
     cues = build_display_cues(rows, 0.4, [anchor], segments)
     assert len(cues) == 2
-    # second cue starts near the second segment (14s), not ~12.5s (window midpoint)
+    assert cues[0]["translated"] == "phần một ba,"
+    assert cues[1]["translated"] == "phần hai bốn"
     assert cues[1]["start"] >= 13.0
-    # cues are monotonic and non-overlapping
     assert cues[0]["end"] <= cues[1]["start"] + 1e-6
