@@ -8,6 +8,7 @@ from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
 from backend.app.domain.jobs import JobInput, JobManifest, JobState, PipelineConfig, StageRecord, StageStatus
 from backend.app.pipeline.production import ProductionPipeline
+from backend.app.studio.providers import extract_url
 
 
 class JobNotFoundError(KeyError):
@@ -22,6 +23,7 @@ class JobService:
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]
+        job_input = JobInput(url=extract_url(job_input.url))
         manifest = JobManifest(
             schema_version=self.settings.schema_version,
             job_id=job_id,

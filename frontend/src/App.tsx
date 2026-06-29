@@ -155,7 +155,7 @@ export function App() {
               aria-label="Đường dẫn video hoặc kênh nguồn"
               value={url}
               onChange={(event) => setUrl(event.target.value)}
-              placeholder="Dán link video, hoặc link kênh rồi Quét…"
+              placeholder="Dán link video, đoạn chia sẻ Douyin, hoặc link kênh rồi Quét…"
               required
               minLength={8}
             />
@@ -567,6 +567,7 @@ function Intake({ videos, onRun, onClose }: { videos: SourceVideo[]; onRun: (url
                   {video.duration ? ` · ${formatTime(video.duration)}` : ""}
                   {video.uploader ? ` · ${video.uploader}` : ""}
                 </p>
+                {video.error ? <p className="vnote">{video.error}</p> : null}
               </div>
               <button className="ghost tiny" onClick={() => onRun(video.source_url)}>
                 Dựng

@@ -1,10 +1,27 @@
 import hashlib
 import json
+import re
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from backend.app.services.cookie_vault import CookieVault
 from backend.app.studio.models import Platform, SourceVideo
+
+_URL_RE = re.compile(r"https?://[^\s　<>\"']+", re.IGNORECASE)
+_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+
+def extract_url(text: str) -> str:
+    """Pull the first URL out of pasted text (e.g. a Douyin share blob).
+
+    Douyin's "copy" produces text like:
+        4.33 复制打开抖音…【…】… https://v.douyin.com/XXXX/ :0pm 08/11 w@F.Hv
+    We return just the URL; if none is found, the trimmed input is returned.
+    """
+    match = _URL_RE.search(text or "")
+    if not match:
+        return (text or "").strip()
+    return match.group(0).rstrip(".,;:!?)】》>\"'")
 
 
 def detect_platform(url: str) -> Platform:
@@ -23,6 +40,7 @@ class SourceDiscovery:
         self.cookie_vault = cookie_vault
 
     def discover(self, url: str, limit: int = 12) -> list[SourceVideo]:
+        url = extract_url(url)
         platform = detect_platform(url)
         if platform == Platform.bilibili and self._is_bilibili_space(url):
             return self._discover_bilibili_space(url, limit)
@@ -31,8 +49,39 @@ class SourceDiscovery:
     def _discover_single(self, url: str, platform: Platform) -> SourceVideo:
         if platform == Platform.bilibili:
             return self._discover_bilibili_video(url)
+        if platform == Platform.douyin:
+            return self._discover_douyin(url)
         info = self._extract_info(url, flat=False, platform=platform)
         return self._video_from_info(info, url, platform)
+
+    def _discover_douyin(self, url: str) -> SourceVideo:
+        # Short share links (v.douyin.com/XXXX) aren't matched by yt-dlp's Douyin
+        # extractor, so it falls back to the generic one and Douyin returns 444.
+        # Resolve the redirect to the canonical /video/{id} URL first.
+        resolved = self._resolve_redirect(url) or url
+        video_id = _extract_video_id(resolved) or _extract_video_id(url)
+        try:
+            info = self._extract_info(resolved, flat=False, platform=Platform.douyin)
+            return self._video_from_info(info, resolved, Platform.douyin)
+        except Exception as exc:
+            # Degrade gracefully: a minimal card the user can still queue/dub.
+            return SourceVideo(
+                id=self._id_for(Platform.douyin, video_id or resolved),
+                platform=Platform.douyin,
+                platform_video_id=video_id or resolved,
+                source_url=resolved,
+                title=f"Video Douyin {video_id}" if video_id else "Video Douyin",
+                error=f"Chưa lấy được metadata ({_short_reason(exc)}). Có thể cần cookie Douyin; vẫn có thể thử dựng.",
+            )
+
+    @staticmethod
+    def _resolve_redirect(url: str) -> str | None:
+        try:
+            req = Request(url, headers={"User-Agent": _BROWSER_UA})
+            with urlopen(req, timeout=15) as response:
+                return response.geturl()
+        except Exception:
+            return None
 
     def _discover_bilibili_video(self, url: str) -> SourceVideo:
         bvid = _extract_video_id(url) or url.strip()
@@ -94,7 +143,7 @@ class SourceDiscovery:
             return ydl.extract_info(url, download=False)
 
     def _headers_for(self, platform: Platform) -> dict:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": _BROWSER_UA}
         cookie = self.cookie_vault.read_header(platform.value) if platform in {Platform.douyin, Platform.bilibili} else None
         if cookie:
             headers["Cookie"] = cookie
@@ -131,11 +180,24 @@ class SourceDiscovery:
         return parsed.netloc.endswith("bilibili.com") and parsed.path.startswith("/") and parsed.path.split("/")[1:2] != ["video"] and "space.bilibili.com" in parsed.netloc
 
 
+def _short_reason(exc: Exception) -> str:
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+    return text[:120]
+
+
 def _extract_video_id(url: str) -> str | None:
     parsed = urlparse(url)
-    if "douyin.com" in parsed.netloc and "/video/" in parsed.path:
-        return parsed.path.rstrip("/").split("/")[-1]
     if "bilibili.com" in parsed.netloc and "/video/" in parsed.path:
         return parsed.path.rstrip("/").split("/")[-1]
+    if "douyin.com" in parsed.netloc and "/video/" in parsed.path:
+        return parsed.path.rstrip("/").split("/")[-1]
     modal_id = parse_qs(parsed.query).get("modal_id", [None])[0]
-    return modal_id
+    if modal_id:
+        return modal_id
+    # Resolved Douyin share links carry a long numeric id somewhere in the path
+    # (e.g. /share/video/7234567890123456789/).
+    if "douyin.com" in parsed.netloc:
+        digits = re.findall(r"\d{15,}", parsed.path)
+        if digits:
+            return digits[0]
+    return None

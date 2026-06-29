@@ -67,4 +67,5 @@ export type SourceVideo = {
   duration: number | null;
   uploader: string | null;
   download_state: string;
+  error?: string | null;
 };
