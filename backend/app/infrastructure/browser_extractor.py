@@ -63,7 +63,7 @@ class DouyinBrowserExtractor:
         page_url = self._page_url(url)
         info = self._resolve_stream(page_url)
         dest = self.videos_dir / f"{video_id}.mp4"
-        self._download_stream(info["url"], dest)
+        self._download_and_mux(info, dest, video_id)
         return {
             "id": video_id,
             "title": info.get("title") or video_id,
@@ -104,22 +104,46 @@ class DouyinBrowserExtractor:
             info = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise BrowserExtractError("Kết quả trích xuất không hợp lệ.") from exc
-        if not info.get("url"):
+        if not info.get("video"):
             raise BrowserExtractError("Không tìm thấy luồng video.")
         return info
+
+    def _download_and_mux(self, info: dict, dest: Path, video_id: str) -> None:
+        # Douyin serves separate adaptive tracks; download both and mux to one MP4.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        video_path = self.videos_dir / f"{video_id}.v.mp4"
+        self._download_stream(info["video"], video_path)
+        if info.get("audio"):
+            audio_path = self.videos_dir / f"{video_id}.a.mp4"
+            self._download_stream(info["audio"], audio_path)
+            self._mux(video_path, audio_path, dest)
+            video_path.unlink(missing_ok=True)
+            audio_path.unlink(missing_ok=True)
+        else:
+            video_path.replace(dest)
 
     def _download_stream(self, stream_url: str, dest: Path) -> None:
         cookie_header = self.cookie_vault.read_header("douyin") or ""
         headers = {"User-Agent": _UA, "Referer": "https://www.douyin.com/", "Cookie": cookie_header}
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with httpx.stream("GET", stream_url, headers=headers, follow_redirects=True, timeout=60) as response:
+        with httpx.stream("GET", stream_url, headers=headers, follow_redirects=True, timeout=120) as response:
             if response.status_code != 200:
-                raise BrowserExtractError(f"Tải luồng video lỗi HTTP {response.status_code}.")
+                raise BrowserExtractError(f"Tải luồng lỗi HTTP {response.status_code}.")
             with dest.open("wb") as out:
                 for chunk in response.iter_bytes():
                     out.write(chunk)
         if dest.stat().st_size < 1024:
             raise BrowserExtractError("File tải về rỗng/không hợp lệ.")
+
+    def _mux(self, video_path: Path, audio_path: Path, dest: Path) -> None:
+        if not shutil.which("ffmpeg"):
+            raise BrowserExtractError("Cần ffmpeg để ghép video+audio.")
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(video_path), "-i", str(audio_path),
+             "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", "-shortest", str(dest)],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0 or not dest.exists():
+            raise BrowserExtractError(f"Ghép video+audio lỗi: {result.stderr.strip()[:160]}")
 
 
 def _reason(stderr: str) -> str:

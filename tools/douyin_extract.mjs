@@ -109,13 +109,18 @@ class CDP {
   on(fn) { this.listeners.push(fn); }
 }
 
-// The real short-video stream is served from the douyinvod / douyincdn CDNs.
-// Static UI assets (douyinstatic.com, /douyin-pc-web/) must be ignored.
+// The real short-video stream is served from the douyinvod / douyincdn CDNs,
+// usually as SEPARATE adaptive tracks (media-video-avc1 / media-audio-*). We
+// capture both and mux them later. Static UI assets must be ignored.
 const STREAM_RE = /douyinvod\.com|douyincdn\.com|\/video\/tos\//i;
 const STATIC_RE = /douyinstatic\.com|douyin-pc-web|\.js(\?|$)|\.css(\?|$)/i;
+const AUDIO_RE = /media-audio|mime_type=audio|-audio-/i;
 
 function isStream(u) {
   return !!u && STREAM_RE.test(u) && !STATIC_RE.test(u);
+}
+function isAudio(u) {
+  return AUDIO_RE.test(u);
 }
 
 async function main() {
@@ -130,11 +135,14 @@ async function main() {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
 
-  let captured = null;
+  let video = null;
+  let audio = null;
   cdp.on((msg) => {
     if (msg.method === "Network.responseReceived" && msg.params?.response) {
-      const r = msg.params.response;
-      if (!captured && isStream(r.url)) captured = r.url;
+      const u = msg.params.response.url;
+      if (!isStream(u)) return;
+      if (isAudio(u)) { if (!audio) audio = u; }
+      else if (!video) video = u;
     }
   });
 
@@ -148,6 +156,7 @@ async function main() {
   const deadline = Date.now() + timeout;
   let title = null;
   let duration = null;
+  let videoReadySince = 0;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 700));
     try {
@@ -166,10 +175,14 @@ async function main() {
       const data = JSON.parse(ev.result.value || "{}");
       title = (data.title || "").replace(/ - 抖音$/, "").trim() || title;
       if (data.dur && isFinite(data.dur)) duration = data.dur;
-      if (isStream(data.src)) captured = data.src;
+      if (isStream(data.src) && !isAudio(data.src) && !video) video = data.src;
     } catch {}
-    if (captured) done({ url: captured, title, duration });
+    // Once we have video, give audio a short grace window to arrive, then ship.
+    if (video && audio) done({ video, audio, title, duration });
+    if (video && !videoReadySince) videoReadySince = Date.now();
+    if (video && Date.now() - videoReadySince > 6000) done({ video, audio, title, duration });
   }
+  if (video) done({ video, audio, title, duration });
   fail("timed out waiting for video stream URL");
 }
 
