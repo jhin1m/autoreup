@@ -9,6 +9,7 @@ flagged ``needs_repair`` for the repair loop — overflow never pushes later anc
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,6 +39,7 @@ class RenderConfig:
     attempts: int = 3
     repair_over_ms: int = 300  # overflow above this flags an anchor for repair
     voice_lead: float = 0.0    # extra slack added to each anchor window
+    workers: int = 6           # parallel TTS synth + tempo-fit (calls are independent + cached)
 
 
 @dataclass(slots=True)
@@ -110,10 +112,8 @@ def render(
     )
     cache_dir = Path(cache_dir)
     work_dir = Path(work_dir)
-    segments: list[tuple[float, Path]] = []
-    timings: list[AnchorTiming] = []
 
-    for index, block in enumerate(blocks):
+    def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path], AnchorTiming]:
         raw_path = raw_audio_path(
             cache_dir, config.provider_url, config.speaker, block,
             speed=config.speed, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
@@ -132,19 +132,23 @@ def render(
         target = block.duration + config.voice_lead
         aligned = work_dir / "aligned" / f"block-{index:05d}.m4a"
         timing = align_audio(raw_path, aligned, target, min_tempo=config.min_tempo, max_tempo=config.max_tempo)
-        segments.append((block.start, aligned))
         overflow_ms = int(timing["overflow_ms"])
-        timings.append(
-            AnchorTiming(
-                anchor_id=int(block.block_id),
-                anchor_start=block.start,
-                anchor_end=block.end,
-                target_duration=round(target, 3),
-                tts_duration=float(timing["playback_duration"]),
-                overflow_ms=overflow_ms,
-                needs_repair=overflow_ms > config.repair_over_ms,
-            )
+        return (block.start, aligned), AnchorTiming(
+            anchor_id=int(block.block_id),
+            anchor_start=block.start,
+            anchor_end=block.end,
+            target_duration=round(target, 3),
+            tts_duration=float(timing["playback_duration"]),
+            overflow_ms=overflow_ms,
+            needs_repair=overflow_ms > config.repair_over_ms,
         )
+
+    # TTS synth + tempo-fit are independent per block (and disk-cached), so run them
+    # in parallel; results are reassembled in block order.
+    with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
+        rendered = list(pool.map(lambda pair: render_block(*pair), enumerate(blocks)))
+    segments = [seg for seg, _ in rendered]
+    timings = [timing for _, timing in rendered]
 
     total_duration = max((b.end for b in blocks), default=0.1)
     output_audio = Path(output_audio)
