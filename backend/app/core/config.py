@@ -41,14 +41,17 @@ class Settings(BaseSettings):
     tts_enabled: bool = False
     tts_server_url: str | None = None
     tts_voice: str = "BV421_vivn_streaming"
-    tts_speed: float = 1.35
+    tts_speed: float = 1.0  # neutral synth; timing is fitted by ffmpeg tempo, not provider speed
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
     tts_text_mode: str = "natural"  # keep punctuation so the voice-over pauses naturally
     tts_target_chars_per_second: float = 12.0
     tts_post_tempo: float = 1.12
-    tts_min_tempo: float = 1.0
-    tts_max_tempo: float = 1.12
+    # Two-sided tempo fit (validated 0.92–1.18): a short Vietnamese line is slowed
+    # slightly to fill the original phrase's window, a long one is sped up; beyond
+    # 1.18 the repair loop shortens the text instead of speeding further.
+    tts_min_tempo: float = 0.92
+    tts_max_tempo: float = 1.18
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True
     tts_group_max_gap: float = 2.0

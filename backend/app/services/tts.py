@@ -44,7 +44,10 @@ def clean_tts_text(text: str, text_mode: str = "natural") -> str:
     if text_mode == "continuous":
         text = TTS_PUNCT_RE.sub(" ", text)
     text = " ".join(text.split())
-    return re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text).strip()
+    text = re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text).strip()
+    # Drop trailing punctuation: a phrase's end-pause is wasted (the scheduled gap
+    # to the next anchor already provides it) and only overruns the window.
+    return text.rstrip(".,!?…;:，。！？；：、 ").strip()
 
 
 def build_tts_blocks(cues: list[dict], text_mode: str = "continuous") -> list[TtsBlock]:

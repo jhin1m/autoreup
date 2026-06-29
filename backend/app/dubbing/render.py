@@ -32,8 +32,8 @@ class RenderConfig:
     pitch: float = 1.0
     volume: float = 1.0
     text_mode: str = "natural"  # keep punctuation -> natural pauses in the voice-over
-    min_tempo: float = 1.0
-    max_tempo: float = 1.18
+    min_tempo: float = 0.92  # slow a short line slightly to fill the original window
+    max_tempo: float = 1.18  # speed up a long line; beyond this, repair shortens the text
     timeout: float = 30.0
     attempts: int = 3
     repair_over_ms: int = 300  # overflow above this flags an anchor for repair
