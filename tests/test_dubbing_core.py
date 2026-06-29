@@ -74,3 +74,22 @@ def test_speech_row_roundtrip():
     again = SpeechRow.from_row(row.to_row())
     assert again == row
     assert abs(again.anchor_duration - 1.5) < 1e-9
+
+
+def test_display_cues_follow_segment_timeline():
+    from backend.app.dubbing.display import build_display_cues
+
+    # Anchor spans 2 segments with a gap between them; the second cue should be
+    # timed to the second segment, not the middle of the anchor window.
+    segments = [AsrSegment(0, 10.0, 11.0, "甲甲甲"), AsrSegment(1, 14.0, 15.0, "乙乙乙")]
+    anchor = Anchor(0, 10.0, 15.0, "0-1", "甲甲甲乙乙乙")
+    rows = [
+        SpeechRow(0, 0, 10.0, 15.0, "0-1", "phần một ba ký"),
+        SpeechRow(1, 0, 10.0, 15.0, "0-1", "phần hai ba ký"),
+    ]
+    cues = build_display_cues(rows, 0.4, [anchor], segments)
+    assert len(cues) == 2
+    # second cue starts near the second segment (14s), not ~12.5s (window midpoint)
+    assert cues[1]["start"] >= 13.0
+    # cues are monotonic and non-overlapping
+    assert cues[0]["end"] <= cues[1]["start"] + 1e-6

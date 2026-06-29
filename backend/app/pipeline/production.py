@@ -202,7 +202,7 @@ class QAStage(PipelineStage):
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
-        cues = build_display_cues(speech_rows, min_duration=settings.min_duration, anchors=anchors)
+        cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"))
         report = qa_report(speech_rows, anchors, cues, max_display_chars=settings.display_max_chars)
 
         subtitle_json = settings.subtitles_dir / f"{context.job_id}.vi.display.json"
@@ -268,7 +268,7 @@ class VoiceoverStage(PipelineStage):
             logs.append(f"render round {rounds}: {result.summary}")
 
         context.artifacts["speech_rows"] = speech_rows
-        cues = build_display_cues(speech_rows, min_duration=settings.min_duration, anchors=anchors)
+        cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"))
         write_subtitles(cues, context.artifacts["subtitle_json"], context.artifacts["subtitle_srt"])
         context.artifacts["display_cues"] = cues
 
