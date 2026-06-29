@@ -35,13 +35,16 @@ class TtsBlock:
         return data
 
 
-def clean_tts_text(text: str, text_mode: str = "continuous") -> str:
+def clean_tts_text(text: str, text_mode: str = "natural") -> str:
     text = TAG_RE.sub(" ", str(text))
     text = BRACKET_RE.sub(" ", text)
     text = text.replace("\n", " ")
+    # "continuous" strips punctuation so the voice never pauses; the default
+    # "natural" keeps commas/periods so the dub pauses like real speech.
     if text_mode == "continuous":
         text = TTS_PUNCT_RE.sub(" ", text)
-    return " ".join(text.split()).strip()
+    text = " ".join(text.split())
+    return re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text).strip()
 
 
 def build_tts_blocks(cues: list[dict], text_mode: str = "continuous") -> list[TtsBlock]:

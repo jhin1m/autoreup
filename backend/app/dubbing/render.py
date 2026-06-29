@@ -31,7 +31,7 @@ class RenderConfig:
     speed: float = 1.0
     pitch: float = 1.0
     volume: float = 1.0
-    text_mode: str = "continuous"
+    text_mode: str = "natural"  # keep punctuation -> natural pauses in the voice-over
     min_tempo: float = 1.0
     max_tempo: float = 1.18
     timeout: float = 30.0

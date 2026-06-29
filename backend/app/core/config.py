@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     tts_speed: float = 1.35
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
-    tts_text_mode: str = "continuous"
+    tts_text_mode: str = "natural"  # keep punctuation so the voice-over pauses naturally
     tts_target_chars_per_second: float = 12.0
     tts_post_tempo: float = 1.12
     tts_min_tempo: float = 1.0

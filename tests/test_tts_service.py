@@ -30,7 +30,11 @@ class TtsServiceTest(unittest.TestCase):
         self.assertEqual([block.text for block in blocks], ["Câu một", "Câu hai"])
 
     def test_clean_tts_text_strips_tags_brackets_and_punctuation_in_continuous_mode(self):
-        self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!"), "Xin chào các bạn")
+        self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!", "continuous"), "Xin chào các bạn")
+
+    def test_clean_tts_text_keeps_punctuation_in_natural_mode(self):
+        # natural mode (default) keeps commas/periods so the voice-over pauses
+        self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!"), "Xin chào, các bạn!")
 
     def test_provider_scale_maps_pipeline_ratio_to_capcut_style_integer(self):
         self.assertEqual(to_provider_scale(1.15), 12)
