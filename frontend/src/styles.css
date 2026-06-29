@@ -130,8 +130,8 @@ input {
   max-width: 520px;
 }
 .source:focus-within {
-  border-color: #3a5048;
-  box-shadow: 0 0 0 3px #56c5961a;
+  border-color: #5a4a1e;
+  box-shadow: 0 0 0 3px var(--amber-soft);
 }
 .source-tag {
   font-family: var(--font-mono);
@@ -152,6 +152,10 @@ input {
 }
 .source input::placeholder {
   color: var(--faint);
+}
+.source input:focus,
+.source input:focus-visible {
+  outline: none;
 }
 .source button {
   border: 0;
