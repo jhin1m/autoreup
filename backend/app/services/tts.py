@@ -156,23 +156,6 @@ def cache_key(provider: str, speaker: str, text: str, speed: float = 1.0, pitch:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
-def legacy_cache_key(provider: str, speaker: str, text: str, speed: float, pitch: float, volume: float, text_mode: str) -> str:
-    payload = json.dumps(
-        {
-            "provider": provider.rstrip("/"),
-            "speaker": speaker,
-            "text": text,
-            "speed": round(float(speed), 4),
-            "pitch": round(float(pitch), 4),
-            "volume": round(float(volume), 4),
-            "text_mode": text_mode,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
-
-
 class HttpTtsProvider:
     def __init__(self, base_url: str, speaker: str, speed: float = 1.0, pitch: float = 1.0, volume: float = 1.0, timeout: float = 30.0, attempts: int = 3):
         self.base_url = base_url.rstrip("/")
@@ -227,9 +210,4 @@ class HttpTtsProvider:
 
 def raw_audio_path(cache_dir: Path, provider_url: str, speaker: str, block: TtsBlock, speed: float, pitch: float, volume: float, text_mode: str) -> Path:
     key = cache_key(provider_url, speaker, block.text, speed=speed, pitch=pitch, volume=volume, text_mode=text_mode)
-    return cache_dir / "raw" / f"{key}.mp3"
-
-
-def legacy_raw_audio_path(cache_dir: Path, provider_url: str, speaker: str, block: TtsBlock, speed: float, pitch: float, volume: float, text_mode: str) -> Path:
-    key = legacy_cache_key(provider_url, speaker, block.text, speed=speed, pitch=pitch, volume=volume, text_mode=text_mode)
     return cache_dir / "raw" / f"{key}.mp3"

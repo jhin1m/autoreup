@@ -34,7 +34,7 @@ from backend.app.dubbing.models import (
 )
 from backend.app.dubbing.qa import qa_report
 from backend.app.dubbing.rail import AnchorConfig, build_anchors, segments_from_srt
-from backend.app.dubbing.render import RenderConfig, render
+from backend.app.dubbing.render import RenderConfig, assemble_voice, render
 from backend.app.dubbing.repair import RepairConfig, repair
 from backend.app.dubbing.translate import TranslateConfig, translate
 from backend.app.dubbing.tsv_io import write_json, write_tsv
@@ -251,7 +251,7 @@ class VoiceoverStage(PipelineStage):
         cache_dir = settings.tts_cache_dir
         output_audio = settings.tts_dir / f"{context.job_id}.voice.m4a"
 
-        result = render(speech_rows, anchors, render_config, work_dir, cache_dir, output_audio)
+        result = render(speech_rows, anchors, render_config, work_dir, cache_dir)
         logs = [f"render round 0: {result.summary}"]
         rounds = 0
         while result.anchors_need_repair() and rounds < _VOICEOVER_REPAIR_ROUNDS:
@@ -264,9 +264,11 @@ class VoiceoverStage(PipelineStage):
             logs.append(f"repair round {rounds}: repaired {repaired} anchors")
             if not repaired:
                 break
-            result = render(speech_rows, anchors, render_config, work_dir, cache_dir, output_audio)
+            result = render(speech_rows, anchors, render_config, work_dir, cache_dir)
             logs.append(f"render round {rounds}: {result.summary}")
 
+        # Assemble the final track once, after timings have converged.
+        assemble_voice(result, output_audio, work_dir)
         context.artifacts["speech_rows"] = speech_rows
         cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"))
         write_subtitles(cues, context.artifacts["subtitle_json"], context.artifacts["subtitle_srt"])

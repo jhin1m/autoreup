@@ -13,12 +13,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from backend.app.services.audio import align_audio, assemble_track, probe_duration, require_ffmpeg
+from backend.app.services.audio import align_audio, assemble_track, require_ffmpeg
 from backend.app.services.tts import (
     HttpTtsProvider,
     TtsBlock,
     clean_tts_text,
-    legacy_raw_audio_path,
     raw_audio_path,
 )
 from .models import Anchor, SpeechRow
@@ -58,9 +57,22 @@ class RenderResult:
     voice_track: Path | None
     timings: list[AnchorTiming] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    segments: list[tuple[float, Path, float]] = field(default_factory=list)
+    total_duration: float = 0.0
 
     def anchors_need_repair(self) -> list[int]:
         return [t.anchor_id for t in self.timings if t.needs_repair]
+
+
+def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path) -> Path:
+    """Concat the already tempo-fitted block clips into the final voice track.
+
+    Kept separate from :func:`render` so the repair loop can re-measure each round
+    and assemble only once, after timings converge — not on every round."""
+    assemble_track(result.segments, Path(output_audio), work_dir=Path(work_dir), total_duration=result.total_duration)
+    result.voice_track = Path(output_audio)
+    result.summary["voice_track"] = str(output_audio)
+    return Path(output_audio)
 
 
 def _blocks_by_anchor(speech_rows: list[SpeechRow], anchors: list[Anchor], text_mode: str) -> list[TtsBlock]:
@@ -94,8 +106,12 @@ def render(
     config: RenderConfig,
     work_dir: Path,
     cache_dir: Path,
-    output_audio: Path,
 ) -> RenderResult:
+    """Synthesize + tempo-fit each block (in parallel) and report per-anchor timing.
+
+    Does NOT assemble the final track — call :func:`assemble_voice` once after the
+    repair loop converges, so intermediate rounds don't pay for assembly.
+    """
     require_ffmpeg()
     blocks = _blocks_by_anchor(speech_rows, anchors, config.text_mode)
     if not blocks:
@@ -113,32 +129,26 @@ def render(
     cache_dir = Path(cache_dir)
     work_dir = Path(work_dir)
 
-    def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path], AnchorTiming]:
+    def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path, float], AnchorTiming]:
         raw_path = raw_audio_path(
             cache_dir, config.provider_url, config.speaker, block,
             speed=config.speed, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
         )
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         if not (raw_path.exists() and raw_path.stat().st_size > 1024):
-            legacy = legacy_raw_audio_path(
-                cache_dir, config.provider_url, config.speaker, block,
-                speed=config.speed, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
-            )
-            if legacy.exists() and legacy.stat().st_size > 1024:
-                raw_path.write_bytes(legacy.read_bytes())
-            else:
-                raw_path.write_bytes(provider.synthesize(block.text))
+            raw_path.write_bytes(provider.synthesize(block.text))
 
         target = block.duration + config.voice_lead
         aligned = work_dir / "aligned" / f"block-{index:05d}.m4a"
         timing = align_audio(raw_path, aligned, target, min_tempo=config.min_tempo, max_tempo=config.max_tempo)
         overflow_ms = int(timing["overflow_ms"])
-        return (block.start, aligned), AnchorTiming(
+        playback = float(timing["playback_duration"])
+        return (block.start, aligned, playback), AnchorTiming(
             anchor_id=int(block.block_id),
             anchor_start=block.start,
             anchor_end=block.end,
             target_duration=round(target, 3),
-            tts_duration=float(timing["playback_duration"]),
+            tts_duration=playback,
             overflow_ms=overflow_ms,
             needs_repair=overflow_ms > config.repair_over_ms,
         )
@@ -151,16 +161,13 @@ def render(
     timings = [timing for _, timing in rendered]
 
     total_duration = max((b.end for b in blocks), default=0.1)
-    output_audio = Path(output_audio)
-    assemble_track(segments, output_audio, work_dir=work_dir, total_duration=total_duration)
-
     need_repair = [t for t in timings if t.needs_repair]
     summary = {
         "blocks": len(blocks),
         "anchors_need_repair": len(need_repair),
         "max_overflow_ms": max((t.overflow_ms for t in timings), default=0),
         "overflow_pushes_next_voice": False,  # absolute scheduling guarantees this
-        "voice_track": str(output_audio),
+        "voice_track": None,
         "total_duration": round(total_duration, 3),
     }
-    return RenderResult(voice_track=output_audio, timings=timings, summary=summary)
+    return RenderResult(voice_track=None, timings=timings, summary=summary, segments=segments, total_duration=total_duration)

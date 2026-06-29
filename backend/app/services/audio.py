@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -98,30 +99,41 @@ def render_silence(path: Path, duration: float) -> None:
     ])
 
 
-def assemble_track(segments: list[tuple[float, Path]], output_path: Path, work_dir: Path, total_duration: float | None = None) -> None:
+def assemble_track(
+    segments: list[tuple[float, Path, float]], output_path: Path, work_dir: Path, total_duration: float | None = None
+) -> None:
     """Concat clips at absolute start times, padding gaps with silence.
 
-    Absolute scheduling: each clip starts at its own ``start``; an overlong clip
-    never shifts the next one's start, so overflow stays local to one anchor.
+    ``segments`` is ``(start, path, duration)`` — the clip duration is supplied by
+    the caller (already known from the tempo-fit step) to avoid re-probing each
+    clip. Absolute scheduling: each clip starts at its own ``start``; an overlong
+    clip never shifts the next one's start, so overflow stays local to one anchor.
     """
     concat_items: list[Path] = []
+    silence_jobs: list[tuple[Path, float]] = []
     cursor = 0.0
-    for index, (start, path) in enumerate(segments):
+    for index, (start, path, duration) in enumerate(segments):
         gap = start - cursor
         if gap > 0.01:
             silence = work_dir / "silence" / f"gap-{index:05d}.m4a"
-            render_silence(silence, gap)
+            silence_jobs.append((silence, gap))
             concat_items.append(silence)
             cursor += gap
         concat_items.append(path)
-        cursor += probe_duration(path)
+        cursor += duration
     if total_duration and total_duration - cursor > 0.01:
         silence = work_dir / "silence" / "tail.m4a"
-        render_silence(silence, total_duration - cursor)
+        silence_jobs.append((silence, total_duration - cursor))
         concat_items.append(silence)
     if not concat_items:
         render_silence(output_path, max(0.1, total_duration or 0.1))
         return
+
+    # Silence clips are independent — generate them concurrently.
+    if silence_jobs:
+        with ThreadPoolExecutor(max_workers=min(8, len(silence_jobs))) as pool:
+            list(pool.map(lambda job: render_silence(*job), silence_jobs))
+
     list_path = work_dir / "concat.txt"
     list_path.parent.mkdir(parents=True, exist_ok=True)
     list_path.write_text(
