@@ -1,14 +1,4 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Background,
-  Controls,
-  Edge,
-  Handle,
-  Node,
-  NodeProps,
-  Position,
-  ReactFlow,
-} from "@xyflow/react";
 
 type JobState = "queued" | "running" | "succeeded" | "failed" | "canceled";
 type StageStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
@@ -47,57 +37,29 @@ type JobManifest = {
 type JobResponse = { job: JobManifest };
 type SubtitleCue = { start?: number; end?: number; translated?: string; text?: string; source?: string };
 
-const STAGES = [
-  "download",
-  "asr",
-  "glossary",
-  "translate",
-  "edit",
-  "qa",
-  "voiceover",
-  "package",
-];
+const STAGES = ["download", "asr", "glossary", "translate", "edit", "qa", "voiceover", "package"];
 
 const STAGE_LABELS: Record<string, { title: string; detail: string }> = {
-  download: { title: "Tải video", detail: "Lấy nguồn gốc" },
-  asr: { title: "Tách thoại", detail: "ASR + dựng rail anchor" },
-  glossary: { title: "Glossary", detail: "Trích thuật ngữ theo video" },
-  translate: { title: "Dịch thoại", detail: "Lời Việt theo chunk" },
+  download: { title: "Nguồn", detail: "Tải video gốc" },
+  asr: { title: "Tách thoại", detail: "ASR + rail anchor" },
+  glossary: { title: "Thuật ngữ", detail: "Trích theo video" },
+  translate: { title: "Dịch", detail: "Lời Việt theo chunk" },
   edit: { title: "Biên tập", detail: "Rà soát ngữ nghĩa" },
-  qa: { title: "Kiểm tra", detail: "Soát coverage & timing" },
+  qa: { title: "Kiểm tra", detail: "Coverage & timing" },
   voiceover: { title: "Lồng tiếng", detail: "TTS + sửa timing" },
-  package: { title: "Đóng gói", detail: "Xuất file tải về" },
+  package: { title: "Đóng gói", detail: "Xuất file" },
 };
 
-const DOWNLOADS = [
-  ["video", "Video gốc"],
+const OUTPUTS: [string, string][] = [
+  ["dubbed_mp4", "MP4 lồng tiếng"],
+  ["soft_sub_mp4", "MP4 phụ đề"],
+  ["voice_track", "Giọng đọc"],
   ["subtitle_srt", "SRT"],
   ["subtitle_vtt", "VTT"],
   ["subtitle_json", "JSON"],
-  ["soft_sub_mp4", "MP4 phụ đề"],
-  ["voice_track", "Voice M4A"],
-  ["dubbed_mp4", "MP4 voice"],
-  ["tts_manifest", "TTS log"],
-  ["zip_package", "ZIP"],
-  ["qa_report", "QA"],
-  ["pipeline_audit", "Prompt audit"],
+  ["zip_package", "Gói ZIP"],
+  ["qa_report", "Báo cáo QA"],
 ];
-
-function FlowNode({ data }: NodeProps<Node<{ label: string; detail: string; status: StageStatus }>>) {
-  return (
-    <div className={`flow-node ${data.status}`}>
-      <Handle type="target" position={Position.Left} />
-      <div className="node-status" />
-      <div>
-        <strong>{data.label}</strong>
-        <span>{data.detail}</span>
-      </div>
-      <Handle type="source" position={Position.Right} />
-    </div>
-  );
-}
-
-const nodeTypes = { flowNode: FlowNode };
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -111,7 +73,7 @@ export function App() {
 
   const loadJobs = useCallback(async () => {
     const response = await fetch("/api/v1/jobs");
-    if (!response.ok) throw new Error("Không tải được danh sách job");
+    if (!response.ok) throw new Error("Không tải được danh sách công việc");
     const payload = (await response.json()) as JobResponse[];
     const recent = payload.map((item) => item.job);
     setJobs(recent);
@@ -129,7 +91,6 @@ export function App() {
       loadSubtitlePreview(activeJob.job_id).then(setSubtitles).catch(() => setSubtitles([]));
       return;
     }
-
     const events = new EventSource(`/api/v1/jobs/${activeJob.job_id}/events`);
     events.onmessage = (event) => {
       const job = JSON.parse(event.data) as JobManifest;
@@ -148,37 +109,12 @@ export function App() {
   }, [activeJob?.job_id]);
 
   const stages = activeJob?.config?.stages?.length ? activeJob.config.stages : STAGES;
-  const stageMap = new Map(activeJob?.stages.map((stage) => [stage.name, stage]));
+  const stageMap = useMemo(() => new Map(activeJob?.stages.map((stage) => [stage.name, stage])), [activeJob]);
   const progress = activeJob ? getProgress(activeJob, stages.length) : 0;
+  const activeStageName = stages.find((name) => stageMap.get(name)?.status === "running");
   const videoArtifact = activeJob ? getLatestArtifact(activeJob, "video") : undefined;
   const vttArtifact = activeJob ? getLatestArtifact(activeJob, "subtitle_vtt") : undefined;
   const currentCue = useMemo(() => findCue(subtitles, currentTime), [subtitles, currentTime]);
-
-  const nodes = useMemo<Node[]>(
-    () =>
-      stages.map((stageName, index) => {
-        const label = STAGE_LABELS[stageName] ?? { title: stageName, detail: "Đang xử lý" };
-        return {
-          id: stageName,
-          type: "flowNode",
-          position: { x: index * 190, y: index % 2 === 0 ? 36 : 118 },
-          data: { label: label.title, detail: label.detail, status: stageMap.get(stageName)?.status ?? "pending" },
-        };
-      }),
-    [activeJob?.updated_at, stages.join("|")],
-  );
-
-  const edges = useMemo<Edge[]>(
-    () =>
-      stages.slice(0, -1).map((stageName, index) => ({
-        id: `${stageName}-${stages[index + 1]}`,
-        source: stageName,
-        target: stages[index + 1],
-        animated: activeJob?.state === "running",
-        className: "flow-edge",
-      })),
-    [activeJob?.state, stages.join("|")],
-  );
 
   async function submitJob(event: FormEvent) {
     event.preventDefault();
@@ -196,71 +132,52 @@ export function App() {
       setActiveJob(payload.job);
       setJobs((items) => upsertJob(items, payload.job));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Không tạo được job");
+      setMessage(error instanceof Error ? error.message : "Không tạo được công việc");
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <main className="app-shell">
-      <section className="topbar">
-        <div className="brand-block">
-          <p className="eyebrow">AutoReup Studio</p>
-          <h1>Video → phụ đề Việt → file xuất bản</h1>
-        </div>
-        <form className="submit-card" onSubmit={submitJob}>
-          <label htmlFor="video-url">Video link</label>
-          <div className="url-row">
-            <input
-              id="video-url"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://..."
-              required
-              minLength={8}
-            />
-            <button disabled={isSubmitting || !url.trim()}>{isSubmitting ? "Đang tạo" : "Chạy"}</button>
+    <div className="desk">
+      <header className="deck">
+        <div className="mark">
+          <span className="mark-dot" aria-hidden />
+          <div>
+            <p className="mark-name">AutoReup</p>
+            <p className="mark-sub">Localization Desk · 中文 → Tiếng Việt</p>
           </div>
-          {message ? <p className="error-text">{message}</p> : null}
+        </div>
+        <form className="source" onSubmit={submitJob}>
+          <span className="source-tag">NGUỒN</span>
+          <input
+            aria-label="Đường dẫn video nguồn"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="Dán link Douyin / Bilibili…"
+            required
+            minLength={8}
+          />
+          <button disabled={isSubmitting || !url.trim()}>{isSubmitting ? "Đang dựng…" : "Dựng bản dub"}</button>
         </form>
-      </section>
+      </header>
 
-      <section className="job-strip panel">
-        <div className="panel-heading compact-heading">
-          <span>Job gần đây</span>
-          <button className="ghost-button" onClick={() => loadJobs().catch((error) => setMessage(error.message))}>Làm mới</button>
-        </div>
-        <div className="job-list horizontal">
-          {jobs.length ? (
-            jobs.map((job) => (
-              <button
-                key={job.job_id}
-                className={`job-item ${activeJob?.job_id === job.job_id ? "active" : ""}`}
-                onClick={() => setActiveJob(job)}
-              >
-                <span>{job.job_id}</span>
-                <small>{job.state}</small>
-              </button>
-            ))
-          ) : (
-            <p className="empty-text">Chưa có job.</p>
-          )}
-        </div>
-      </section>
+      {message ? <p className="banner">{message}</p> : null}
 
-      <section className="studio-grid">
-        <section className="preview-panel panel">
-          <div className="panel-heading">
-            <div>
-              <span>{activeJob ? `Preview job ${activeJob.job_id}` : "Preview"}</span>
-              <small>{activeJob?.input.url ?? "Dán link để bắt đầu"}</small>
+      <Transport stages={stages} stageMap={stageMap} state={activeJob?.state} progress={progress} activeStage={activeStageName} />
+
+      <main className="stage-grid">
+        <section className="screen panel">
+          <div className="panel-head">
+            <div className="panel-title">
+              <h2>Xem trước</h2>
+              <p className="mono small">{activeJob ? activeJob.input.url : "Chưa chọn công việc"}</p>
             </div>
             <StatePill state={activeJob?.state ?? "queued"} />
           </div>
-          <div className="player-card">
+          <div className="viewport">
             {videoArtifact ? (
-              <div className="video-shell">
+              <>
                 <video
                   ref={videoRef}
                   controls
@@ -268,83 +185,163 @@ export function App() {
                   src={mediaUrl(videoArtifact)}
                   onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
                 >
-                  {vttArtifact ? <track kind="subtitles" src={`/api/v1/jobs/${activeJob?.job_id}/artifacts/subtitle_vtt`} srcLang="vi" label="Tiếng Việt" /> : null}
+                  {vttArtifact ? (
+                    <track kind="subtitles" src={`/api/v1/jobs/${activeJob?.job_id}/artifacts/subtitle_vtt`} srcLang="vi" label="Tiếng Việt" default />
+                  ) : null}
                 </video>
-                <div className={`subtitle-overlay ${currentCue ? "visible" : ""}`}>{currentCue?.translated || currentCue?.text || ""}</div>
-              </div>
+                <div className={`overlay ${currentCue ? "lit" : ""}`}>{cueText(currentCue)}</div>
+              </>
             ) : (
-              <div className="empty-player">
-                <strong>Chưa có video</strong>
-                <span>Video player sẽ hiện ngay sau bước tải video.</span>
+              <div className="viewport-empty">
+                <span className="reel" aria-hidden />
+                <strong>Màn hình chờ nguồn</strong>
+                <p>Video hiện ngay sau bước tải. Phụ đề tiếng Việt chạy realtime cùng tiến trình.</p>
               </div>
             )}
           </div>
-
-          <div className="flow-card">
-            <div className="flow-title">
-              <span>Realtime pipeline</span>
-              <b>{progress}%</b>
-            </div>
-            <div className="progress-track"><div style={{ width: `${progress}%` }} /></div>
-            <div className="canvas-wrap">
-              <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView minZoom={0.45} maxZoom={1.4} proOptions={{ hideAttribution: true }}>
-                <Background gap={20} size={1} />
-                <Controls showInteractive={false} />
-              </ReactFlow>
-            </div>
+          <div className="now">
+            <span className="now-tag">ĐANG ĐỌC</span>
+            <p>{cueText(currentCue) || "Phát video để theo dõi lời thoại."}</p>
           </div>
         </section>
 
-        <aside className="side-panel panel">
-          <div className="panel-heading"><span>Phụ đề & file</span></div>
-          {activeJob ? (
-            <>
-              {activeJob.error ? <p className="error-box">{activeJob.error}</p> : null}
-              <div className="download-grid">
-                {DOWNLOADS.map(([kind, label]) => {
-                  const available = getLatestArtifact(activeJob, kind);
-                  return available ? (
-                    <a key={kind} href={`/api/v1/jobs/${activeJob.job_id}/artifacts/${kind}`}>{label}</a>
-                  ) : (
-                    <span key={kind}>{label}</span>
-                  );
-                })}
-              </div>
-              <div className="now-card">
-                <span>Đang hiển thị</span>
-                <p>{currentCue?.translated || currentCue?.text || "Play video để xem subtitle chạy realtime."}</p>
-              </div>
-              <h2>Danh sách phụ đề</h2>
-              <div className="subtitle-list">
-                {subtitles.length ? subtitles.slice(0, 24).map((cue, index) => (
-                  <button
-                    key={`${cue.start}-${index}`}
-                    className={`subtitle-cue ${currentCue === cue ? "active" : ""}`}
-                    onClick={() => seekVideo(videoRef.current, cue.start)}
-                  >
-                    <time>{formatTime(cue.start)} → {formatTime(cue.end)}</time>
-                    <p>{cue.translated || cue.text || "—"}</p>
-                    {cue.source ? <small>{cue.source}</small> : null}
-                  </button>
-                )) : <p className="empty-text">Preview sẽ hiện khi có phụ đề JSON.</p>}
-              </div>
-            </>
-          ) : (
-            <p className="empty-text">Chọn hoặc tạo job để xem file tải về.</p>
-          )}
+        <aside className="sheet panel">
+          <div className="panel-head">
+            <div className="panel-title">
+              <h2>Cue sheet</h2>
+              <p className="mono small">{subtitles.length ? `${subtitles.length} dòng tiếng Việt` : "Chưa có phụ đề"}</p>
+            </div>
+          </div>
+          {activeJob?.error ? <p className="fault">{activeJob.error}</p> : null}
+          <div className="cues">
+            {subtitles.length ? (
+              subtitles.map((cue, index) => (
+                <button
+                  key={`${cue.start}-${index}`}
+                  className={`cue ${currentCue === cue ? "on" : ""}`}
+                  onClick={() => seekVideo(videoRef.current, cue.start)}
+                >
+                  <time className="mono">{formatTime(cue.start)}</time>
+                  <p>{cue.translated || cue.text || "—"}</p>
+                </button>
+              ))
+            ) : (
+              <p className="muted-note">Cue sheet hiện khi bước Kiểm tra hoàn tất.</p>
+            )}
+          </div>
+          <div className="outputs">
+            <span className="outputs-tag">XUẤT FILE</span>
+            <div className="chips">
+              {OUTPUTS.map(([kind, label]) => {
+                const available = activeJob ? getLatestArtifact(activeJob, kind) : undefined;
+                return available ? (
+                  <a key={kind} className="chip ready" href={`/api/v1/jobs/${activeJob!.job_id}/artifacts/${kind}`}>
+                    {label}
+                  </a>
+                ) : (
+                  <span key={kind} className="chip">
+                    {label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
         </aside>
-      </section>
-    </main>
+      </main>
+
+      <footer className="ledger panel">
+        <div className="ledger-head">
+          <span className="ledger-tag">CÔNG VIỆC GẦN ĐÂY</span>
+          <button className="link" onClick={() => loadJobs().catch((error) => setMessage(error.message))}>
+            Làm mới
+          </button>
+        </div>
+        <div className="ledger-row">
+          {jobs.length ? (
+            jobs.map((job) => (
+              <button
+                key={job.job_id}
+                className={`ticket ${activeJob?.job_id === job.job_id ? "active" : ""}`}
+                onClick={() => setActiveJob(job)}
+              >
+                <span className="mono ticket-id">{job.job_id}</span>
+                <span className={`ticket-state ${job.state}`}>{STATE_VI[job.state]}</span>
+              </button>
+            ))
+          ) : (
+            <p className="muted-note">Chưa có công việc nào. Dán một link để bắt đầu.</p>
+          )}
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function Transport({
+  stages,
+  stageMap,
+  state,
+  progress,
+  activeStage,
+}: {
+  stages: string[];
+  stageMap: Map<string, Stage>;
+  state?: JobState;
+  progress: number;
+  activeStage?: string;
+}) {
+  const running = state === "running";
+  return (
+    <section className={`transport ${running ? "live" : ""}`}>
+      <div className="transport-head">
+        <span className="transport-tag">TIẾN TRÌNH</span>
+        <span className="transport-now mono">
+          {activeStage ? STAGE_LABELS[activeStage]?.title ?? activeStage : state === "succeeded" ? "Hoàn tất" : "Chờ chạy"}
+        </span>
+        <span className="transport-pct mono">{progress}%</span>
+      </div>
+      <div className="rail">
+        <div className="rail-line" />
+        <div className="rail-fill" style={{ width: `${progress}%` }} />
+        <ol className="stops">
+          {stages.map((name, index) => {
+            const status = stageMap.get(name)?.status ?? "pending";
+            const label = STAGE_LABELS[name] ?? { title: name, detail: "" };
+            return (
+              <li key={name} className={`stop ${status}`}>
+                <span className="stop-node" aria-hidden />
+                <span className="stop-index mono">{String(index + 1).padStart(2, "0")}</span>
+                <span className="stop-title">{label.title}</span>
+                <span className="stop-detail">{label.detail}</span>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </section>
   );
 }
 
 function StatePill({ state }: { state: JobState }) {
-  return <span className={`state-pill ${state}`}>{state}</span>;
+  return (
+    <span className={`pill ${state}`}>
+      <span className="pill-dot" aria-hidden />
+      {STATE_VI[state]}
+    </span>
+  );
 }
+
+const STATE_VI: Record<JobState, string> = {
+  queued: "Chờ",
+  running: "Đang chạy",
+  succeeded: "Hoàn tất",
+  failed: "Lỗi",
+  canceled: "Đã huỷ",
+};
 
 async function fetchJob(jobId: string) {
   const response = await fetch(`/api/v1/jobs/${jobId}`);
-  if (!response.ok) throw new Error("Không tải được job");
+  if (!response.ok) throw new Error("Không tải được công việc");
   const payload = (await response.json()) as JobResponse;
   return payload.job;
 }
@@ -368,6 +365,10 @@ function mediaUrl(artifact: Artifact) {
   return `/media/${artifact.path}`;
 }
 
+function cueText(cue?: SubtitleCue) {
+  return cue?.translated || cue?.text || "";
+}
+
 function findCue(cues: SubtitleCue[], time: number) {
   return cues.find((cue) => typeof cue.start === "number" && typeof cue.end === "number" && time >= cue.start && time <= cue.end);
 }
@@ -380,12 +381,15 @@ function seekVideo(video: HTMLVideoElement | null, time?: number) {
 
 function getProgress(job: JobManifest, totalStages: number) {
   if (job.state === "succeeded") return 100;
-  const score = job.stages.reduce((total, stage) => total + (stage.status === "succeeded" ? 1 : stage.status === "running" ? 0.5 : 0), 0);
-  return Math.max(4, Math.min(100, Math.round((score / Math.max(totalStages, 1)) * 100)));
+  const score = job.stages.reduce(
+    (total, stage) => total + (stage.status === "succeeded" ? 1 : stage.status === "running" ? 0.5 : 0),
+    0,
+  );
+  return Math.max(2, Math.min(100, Math.round((score / Math.max(totalStages, 1)) * 100)));
 }
 
 function formatTime(value?: number) {
-  if (typeof value !== "number") return "--:--";
+  if (typeof value !== "number") return "––:––";
   const minutes = Math.floor(value / 60).toString().padStart(2, "0");
   const seconds = Math.floor(value % 60).toString().padStart(2, "0");
   return `${minutes}:${seconds}`;

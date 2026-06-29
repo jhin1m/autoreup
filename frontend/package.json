@@ -6,7 +6,6 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "@xyflow/react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",
