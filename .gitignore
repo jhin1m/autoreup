@@ -1,0 +1,27 @@
+# Secrets / env
+.env
+*.log
+
+# Python
+.venv/
+.venv-ocr/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node / frontend build
+frontend/node_modules/
+frontend/dist/
+
+# Cloudflare worker
+worker-ai/node_modules/
+worker-ai/.wrangler/
+
+# Private provider cookies
+.autoreup-private/
+
+# Runtime / generated media and pipeline outputs (recreated by the app)
+data/
+
+# OS
+.DS_Store

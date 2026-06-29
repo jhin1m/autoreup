@@ -1,0 +1,80 @@
+from datetime import datetime, timezone
+from enum import StrEnum
+
+from pydantic import BaseModel, Field
+
+from .artifacts import Artifact
+
+
+class JobState(StrEnum):
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    canceled = "canceled"
+
+
+class StageStatus(StrEnum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    skipped = "skipped"
+
+
+class StageName(StrEnum):
+    download = "download"
+    asr = "asr"
+    glossary = "glossary"
+    translate = "translate"
+    edit = "edit"
+    qa = "qa"
+    voiceover = "voiceover"
+    package = "package"
+
+
+class JobInput(BaseModel):
+    url: str
+
+
+class PipelineConfig(BaseModel):
+    content_genre: str = ""  # optional hint; glossary is extracted data-driven per video
+    max_chars: int = 60
+    display_max_chars: int = 32
+    display_max_lines: int = 1
+    max_cps: float = 32.0
+    target_cps: float = 22.0
+    min_duration: float = 0.45
+    max_duration: float = 4.8
+    min_gap: float = 0.03
+    snap_gap: float = 0.12
+    tail_out: float = 0.28
+    stages: list[StageName] = Field(default_factory=lambda: [stage for stage in StageName])
+
+
+class StageRecord(BaseModel):
+    name: StageName
+    status: StageStatus = StageStatus.pending
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    artifacts: list[Artifact] = Field(default_factory=list)
+    metrics: dict = Field(default_factory=dict)
+    logs: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class JobManifest(BaseModel):
+    schema_version: str
+    job_id: str
+    input: JobInput
+    state: JobState = JobState.queued
+    config: PipelineConfig = Field(default_factory=PipelineConfig)
+    artifacts: list[Artifact] = Field(default_factory=list)
+    stages: list[StageRecord] = Field(default_factory=list)
+    metrics: dict = Field(default_factory=dict)
+    error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc)
