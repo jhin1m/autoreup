@@ -192,18 +192,16 @@ input {
 /* ---------- transport (signature) ---------- */
 
 .transport {
-  padding: 16px 22px 22px;
+  padding: 16px 18px 18px;
   border: 1px solid var(--line);
   border-radius: var(--r);
-  background: linear-gradient(180deg, #15211e, var(--ink-2));
-  position: relative;
-  overflow: hidden;
+  background: var(--panel);
 }
 .transport-head {
   display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 22px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 .transport-tag {
   font-family: var(--font-mono);
@@ -212,124 +210,129 @@ input {
   color: var(--faint);
 }
 .transport-now {
-  font-size: 13px;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.transport.live .transport-now {
   color: var(--amber);
-  font-weight: 500;
 }
 .transport-pct {
   margin-left: auto;
-  font-size: 13px;
-  color: var(--muted);
+  font-size: 12.5px;
+  color: var(--faint);
 }
 
-.rail {
-  position: relative;
-}
-.rail-line,
-.rail-fill {
-  position: absolute;
-  top: 5px;
-  height: 2px;
-  border-radius: 2px;
-}
-.rail-line {
-  left: 0;
-  right: 0;
-  background: var(--line);
-}
-.rail-fill {
-  left: 0;
-  background: linear-gradient(90deg, #8a6a22, var(--amber));
-  box-shadow: 0 0 12px #f0b23c66;
-  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.stops {
+/* stage segments */
+.pipeline {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
-  position: relative;
+  gap: 6px;
 }
-.stops > li {
+.seg-wrap {
   flex: 1 1 0;
   min-width: 0;
 }
-.stop {
+.seg {
   width: 100%;
-  background: none;
-  border: 0;
+  height: 100%;
   cursor: pointer;
-  font: inherit;
-  color: inherit;
   display: flex;
   flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-top: 2px solid var(--line);
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+.seg:hover {
+  transform: translateY(-1px);
+  border-color: #33453f;
+}
+.seg-top {
+  display: flex;
   align-items: center;
-  text-align: center;
-  gap: 7px;
-  padding: 2px 3px 4px;
-  border-radius: 8px;
-  transition: background 0.12s ease;
+  justify-content: space-between;
 }
-.stop:hover {
-  background: #ffffff08;
-}
-.stop.picked {
-  background: var(--amber-soft);
-}
-.stop.picked .stop-title {
-  color: var(--amber);
-}
-.stop-node {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--ink);
-  border: 2px solid var(--line);
-  transition: all 0.25s ease;
-}
-.stop-index {
+.seg-num {
   font-size: 10.5px;
   color: var(--faint);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
-.stop-title {
-  font-size: 12.5px;
+.seg-name {
+  font-size: 13px;
   font-weight: 600;
   color: var(--muted);
-  line-height: 1.1;
+  line-height: 1.15;
 }
-.stop-detail {
+.seg-detail {
   font-size: 10.5px;
   color: var(--faint);
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
-.stop.succeeded .stop-node {
-  background: var(--jade);
-  border-color: var(--jade);
-  box-shadow: 0 0 10px #56c59655;
+.seg-glyph {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
 }
-.stop.succeeded .stop-title {
+.seg-glyph.idle {
+  border: 1.5px solid var(--line);
+}
+.seg-glyph.run {
+  background: var(--amber);
+  box-shadow: 0 0 0 0 #f0b23c80;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.seg-glyph.done {
+  background: var(--jade);
+  color: #0c1413;
+}
+.seg-glyph.fail {
+  background: var(--rose);
+  color: #0c1413;
+}
+
+/* segment states */
+.seg.succeeded {
+  border-top-color: var(--jade);
+  background: linear-gradient(180deg, #16241f, var(--panel-2));
+}
+.seg.succeeded .seg-name {
   color: var(--text);
 }
-.stop.running .stop-node {
-  background: var(--amber);
-  border-color: var(--amber);
-  animation: pulse 1.4s ease-in-out infinite;
+.seg.running {
+  border-color: #5a4a1e;
+  border-top-color: var(--amber);
+  background: linear-gradient(180deg, #211d12, var(--panel-2));
 }
-.stop.running .stop-title {
+.seg.running .seg-name {
   color: var(--amber);
 }
-.stop.failed .stop-node {
-  background: var(--rose);
-  border-color: var(--rose);
+.seg.failed {
+  border-top-color: var(--rose);
 }
-.stop.failed .stop-title {
+.seg.failed .seg-name {
   color: var(--rose);
 }
-.stop.skipped .stop-node {
-  border-style: dashed;
-  opacity: 0.7;
+.seg.skipped {
+  opacity: 0.55;
+}
+.seg.picked {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber-soft);
 }
 
 @keyframes pulse {
@@ -338,7 +341,7 @@ input {
     box-shadow: 0 0 0 0 #f0b23c66;
   }
   50% {
-    box-shadow: 0 0 0 7px #f0b23c00;
+    box-shadow: 0 0 0 5px #f0b23c00;
   }
 }
 
@@ -709,12 +712,12 @@ input:focus-visible,
   .stage-grid {
     grid-template-columns: 1fr;
   }
-  .stops {
+  .pipeline {
     overflow-x: auto;
-    padding-bottom: 6px;
+    padding-bottom: 4px;
   }
-  .stop {
-    min-width: 92px;
+  .seg-wrap {
+    min-width: 116px;
   }
   .cues {
     max-height: none;

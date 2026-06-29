@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
-import type { GlossaryEntry, JobManifest, JobState, ProviderSession, SourceVideo, Stage, SubtitleCue } from "./types";
+import type { GlossaryEntry, JobManifest, JobState, ProviderSession, SourceVideo, Stage, StageStatus, SubtitleCue } from "./types";
 
 const STAGES = ["download", "asr", "glossary", "translate", "edit", "qa", "voiceover", "package"];
 
@@ -284,41 +284,51 @@ function Transport({
   selected: string | null;
   onSelect: (name: string) => void;
 }) {
+  const headline = activeStage
+    ? STAGE_LABELS[activeStage]?.title ?? activeStage
+    : state === "succeeded"
+      ? "Hoàn tất"
+      : state === "failed"
+        ? "Dừng do lỗi"
+        : "Chờ chạy";
   return (
     <section className={`transport ${state === "running" ? "live" : ""}`}>
       <div className="transport-head">
         <span className="transport-tag">TIẾN TRÌNH</span>
-        <span className="transport-now mono">
-          {activeStage ? STAGE_LABELS[activeStage]?.title ?? activeStage : state === "succeeded" ? "Hoàn tất" : "Chờ chạy"}
-        </span>
-        <span className="transport-pct mono">{progress}%</span>
+        <span className="transport-now">{headline}</span>
+        <span className="transport-pct mono">{progress.toString().padStart(2, "0")}%</span>
       </div>
-      <div className="rail">
-        <div className="rail-line" />
-        <div className="rail-fill" style={{ width: `${progress}%` }} />
-        <ol className="stops">
-          {stages.map((name, index) => {
-            const status = stageMap.get(name)?.status ?? "pending";
-            const label = STAGE_LABELS[name] ?? { title: name, detail: "" };
-            return (
-              <li key={name}>
-                <button
-                  className={`stop ${status} ${selected === name ? "picked" : ""}`}
-                  onClick={() => onSelect(name)}
-                  title={`Xem chi tiết: ${label.title}`}
-                >
-                  <span className="stop-node" aria-hidden />
-                  <span className="stop-index mono">{String(index + 1).padStart(2, "0")}</span>
-                  <span className="stop-title">{label.title}</span>
-                  <span className="stop-detail">{label.detail}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
+      <ol className="pipeline">
+        {stages.map((name, index) => {
+          const status = stageMap.get(name)?.status ?? "pending";
+          const label = STAGE_LABELS[name] ?? { title: name, detail: "" };
+          return (
+            <li key={name} className="seg-wrap">
+              <button
+                className={`seg ${status} ${selected === name ? "picked" : ""}`}
+                onClick={() => onSelect(name)}
+                title={`Xem chi tiết: ${label.title}`}
+              >
+                <span className="seg-top">
+                  <span className="seg-num mono">{String(index + 1).padStart(2, "0")}</span>
+                  <StageGlyph status={status} />
+                </span>
+                <span className="seg-name">{label.title}</span>
+                <span className="seg-detail">{label.detail}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
     </section>
   );
+}
+
+function StageGlyph({ status }: { status: StageStatus }) {
+  if (status === "succeeded") return <span className="seg-glyph done" aria-hidden>✓</span>;
+  if (status === "failed") return <span className="seg-glyph fail" aria-hidden>!</span>;
+  if (status === "running") return <span className="seg-glyph run" aria-hidden />;
+  return <span className="seg-glyph idle" aria-hidden />;
 }
 
 /* ---------- review: bilingual ---------- */
