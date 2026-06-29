@@ -143,7 +143,18 @@ def build_display_cues(
                 }
             )
             prev_end = cue_end
+
+    _close_micro_gaps(cues)
     return cues
+
+
+def _close_micro_gaps(cues: list[dict], micro_gap: float = 0.3) -> None:
+    """Hold a cue until the next one appears when the gap is tiny, to avoid the
+    subtitle flickering off and back on for a fraction of a second."""
+    for prev, cur in zip(cues, cues[1:]):
+        gap = cur["start"] - prev["end"]
+        if 0 < gap <= micro_gap:
+            prev["end"] = cur["start"]
 
 
 def write_subtitles(cues: list[dict], json_path: Path, srt_path: Path, vtt_path: Path | None = None) -> None:
