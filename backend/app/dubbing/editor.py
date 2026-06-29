@@ -9,6 +9,7 @@ until no patch is applied or a round cap is hit.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .glossary import format_glossary
@@ -25,6 +26,7 @@ class EditorConfig:
     max_caption_chars: int = 32
     max_rounds: int = 2
     batch_anchors: int = 24
+    workers: int = 4  # review batches in parallel (independent LLM calls)
 
 
 def _group_by_anchor(rows: list[SpeechRow]) -> dict[int, list[SpeechRow]]:
@@ -110,12 +112,20 @@ def edit_round(
     grouped = _group_by_anchor(rows)
     anchor_ids = [a.id for a in anchors if a.id in grouped]
     patched = 0
+    glossary_text = format_glossary(glossary)
 
-    for start in range(0, len(anchor_ids), config.batch_anchors):
-        batch_ids = anchor_ids[start : start + config.batch_anchors]
+    def review(batch_ids: list[int]) -> tuple[set[int], dict[int, str]]:
         blocks = "\n".join(_format_review_block(amap[i], grouped[i]) for i in batch_ids)
-        raw = complete(EDITOR_SYSTEM, EDITOR_USER.format(glossary=format_glossary(glossary), anchors=blocks), llm)
-        flagged, patches = _parse_findings_and_patches(raw)
+        raw = complete(EDITOR_SYSTEM, EDITOR_USER.format(glossary=glossary_text, anchors=blocks), llm)
+        return _parse_findings_and_patches(raw)
+
+    batches = [anchor_ids[start : start + config.batch_anchors] for start in range(0, len(anchor_ids), config.batch_anchors)]
+    # The review LLM calls are independent — run the batches concurrently, then
+    # apply the gated patches in order.
+    with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
+        results = list(pool.map(review, batches))
+
+    for flagged, patches in results:
         for anchor_id, text in patches.items():
             if anchor_id not in flagged or anchor_id not in grouped:
                 continue  # severity gate: no BLOCKER/ERROR finding -> ignore patch
