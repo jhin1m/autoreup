@@ -85,7 +85,7 @@ class DownloadStage(PipelineStage):
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
-        result = YtDlpDownloader(settings.videos_dir).download(context.input_url, settings.cookies_file, context.job_id)
+        result = _download_source(settings, context.input_url, context.job_id)
         video = Path(result["path"])
         context.artifacts["video"] = video
         return StageResult(
@@ -316,6 +316,24 @@ def _artifact(kind: ArtifactKind, path: Path, data_dir: Path) -> Artifact:
         mime_type=mime,
         size_bytes=path.stat().st_size if path.exists() else None,
     )
+
+
+def _download_source(settings: Settings, url: str, job_id: str) -> dict:
+    """Douyin goes through the headless-browser extractor; everything else via yt-dlp."""
+    from backend.app.services.cookie_vault import CookieVault
+    from backend.app.studio.providers import detect_platform
+
+    vault = CookieVault(settings.provider_cookies_dir)
+    platform = detect_platform(url)
+    if platform.value == "douyin":
+        from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
+
+        extractor = DouyinBrowserExtractor(settings.videos_dir, vault, settings.root_dir, settings.browser_path, settings.node_bin)
+        if extractor.available():
+            return extractor.download(url, job_id)
+
+    cookies_file = (vault.netscape_file(platform.value) if platform.value in {"douyin", "bilibili"} else None)
+    return YtDlpDownloader(settings.videos_dir).download(url, str(cookies_file) if cookies_file else settings.cookies_file, job_id)
 
 
 def _count_kinds(glossary: list[GlossaryEntry]) -> dict[str, int]:

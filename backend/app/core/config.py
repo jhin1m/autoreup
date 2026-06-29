@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     asr_worker_url: str | None = None
     asr_model: str = "@cf/openai/whisper-large-v3-turbo"
     cookies_file: str | None = None
+    browser_path: str | None = None  # Chrome/Edge binary for the headless Douyin extractor
+    node_bin: str = "node"
     max_chars: int = 60
     display_max_chars: int = 32
     display_max_lines: int = 1

@@ -2,7 +2,6 @@ import threading
 from uuid import uuid4
 
 from backend.app.core.config import Settings
-from backend.app.infrastructure.downloader import YtDlpDownloader
 from backend.app.services.cookie_vault import CookieVault
 from backend.app.studio.models import DownloadQueueItem, DownloadState, VideoAsset, now_iso
 from backend.app.studio.providers import SourceDiscovery
@@ -46,13 +45,9 @@ class StudioService:
             return
         self.store.update_queue_item(item.id, state=DownloadState.running, updated_at=now_iso(), source_video_id=video.id)
         try:
-            cookie_header = self.cookie_vault.read_header(video.platform.value)
-            result = YtDlpDownloader(self.settings.videos_dir).download(
-                video.source_url,
-                cookies_file=self.settings.cookies_file,
-                video_id=video.id,
-                cookie_header=cookie_header,
-            )
+            from backend.app.pipeline.production import _download_source
+
+            result = _download_source(self.settings, video.source_url, video.id)
             asset = VideoAsset(
                 id=video.id,
                 source_video_id=video.id,

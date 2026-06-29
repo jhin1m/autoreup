@@ -137,6 +137,10 @@ class SourceDiscovery:
             "noplaylist": not flat,
             "http_headers": headers,
         }
+        if platform.value in {"douyin", "bilibili"}:
+            cookie_file = self.cookie_vault.netscape_file(platform.value)
+            if cookie_file:
+                options["cookiefile"] = str(cookie_file)
         if playlist_end:
             options["playlistend"] = playlist_end
         with yt_dlp.YoutubeDL(options) as ydl:

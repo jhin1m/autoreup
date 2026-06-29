@@ -30,6 +30,19 @@ download -> asr -> glossary -> translate -> edit -> qa -> voiceover -> package
 The dubbing core lives in `backend/app/dubbing/`. Only one external-adapter script
 remains under `scripts/` (`asr_worker_client.py`).
 
+### Douyin downloads
+
+yt-dlp can't sign Douyin's web API, so Douyin is downloaded by driving a headless
+Chromium (Edge/Chrome, reused from the system — no bundled browser) over CDP via
+`tools/douyin_extract.mjs` (Node, zero npm deps). It loads the page with your saved
+cookies so Douyin's own JS yields the real CDN stream, which is then fetched directly.
+
+- Requires **Node.js ≥ 22** and an installed Chromium browser (Edge/Chrome).
+- Add your Douyin cookies in the UI (paste Cookie-Editor JSON / `cookies.txt` / header).
+- Optional: `AUTOREUP_BROWSER_PATH` to point at a specific browser binary.
+
+Everything else (Bilibili, etc.) still uses yt-dlp.
+
 ## Run local
 
 ```bash
