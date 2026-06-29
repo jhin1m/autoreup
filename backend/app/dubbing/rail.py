@@ -18,9 +18,13 @@ from .tsv_io import parse_srt
 
 @dataclass(slots=True)
 class AnchorConfig:
-    max_anchor_duration: float = 12.0
+    max_anchor_duration: float = 8.0
     max_anchor_segments: int = 6
     max_anchor_source_chars: int = 60
+    # A silence gap this long between segments is treated as a phrase/sentence
+    # boundary and starts a new anchor — so each anchor is a natural speech unit
+    # the voice-over can align to (dubbing), not an arbitrary multi-sentence span.
+    max_gap: float = 0.45
 
 
 def segments_from_srt(path: Path) -> list[AsrSegment]:
@@ -51,10 +55,12 @@ def build_anchors(segments: list[AsrSegment], config: AnchorConfig | None = None
 
     for seg in segments:
         if current:
+            gap = seg.start - current[-1].end
             duration = seg.end - current[0].start
             text_len = sum(len(item.text_zh) for item in (*current, seg))
             if (
-                duration > config.max_anchor_duration
+                gap > config.max_gap
+                or duration > config.max_anchor_duration
                 or len(current) >= config.max_anchor_segments
                 or text_len > config.max_anchor_source_chars
             ):
