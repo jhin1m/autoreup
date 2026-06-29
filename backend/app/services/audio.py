@@ -88,6 +88,31 @@ def align_audio(raw_path: Path, output_path: Path, target_duration: float, min_t
     }
 
 
+# Voice mastering chain ported from the proven probe pipeline — what made the
+# old voice-over pleasant to listen to: de-rumble, tame mud at 220 Hz, lift
+# presence (3.2 kHz) and air (7.6 kHz), even out levels, then limit.
+VOICE_MASTER_CHAIN = (
+    "highpass=f=85,"
+    "equalizer=f=220:t=q:w=1.0:g=-1.5,"
+    "equalizer=f=3200:t=q:w=1.0:g=2.2,"
+    "equalizer=f=7600:t=q:w=1.1:g=1.0,"
+    "acompressor=threshold=-22dB:ratio=2.4:attack=8:release=120:makeup=2.5,"
+    "alimiter=limit=0.92"
+)
+
+
+def master_voice(input_path: Path, output_path: Path) -> None:
+    """Apply the voice mastering chain so the dub is clear and easy to listen to."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    run_command([
+        "ffmpeg", "-y", "-v", "error",
+        "-i", str(input_path),
+        "-filter:a", f"aresample=44100,{VOICE_MASTER_CHAIN}",
+        "-ac", "2", "-c:a", "aac", "-b:a", "192k",
+        str(output_path),
+    ])
+
+
 def render_silence(path: Path, duration: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     run_command([

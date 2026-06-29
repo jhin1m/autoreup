@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from backend.app.services.audio import align_audio, assemble_track, require_ffmpeg
+from backend.app.services.audio import align_audio, assemble_track, master_voice, require_ffmpeg
 from backend.app.services.tts import (
     HttpTtsProvider,
     TtsBlock,
@@ -65,14 +65,19 @@ class RenderResult:
 
 
 def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path) -> Path:
-    """Concat the already tempo-fitted block clips into the final voice track.
+    """Concat the tempo-fitted clips, then master the voice into the final track.
 
     Kept separate from :func:`render` so the repair loop can re-measure each round
-    and assemble only once, after timings converge — not on every round."""
-    assemble_track(result.segments, Path(output_audio), work_dir=Path(work_dir), total_duration=result.total_duration)
-    result.voice_track = Path(output_audio)
+    and assemble only once, after timings converge — not on every round. The
+    mastering chain (EQ/compress/limit) is what makes the dub easy to listen to."""
+    output_audio = Path(output_audio)
+    work_dir = Path(work_dir)
+    unmastered = work_dir / "voice.unmastered.m4a"
+    assemble_track(result.segments, unmastered, work_dir=work_dir, total_duration=result.total_duration)
+    master_voice(unmastered, output_audio)
+    result.voice_track = output_audio
     result.summary["voice_track"] = str(output_audio)
-    return Path(output_audio)
+    return output_audio
 
 
 def _blocks_by_anchor(speech_rows: list[SpeechRow], anchors: list[Anchor], text_mode: str) -> list[TtsBlock]:

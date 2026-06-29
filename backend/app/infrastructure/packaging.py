@@ -80,11 +80,14 @@ def dubbed_command(video: Path, voice_track: Path, subtitle_srt: Path, output: P
             "-i", str(video),
             "-i", str(voice_track),
             "-i", str(subtitle_srt),
+            # Keep the original audio as a low, steady bed and lay the (already
+            # mastered) Vietnamese voice over it — no sidechain ducking, which
+            # pumps; this is the mix the proven probe pipeline used.
             "-filter_complex",
-            "[0:a:0]aresample=44100,volume=0.22[bed];"
+            "[0:a:0]aresample=44100,volume=0.38[bed];"
             "[1:a:0]aresample=44100,volume=1.0[vo];"
-            "[bed][vo]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=250[ducked];"
-            "[ducked][vo]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]",
+            "[bed][vo]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+            "volume=0.92,alimiter=limit=0.95[aout]",
             "-map", "0:v:0",
             "-map", "[aout]",
             "-map", "2:0",
