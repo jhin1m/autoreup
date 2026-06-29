@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from backend.app.integrations.llm.client import (
     DEFAULT_RESPONSES_BASE_URL,
@@ -31,8 +31,7 @@ class LLMConfig:
     retries: int = 3
 
     def with_model(self, model: str) -> "LLMConfig":
-        data = {**self.__dict__, "model": model}
-        return LLMConfig(**data)
+        return replace(self, model=model)
 
     def resolved_base_url(self) -> str | None:
         # Anthropic/Gemini wire formats must not be pointed at the local Responses URL.
