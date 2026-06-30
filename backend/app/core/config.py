@@ -43,6 +43,36 @@ class Settings(BaseSettings):
     tail_out: float = 0.28
     tts_enabled: bool = False
     tts_server_url: str | None = None
+    # Native (in-process) CapCut TTS client — no external node service. Reads a
+    # persisted CapCut session (cookies/deviceId/tdid) and signs requests itself.
+    tts_native: bool = True
+    capcut_session_file: str | None = None  # path to capcut-session.json (default: private dir)
+    capcut_email: str = ""      # for native auto-login (mints/refreshes the session)
+    capcut_password: str = ""
+    capcut_login_host: str = "https://login-row.www.capcut.com"
+    capcut_fallback_login_host: str = "https://login.us.capcut.com"
+    capcut_page_locale: str = "vi-vn"
+    capcut_locale: str = "vi-VN"
+    capcut_session_max_age_days: float = 3.0  # re-login when the session is older
+    capcut_edit_api: str = "https://edit-api-sg.capcut.com"
+    capcut_web_url: str = "https://www.capcut.com"
+    capcut_app_id: str = "348188"
+    capcut_app_version: str = "5.8.0"
+    capcut_platform_id: str = "7"
+    capcut_sign_version: str = "1"
+    capcut_sign_prefix: str = "9e2c"
+    capcut_sign_suffix: str = "11ac"
+    capcut_sign_path_tail: int = 7
+    capcut_store_country: str = "vn"
+    capcut_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    )
+    capcut_effect_id: str = "7252594014782755330"   # BV421_vivn_streaming
+    capcut_resource_id: str = "7252594014782755330"
+    capcut_voice_name: str = "Nguồn nhỏ ngọt ngào"
+    capcut_batch_size: int = 8        # texts per multi_platform call
+    capcut_batch_concurrency: int = 8  # concurrent batch requests
     tts_voice: str = "BV421_vivn_streaming"
     tts_speed: float = 1.0  # neutral synth; timing is fitted by ffmpeg tempo, not provider speed
     tts_pitch: float = 1.0
@@ -55,6 +85,10 @@ class Settings(BaseSettings):
     # natural pause — condensing the over-dense source (22-29 ch/s) without needless
     # content loss or underfill.
     tts_voice_cps: float = 18.0
+    # Each unique line costs ~6s upstream (CapCut) but the TTS server is fully
+    # concurrent and caches by text — so synth throughput = workers / 6s. This is the
+    # real voiceover bottleneck; raise for long videos (server handled 24 fine).
+    tts_workers: int = 16
     tts_post_tempo: float = 1.12
     # Read at (near-)natural pace so the dub is intelligible: never slow below 1.0
     # (no dragging) and only a hair of speed-up (1.08) for slightly-long lines.

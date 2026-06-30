@@ -45,6 +45,8 @@ class RenderConfig:
     attempts: int = 3
     repair_over_ms: int = 300  # overflow above this flags an anchor for repair
     voice_lead: float = 0.0    # extra slack added to each anchor window
+    batch_size: int = 8        # native CapCut: texts per multi_platform call
+    batch_concurrency: int = 8  # native CapCut: concurrent batch requests
     workers: int = 8           # parallel TTS synth + tempo-fit (calls are independent + cached)
     min_duration: float = 0.4  # sentence-unit floor (shared with the subtitle)
     # Smooth assembly: a source gap below glue_gap is NOT a real pause — the speaker
@@ -126,12 +128,15 @@ def render(
     work_dir: Path,
     cache_dir: Path,
     segments: list[AsrSegment] | None = None,
+    synth_client: "CapCutTtsClient | None" = None,
 ) -> RenderResult:
-    """Synthesize + tempo-fit each PIECE at its source-segment time (in parallel) and
-    report timing aggregated per anchor (so the repair loop still condenses by anchor).
+    """Synthesize + tempo-fit each PIECE at its source-segment time and report timing
+    aggregated per anchor (so the repair loop still condenses by anchor).
 
-    Does NOT assemble the final track — call :func:`assemble_voice` once after the
-    repair loop converges, so intermediate rounds don't pay for assembly.
+    With ``synth_client`` (native CapCut), all uncached clips are synthesized up-front
+    as CONCURRENT BATCHES (one call per ~8 texts) — far fewer round-trips than one
+    request per clip — then tempo-fit in parallel. Without it, falls back to a single
+    HTTP synth per clip. Does NOT assemble the final track.
     """
     require_ffmpeg()
     units = build_timed_units(speech_rows, config.min_duration, anchors, segments)
@@ -139,25 +144,54 @@ def render(
     if not blocks:
         return RenderResult(voice_track=None, summary={"blocks": 0, "anchors_need_repair": 0})
 
-    provider = HttpTtsProvider(
-        config.provider_url,
-        speaker=config.speaker,
-        speed=config.speed,
-        pitch=config.pitch,
-        volume=config.volume,
-        timeout=config.timeout,
-        attempts=config.attempts,
-    )
+    provider = None
+    if synth_client is None:
+        provider = HttpTtsProvider(
+            config.provider_url,
+            speaker=config.speaker,
+            speed=config.speed,
+            pitch=config.pitch,
+            volume=config.volume,
+            timeout=config.timeout,
+            attempts=config.attempts,
+        )
     cache_dir = Path(cache_dir)
     work_dir = Path(work_dir)
 
-    def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path, float, float], tuple[int, float]]:
-        raw_path = raw_audio_path(
+    def raw_path_for(block: TtsBlock) -> Path:
+        return raw_audio_path(
             cache_dir, config.provider_url, config.speaker, block,
             speed=config.speed, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
         )
+
+    # Native fast path: batch-synthesize every clip not already cached, in concurrent
+    # batches, then trim — so a repair round only re-synthesizes the few changed lines.
+    if synth_client is not None:
+        from backend.app.services.capcut_tts import synthesize_many
+        from backend.app.services.tts import to_provider_scale
+
+        todo = [(raw_path_for(b), b) for b in blocks]
+        todo = [(rp, b) for rp, b in todo if not (rp.exists() and rp.stat().st_size > 1024)]
+        if todo:
+            audios = synthesize_many(
+                synth_client,
+                [b.text for _, b in todo],
+                batch_size=config.batch_size,
+                concurrency=config.batch_concurrency,
+                speed=to_provider_scale(config.speed),
+                volume=to_provider_scale(config.volume),
+            )
+            for (rp, _block), audio in zip(todo, audios):
+                rp.parent.mkdir(parents=True, exist_ok=True)
+                rp.write_bytes(audio)
+                trim_silence(rp)
+
+    def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path, float, float], tuple[int, float]]:
+        raw_path = raw_path_for(block)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         if not (raw_path.exists() and raw_path.stat().st_size > 1024):
+            if provider is None:
+                raise RuntimeError(f"native synth produced no audio for block {block.block_id}")
             raw_path.write_bytes(provider.synthesize(block.text))
             trim_silence(raw_path)  # drop the TTS head/tail silence so speech lands at placement
 

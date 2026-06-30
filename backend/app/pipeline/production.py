@@ -13,6 +13,7 @@ client (an external-service adapter, like yt-dlp/ffmpeg).
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -80,6 +81,67 @@ def _translate_llm(settings: Settings) -> LLMConfig:
 
 def _polish_llm(settings: Settings) -> LLMConfig:
     return LLMConfig(provider=settings.llm_provider, base_url=settings.llm_base_url, model=settings.polish_model, stream=False)
+
+
+def _build_capcut_client(settings: Settings):
+    """Native in-process CapCut TTS client, or None to fall back to the HTTP server.
+
+    Self-contained: mints/refreshes its own CapCut session via email/password login
+    (pure Python) when the session file is missing or stale, then signs + batches
+    synthesis itself. Returns None only if native mode is off or no session can be
+    obtained (then the pipeline uses ``tts_server_url`` as before)."""
+    if not settings.tts_native:
+        return None
+    session_path = Path(settings.capcut_session_file) if settings.capcut_session_file else settings.private_dir / "capcut" / "capcut-session.json"
+
+    stale = (not session_path.exists()) or (
+        time.time() - session_path.stat().st_mtime > settings.capcut_session_max_age_days * 86400
+    )
+    if stale and settings.capcut_email and settings.capcut_password:
+        try:
+            from backend.app.services.capcut_login import LoginConfig, login
+
+            login(LoginConfig(
+                email=settings.capcut_email,
+                password=settings.capcut_password,
+                session_file=session_path,
+                app_id=settings.capcut_app_id,
+                web_url=settings.capcut_web_url,
+                login_host=settings.capcut_login_host,
+                fallback_login_host=settings.capcut_fallback_login_host,
+                page_locale=settings.capcut_page_locale,
+                locale=settings.capcut_locale,
+                store_country=settings.capcut_store_country,
+                user_agent=settings.capcut_user_agent,
+            ))
+        except Exception:
+            pass  # fall back to an existing (possibly stale) session if present
+
+    if not session_path.exists():
+        return None
+    from backend.app.services.capcut_tts import CapCutConfig, CapCutTtsClient
+
+    try:
+        return CapCutTtsClient(CapCutConfig(
+            session_file=session_path,
+            edit_api=settings.capcut_edit_api,
+            web_url=settings.capcut_web_url,
+            app_id=settings.capcut_app_id,
+            app_version=settings.capcut_app_version,
+            platform_id=settings.capcut_platform_id,
+            sign_version=settings.capcut_sign_version,
+            sign_prefix=settings.capcut_sign_prefix,
+            sign_suffix=settings.capcut_sign_suffix,
+            sign_path_tail=settings.capcut_sign_path_tail,
+            store_country=settings.capcut_store_country,
+            user_agent=settings.capcut_user_agent,
+            speaker=settings.tts_voice,
+            effect_id=settings.capcut_effect_id,
+            resource_id=settings.capcut_resource_id,
+            voice_name=settings.capcut_voice_name,
+        ))
+    except Exception:
+        return None
 
 
 class DownloadStage(PipelineStage):
@@ -241,8 +303,9 @@ class VoiceoverStage(PipelineStage):
         anchors: list[Anchor] = context.artifacts["anchors"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
+        synth_client = _build_capcut_client(settings)
         render_config = RenderConfig(
-            provider_url=settings.tts_server_url,
+            provider_url="capcut-native" if synth_client is not None else settings.tts_server_url,
             speaker=settings.tts_voice,
             text_mode=settings.tts_text_mode,
             min_tempo=settings.tts_min_tempo,
@@ -251,13 +314,16 @@ class VoiceoverStage(PipelineStage):
             glue_gap=settings.tts_glue_gap,
             crossfade=settings.tts_crossfade,
             min_duration=settings.min_duration,
+            workers=settings.tts_workers,
+            batch_size=settings.capcut_batch_size,
+            batch_concurrency=settings.capcut_batch_concurrency,
         )
         work_dir = context.job_dir / "tts"
         cache_dir = settings.tts_cache_dir
         output_audio = settings.tts_dir / f"{context.job_id}.voice.m4a"
         segments = context.artifacts.get("segments")
 
-        result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments)
+        result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments, synth_client=synth_client)
         logs = [f"render round 0: {result.summary}"]
         repair_cfg = RepairConfig(max_caption_chars=settings.display_max_chars)
         rounds = 0
@@ -287,7 +353,7 @@ class VoiceoverStage(PipelineStage):
             rounds += 1
             if not changed:
                 break
-            result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments)
+            result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments, synth_client=synth_client)
             logs.append(f"render round {rounds}: {result.summary}")
 
         # Assemble the final track once, after timings have converged.
