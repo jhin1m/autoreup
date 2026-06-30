@@ -123,6 +123,36 @@ function isAudio(u) {
   return AUDIO_RE.test(u);
 }
 
+const DEBUG = !!arg("debug", "") || !!process.env.DY_DEBUG;
+function absUrl(u) {
+  if (!u) return u;
+  if (u.startsWith("//")) return "https:" + u;
+  return u;
+}
+
+// Douyin's web detail API carries the FULL gear list (video.bit_rate[]) for the
+// target aweme; each gear's play_addr.url_list is a muxed progressive MP4. We read
+// that and pick the highest-resolution gear, instead of the low gear the player
+// happens to stream. wantId scopes the pick to the target video (the same response
+// machinery also serves related/favorite videos we must ignore).
+const DETAIL_RE = /\/aweme\/v1\/web\/aweme\/detail\//;
+const wantId = (url.match(/video\/(\d+)/) || [])[1] || null;
+
+function pickBestGear(bitRate) {
+  let best = null;
+  for (const g of bitRate || []) {
+    const pa = g.play_addr || g.playAddr || {};
+    const urls = pa.url_list || pa.urlList || [];
+    if (!urls.length) continue;
+    const w = pa.width || 0, h = pa.height || 0, br = g.bit_rate || g.bitRate || 0;
+    const area = w * h, barea = best ? best.w * best.h : -1;
+    if (!best || area > barea || (area === barea && br > best.br)) {
+      best = { w, h, br, gear: g.gear_name || g.gearName || "", url: urls[0] };
+    }
+  }
+  return best;
+}
+
 async function main() {
   const browserWs = await waitForDevtools();
   const ws = new WebSocket(browserWs);
@@ -137,9 +167,11 @@ async function main() {
 
   let video = null;
   let audio = null;
+  const detailReqs = [];
   cdp.on((msg) => {
     if (msg.method === "Network.responseReceived" && msg.params?.response) {
       const u = msg.params.response.url;
+      if (DETAIL_RE.test(u)) { detailReqs.push({ id: msg.params.requestId, session: msg.sessionId }); return; }
       if (!isStream(u)) return;
       if (isAudio(u)) { if (!audio) audio = u; }
       else if (!video) video = u;
@@ -157,6 +189,7 @@ async function main() {
   let title = null;
   let duration = null;
   let videoReadySince = 0;
+  let bestGear = null;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 700));
     try {
@@ -177,11 +210,37 @@ async function main() {
       if (data.dur && isFinite(data.dur)) duration = data.dur;
       if (isStream(data.src) && !isAudio(data.src) && !video) video = data.src;
     } catch {}
-    // Once we have video, give audio a short grace window to arrive, then ship.
+    // Parse the detail-API gear list and keep the highest-resolution gear for the
+    // target aweme. Once found it wins over the player's sniffed default.
+    if (!bestGear) {
+      for (const req of detailReqs) {
+        if (req.done) continue;
+        try {
+          const b = await cdp.send("Network.getResponseBody", { requestId: req.id }, req.session);
+          req.done = true; // body was ready; don't re-fetch
+          const j = JSON.parse(b.body || "{}");
+          const aw = j.aweme_detail || j.awemeDetail || (Array.isArray(j.aweme_list) ? j.aweme_list[0] : null);
+          if (aw && (!wantId || String(aw.aweme_id) === String(wantId))) {
+            const v = aw.video || {};
+            const cand = pickBestGear(v.bit_rate || v.bitRateList);
+            if (cand && cand.url) {
+              bestGear = cand;
+              if (aw.desc) title = String(aw.desc).trim();
+              if (v.duration) duration = v.duration / 1000; // ms -> s
+              if (DEBUG) console.error(`best gear: ${cand.w}x${cand.h} @${cand.br} ${cand.gear}`);
+            }
+          }
+        } catch { /* body not ready yet — retry next loop */ }
+      }
+    }
+    // A muxed top-gear MP4 needs no separate audio track — ship as soon as we have it.
+    if (bestGear) done({ video: absUrl(bestGear.url), muxed: true, width: bestGear.w, height: bestGear.h, title, duration });
+    // Fallback: the adaptive tracks we sniffed off the wire (video + audio, muxed later).
     if (video && audio) done({ video, audio, title, duration });
     if (video && !videoReadySince) videoReadySince = Date.now();
     if (video && Date.now() - videoReadySince > 6000) done({ video, audio, title, duration });
   }
+  if (bestGear) done({ video: absUrl(bestGear.url), muxed: true, width: bestGear.w, height: bestGear.h, title, duration });
   if (video) done({ video, audio, title, duration });
   fail("timed out waiting for video stream URL");
 }
