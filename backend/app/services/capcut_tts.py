@@ -108,14 +108,14 @@ class CapCutTtsClient:
         }
 
     # --- synthesis ---------------------------------------------------------
-    def _post_multi_platform(self, texts: list[str], speed: float, volume: float) -> list[str]:
+    def _post_multi_platform(self, texts: list[str], rate: float, volume: float) -> list[str]:
         cfg = self.config
         body = json.dumps(
             {
                 "texts": texts,
                 "tts_conf": {
                     "speaker": cfg.speaker,
-                    "rate": round(min(max(speed, 1.0), 20.0) / 10.0, 2),
+                    "rate": round(min(max(rate, 0.5), 2.0), 2),
                     "volume": int(min(max(volume, 0.0), 20.0) * 10),
                     "name": cfg.voice_name,
                     "platform": "sami",
@@ -164,16 +164,17 @@ class CapCutTtsClient:
             raise CapCutTtsError("CapCut audio download was empty")
         return audio
 
-    def synthesize_batch(self, texts: list[str], speed: float = 10.0, volume: float = 10.0) -> list[bytes]:
-        """One signed CapCut call for up to ~100 texts, then download each audio."""
+    def synthesize_batch(self, texts: list[str], rate: float = 1.0, volume: float = 10.0) -> list[bytes]:
+        """One signed CapCut call for up to ~100 texts, then download each audio.
+        ``rate`` is the CapCut playback rate (>1.0 = faster/snappier delivery)."""
         if not texts:
             return []
-        urls = self._post_multi_platform(texts, speed, volume)
+        urls = self._post_multi_platform(texts, rate, volume)
         with ThreadPoolExecutor(max_workers=min(8, len(urls))) as pool:
             return list(pool.map(self._download, urls))
 
-    def synthesize(self, text: str, speed: float = 10.0, volume: float = 10.0) -> bytes:
-        return self.synthesize_batch([text], speed=speed, volume=volume)[0]
+    def synthesize(self, text: str, rate: float = 1.0, volume: float = 10.0) -> bytes:
+        return self.synthesize_batch([text], rate=rate, volume=volume)[0]
 
 
 def synthesize_many(
@@ -181,7 +182,7 @@ def synthesize_many(
     texts: list[str],
     batch_size: int,
     concurrency: int,
-    speed: float = 10.0,
+    rate: float = 1.0,
     volume: float = 10.0,
 ) -> list[bytes]:
     """Synthesize many texts as CONCURRENT batches (the fast path): split into
@@ -191,7 +192,7 @@ def synthesize_many(
         return []
     batches = [texts[start : start + batch_size] for start in range(0, len(texts), max(1, batch_size))]
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        results = list(pool.map(lambda batch: client.synthesize_batch(batch, speed=speed, volume=volume), batches))
+        results = list(pool.map(lambda batch: client.synthesize_batch(batch, rate=rate, volume=volume), batches))
     out: list[bytes] = []
     for chunk in results:
         out.extend(chunk)

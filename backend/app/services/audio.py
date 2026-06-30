@@ -102,12 +102,12 @@ def align_audio(
 # old voice-over pleasant to listen to: de-rumble, tame mud at 220 Hz, lift
 # presence (3.2 kHz) and air (7.6 kHz), even out levels, then limit.
 VOICE_MASTER_CHAIN = (
-    "highpass=f=85,"
-    "equalizer=f=220:t=q:w=1.0:g=-1.5,"
-    "equalizer=f=3200:t=q:w=1.0:g=2.2,"
-    "equalizer=f=7600:t=q:w=1.1:g=1.0,"
-    "acompressor=threshold=-22dB:ratio=2.4:attack=8:release=120:makeup=2.5,"
-    "alimiter=limit=0.92"
+    "highpass=f=80,"
+    "equalizer=f=200:t=q:w=1.0:g=-1.0,"   # gentle low-mud cut
+    "equalizer=f=3000:t=q:w=1.4:g=1.0,"   # mild presence (was +2.2 — that harshness read as "rè")
+    "lowpass=f=13000,"                      # tame top-end fizz/sibilance + mp3 artifacts
+    "acompressor=threshold=-20dB:ratio=2.0:attack=12:release=160:makeup=1.5,"  # gentler, less make-up gain
+    "alimiter=limit=0.95"
 )
 
 

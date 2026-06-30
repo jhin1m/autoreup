@@ -47,6 +47,7 @@ class RenderConfig:
     voice_lead: float = 0.0    # extra slack added to each anchor window
     batch_size: int = 8        # native CapCut: texts per multi_platform call
     batch_concurrency: int = 8  # native CapCut: concurrent batch requests
+    synth_rate: float = 1.0    # CapCut playback rate at synth (>1.0 = snappier delivery)
     workers: int = 8           # parallel TTS synth + tempo-fit (calls are independent + cached)
     min_duration: float = 0.4  # sentence-unit floor (shared with the subtitle)
     # Smooth assembly: a source gap below glue_gap is NOT a real pause — the speaker
@@ -159,9 +160,11 @@ def render(
     work_dir = Path(work_dir)
 
     def raw_path_for(block: TtsBlock) -> Path:
+        # synth_rate is part of the cache key so changing the speaking rate
+        # re-synthesizes rather than reusing the old-rate clip.
         return raw_audio_path(
             cache_dir, config.provider_url, config.speaker, block,
-            speed=config.speed, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
+            speed=config.synth_rate, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
         )
 
     # Native fast path: batch-synthesize every clip not already cached, in concurrent
@@ -178,7 +181,7 @@ def render(
                 [b.text for _, b in todo],
                 batch_size=config.batch_size,
                 concurrency=config.batch_concurrency,
-                speed=to_provider_scale(config.speed),
+                rate=config.synth_rate,
                 volume=to_provider_scale(config.volume),
             )
             for (rp, _block), audio in zip(todo, audios):

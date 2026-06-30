@@ -17,6 +17,7 @@ class ArtifactKind(StrEnum):
     voice_track = "voice_track"
     soft_sub_mp4 = "soft_sub_mp4"
     dubbed_mp4 = "dubbed_mp4"
+    hardsub_mp4 = "hardsub_mp4"
     zip_package = "zip_package"
 
 

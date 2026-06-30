@@ -83,6 +83,20 @@ def _polish_llm(settings: Settings) -> LLMConfig:
     return LLMConfig(provider=settings.llm_provider, base_url=settings.llm_base_url, model=settings.polish_model, stream=False)
 
 
+def _hardsub_config(settings: Settings):
+    from backend.app.services.hardsub import HardsubConfig
+
+    font = settings.hardsub_font or str(settings.root_dir / "backend" / "app" / "assets" / "fonts" / "Anton-Regular.ttf")
+    return HardsubConfig(
+        font_path=font,
+        font_size=settings.hardsub_font_size,
+        blur=settings.hardsub_blur,
+        band_pad=settings.hardsub_band_pad,
+        darken=settings.hardsub_darken,
+        bed_volume=settings.dub_bed_volume,
+    )
+
+
 def _build_capcut_client(settings: Settings):
     """Native in-process CapCut TTS client, or None to fall back to the HTTP server.
 
@@ -317,6 +331,7 @@ class VoiceoverStage(PipelineStage):
             workers=settings.tts_workers,
             batch_size=settings.capcut_batch_size,
             batch_concurrency=settings.capcut_batch_concurrency,
+            synth_rate=settings.tts_synth_rate,
         )
         work_dir = context.job_dir / "tts"
         cache_dir = settings.tts_cache_dir
@@ -394,6 +409,8 @@ class PackageStage(PipelineStage):
             packages_dir=settings.packages_dir,
             root_data_dir=settings.data_dir,
             voice_track=Path(voice_track) if voice_track else None,
+            bed_volume=settings.dub_bed_volume,
+            hardsub_config=_hardsub_config(settings),
         )
         return StageResult(name=self.name, artifacts=artifacts, logs=logs)
 

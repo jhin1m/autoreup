@@ -96,7 +96,7 @@ export function App() {
   const videoArtifact = activeJob ? latestArtifact(activeJob, "video") : undefined;
   const vttArtifact = activeJob ? latestArtifact(activeJob, "subtitle_vtt") : undefined;
   const voiceArtifact = activeJob ? latestArtifact(activeJob, "voice_track") : undefined;
-  const dubbedArtifact = activeJob ? latestArtifact(activeJob, "dubbed_mp4") ?? latestArtifact(activeJob, "soft_sub_mp4") : undefined;
+  const dubbedArtifact = activeJob ? latestArtifact(activeJob, "hardsub_mp4") ?? latestArtifact(activeJob, "dubbed_mp4") ?? latestArtifact(activeJob, "soft_sub_mp4") : undefined;
   const showDubbed = preferDubbed && !!dubbedArtifact;
   const previewArtifact = showDubbed ? dubbedArtifact : videoArtifact;
   const qaStage = stageMap.get("qa");
@@ -445,6 +445,7 @@ function QaVerdict({ stage }: { stage?: Stage }) {
 /* ---------- downloads ---------- */
 
 const PRIMARY: [string, string][] = [
+  ["hardsub_mp4", "MP4 lồng tiếng (hardsub)"],
   ["dubbed_mp4", "MP4 lồng tiếng"],
   ["soft_sub_mp4", "MP4 phụ đề"],
   ["subtitle_srt", "Phụ đề SRT"],
