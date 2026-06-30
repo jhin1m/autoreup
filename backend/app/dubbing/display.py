@@ -25,13 +25,19 @@ from .tsv_io import write_json
 _MIN_CUE_CHARS = 6
 _DISPLAY_MIN_DUR = 0.9  # pro: a line should stay on screen long enough to read (~5/6s..1s)
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[,.!?;…，。！？；])\s+")
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…。！？])\s+")
+# A sentence end is the closing punctuation PLUS any closing quotes/brackets hugging
+# it, then whitespace. The quotes stay with the sentence they close (dialogue). The
+# old `(?<=[.!?…])\s+` required the space to sit right after the punctuation, so a
+# quote-closed line (`…nghiệm." "Khoan…`) never split — two sentences jammed into one
+# oversized unit and got chopped mid-phrase (even mid-word). \x00 marks the cut.
+_SENTENCE_END_RE = re.compile(r'([.!?…。！？]+["”’\'」』）)\]】»]*)\s+')
 
 
 def _split_sentences(text: str) -> list[str]:
-    """Split at sentence ends only (. ! ? …) — NEVER mid-sentence. A sentence is the
-    atomic unit for the voice so a continuous sentence is never cut into two clips."""
-    parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(text) if p.strip()]
+    """Split at sentence ends only (. ! ? …, incl. a closing quote) — NEVER mid-sentence.
+    A sentence is the atomic unit for the voice so it is never cut into two clips."""
+    marked = _SENTENCE_END_RE.sub(lambda m: m.group(1) + "\x00", text)
+    parts = [p.strip() for p in marked.split("\x00") if p.strip()]
     return parts or [text]
 
 
@@ -81,25 +87,31 @@ _BREAK_BEFORE = {
 
 
 def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
-    """Pro single-line chunking. A sentence that fits one line is kept WHOLE. A longer
-    one is split ONLY at phrase boundaries — before a connector word or after clause
-    punctuation — so a two-syllable Vietnamese word is never cut across lines. Within
-    a line we fill up to ``max_chars`` and break at the last phrase boundary that fits;
-    only if a phrase has no inner boundary do we fall back to a plain word break."""
+    """Pro single-line chunking. MIRRORS the rule the translator prompt is told (rule 5
+    in TRANSLATE_SYSTEM, same ``max_caption_chars``): a sentence/clause that fits one
+    line is kept WHOLE; a longer one breaks at PUNCTUATION first (clause marks), then at
+    a connector word, so a two-syllable Vietnamese word is never cut across lines. Only
+    a long run with NO punctuation/connector inside falls back to a plain word break —
+    which is exactly the case the prompt tells the agent to avoid by adding a comma."""
     text = " ".join(text.split())
     if len(text) <= max_chars:
         return [text]
     words = text.split(" ")
 
-    def breakable_before(i: int) -> bool:
-        if i <= 0:
-            return False
-        if words[i].lower().strip(",.;:!?…") in _BREAK_BEFORE:
-            return True
-        return words[i - 1][-1:] in ",.;:…"  # right after a clause mark
+    # Two break classes, in priority order. A clause break (right after a comma/clause
+    # mark) is the natural, punctuation-aligned place to wrap and is preferred. Only if
+    # no clause break fits the line do we fall back to a connector break (before a
+    # function word) — which still keeps a 2-syllable word intact but is less ideal
+    # (it can sit mid-clause, e.g. "...cơm mang | về xét nghiệm").
+    def is_clause_break(i: int) -> bool:
+        return i > 0 and words[i - 1][-1:] in ",.;:…"
+
+    def is_connector_break(i: int) -> bool:
+        return i > 0 and words[i].lower().strip(",.;:!?…\"”") in _BREAK_BEFORE
 
     hard_max = max_chars + 14  # a line may run over this far to reach a safe break
-    breaks = [i for i in range(1, len(words)) if breakable_before(i)]
+    clause_breaks = [i for i in range(1, len(words)) if is_clause_break(i)]
+    conn_breaks = [i for i in range(1, len(words)) if is_connector_break(i)]
 
     def width(a: int, b: int) -> int:
         return len(" ".join(words[a:b]))
@@ -107,17 +119,19 @@ def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
     chunks: list[str] = []
     start = 0
     while start < len(words):
-        cands = [i for i in breaks if i > start]
         if width(start, len(words)) <= max_chars:
             end = len(words)                                   # rest fits one line
         else:
-            fits = [i for i in cands if width(start, i) <= max_chars]
-            if fits:
-                end = max(fits)                                # latest boundary that fits
+            clause_fits = [i for i in clause_breaks if i > start and width(start, i) <= max_chars]
+            conn_fits = [i for i in conn_breaks if i > start and width(start, i) <= max_chars]
+            if clause_fits:
+                end = max(clause_fits)                         # prefer a punctuation break
+            elif conn_fits:
+                end = max(conn_fits)                           # else a connector boundary
             else:
-                over = [i for i in cands if width(start, i) <= hard_max]
+                over = [i for i in (clause_breaks + conn_breaks) if i > start and width(start, i) <= hard_max]
                 if over:
-                    end = min(over)                            # overflow to nearest boundary
+                    end = min(over)                            # overflow to nearest safe break
                 else:
                     end = start + 1                            # last resort: plain word break
                     while end < len(words) and width(start, end + 1) <= max_chars:
@@ -125,8 +139,12 @@ def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
         chunks.append(" ".join(words[start:end]))
         start = end
 
-    # orphan guard: a tiny tail (a lone particle) merges back onto the previous line,
-    # even if it then runs a little long — a 48-char line beats an orphan word.
+    # orphan guard: a tiny head/tail particle ("Phải", a lone "à") merges into its
+    # neighbour even if the line then runs a little long — one slightly-wide line
+    # beats a 1-word orphan flashing on screen.
+    if len(chunks) >= 2 and len(chunks[0]) <= 6 and len(chunks[0]) + 1 + len(chunks[1]) <= max_chars + 8:
+        chunks[1] = f"{chunks[0]} {chunks[1]}"
+        chunks.pop(0)
     if len(chunks) >= 2 and len(chunks[-1]) <= 6 and len(chunks[-2]) + 1 + len(chunks[-1]) <= max_chars + 8:
         chunks[-2] = f"{chunks[-2]} {chunks[-1]}"
         chunks.pop()

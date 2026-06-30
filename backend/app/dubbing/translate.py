@@ -132,7 +132,7 @@ def translate_chunk(
         anchors=_format_anchor_rows(chunk_anchors, config.voice_cps, config.min_budget_chars),
         max_caption_chars=config.max_caption_chars,
     )
-    raw = complete(TRANSLATE_SYSTEM, user, llm)
+    raw = complete(TRANSLATE_SYSTEM.format(max_caption_chars=config.max_caption_chars), user, llm)
     texts, memory = _parse_chunk_output(raw, valid_ids)
     _validate(texts, chunk_anchors)
 

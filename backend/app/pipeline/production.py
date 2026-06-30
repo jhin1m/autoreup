@@ -237,7 +237,7 @@ class TranslateStage(PipelineStage):
         chunks = build_chunks(anchors, flat_scene_map(anchors), ChunkConfig())
         speech_rows = translate(
             anchors, chunks, glossary, _translate_llm(settings),
-            TranslateConfig(max_caption_chars=settings.display_max_chars, voice_cps=settings.tts_voice_cps, notes=context.config.content_notes),
+            TranslateConfig(max_caption_chars=settings.subtitle_max_line_chars, voice_cps=settings.tts_voice_cps, notes=context.config.content_notes),
         )
         context.artifacts["chunks"] = chunks
         context.artifacts["speech_rows"] = speech_rows
@@ -260,7 +260,7 @@ class EditStage(PipelineStage):
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
         edited, patched = edit_speech(
             speech_rows, anchors, glossary, _polish_llm(settings),
-            EditorConfig(max_caption_chars=settings.display_max_chars),
+            EditorConfig(max_caption_chars=settings.subtitle_max_line_chars),
         )
         context.artifacts["speech_rows"] = edited
         path = settings.subtitles_dir / f"{context.job_id}.speech.edited.tsv"
@@ -340,7 +340,7 @@ class VoiceoverStage(PipelineStage):
 
         result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments, synth_client=synth_client)
         logs = [f"render round 0: {result.summary}"]
-        repair_cfg = RepairConfig(max_caption_chars=settings.display_max_chars)
+        repair_cfg = RepairConfig(max_caption_chars=settings.subtitle_max_line_chars)
         rounds = 0
         while rounds < _VOICEOVER_REPAIR_ROUNDS:
             # Overflow: voice overruns the window -> shorten. Underfull: voice far
