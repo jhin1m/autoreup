@@ -12,6 +12,8 @@ from backend.app.schemas.library import (
     AddSourceRequest,
     CreateExportRequest,
     CreateSeriesRequest,
+    ImportChannelRequest,
+    PreviewChannelRequest,
     TranslateRequest,
     UpdateSeriesRequest,
 )
@@ -44,6 +46,18 @@ def _series_or_404(series_id: str) -> Series:
     if not series:
         raise HTTPException(status_code=404, detail="Series không tồn tại")
     return series
+
+
+# ----- channel import (1 channel -> many series) --------------------------
+@router.post("/preview-channel")
+def preview_channel(request: PreviewChannelRequest) -> dict:
+    return {"groups": get_library_service().preview_channel(request.url)}
+
+
+@router.post("/import-channel")
+def import_channel(request: ImportChannelRequest) -> dict:
+    ids = get_library_service().import_channel(request.url, [g.model_dump() for g in request.groups])
+    return {"series_ids": ids}
 
 
 # ----- series -------------------------------------------------------------

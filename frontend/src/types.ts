@@ -129,3 +129,9 @@ export type Export = {
 };
 
 export type SeriesPage = { items: Series[]; total: number };
+
+export type ChannelGroup = {
+  title: string;
+  platform: string;
+  episodes: Record<string, unknown>[];
+};

@@ -5,6 +5,7 @@ links into episodes, JobService to dub them, and ffmpeg to concat dubbed episode
 one export video. Job state is reconciled lazily into each episode's cached dub_state.
 """
 
+import json
 import shutil
 import subprocess
 import threading
@@ -13,13 +14,15 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
 from backend.app.domain.jobs import JobInput, JobState
+from backend.app.dubbing.llm import LLMConfig, complete
 from backend.app.library.db import LibraryDB
+from backend.app.library.grouping import Group, cluster_into_series, episode_number, show_tags
 from backend.app.library.models import DubState, Episode, Export, ExportState, Series
 from backend.app.library.store import LibraryStore, _new_id
 from backend.app.services.cookie_vault import CookieVault
 from backend.app.services.job_service import JobService
 from backend.app.studio.models import Platform
-from backend.app.studio.providers import SourceDiscovery
+from backend.app.studio.providers import SourceDiscovery, detect_platform
 
 # Maps a dubbing job's state to the episode dub_state we cache.
 _JOB_TO_DUB = {
@@ -87,25 +90,62 @@ class LibraryService:
         return self.store.delete_source(source_id)
 
     def scan(self, series_id: str) -> dict:
-        """Scan every source link of the series and upsert the discovered videos as
-        episodes (dedup by platform video id). Returns counts."""
+        """Re-scan the series' channel sources for NEW episodes. A channel holds several
+        shows, so we cluster the discovered videos and import only the cluster that
+        belongs to THIS series (the one overlapping its existing episodes / matching its
+        title) — other shows on the same channel are left for their own series."""
         series = self.store.get_series(series_id)
         if not series:
             raise LibraryError("Series không tồn tại")
+        known = {e.platform_video_id for e in self.store.list_episodes(series_id)}
         added = 0
         for source in series.sources:
             videos = self.discovery.discover(source.url, limit=50)
-            episodes = [self._episode_from_source(series_id, v) for v in videos]
-            added += self.store.upsert_episodes(series_id, episodes)
+            groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title=series.title, videos=videos)]
+            picked = _match_group(series.title, known, groups)
+            if picked:
+                episodes = [self._episode_from_source(series_id, v) for v in picked.videos]
+                added += self.store.upsert_episodes(series_id, episodes)
             self.store.mark_source_scanned(source.id)
-        # Use the newest episode's thumbnail as the series cover if none set yet.
         if not series.cover_url:
-            eps = self.store.list_episodes(series_id)
-            cover = next((e.thumbnail_url for e in eps if e.thumbnail_url), None)
+            cover = next((e.thumbnail_url for e in self.store.list_episodes(series_id) if e.thumbnail_url), None)
             if cover:
                 self.store.update_series(series_id, cover_url=cover)
         total = len(self.store.list_episodes(series_id))
         return {"added": added, "total": total}
+
+    # ----- channel import (1 channel -> many series) ----------------------
+    def preview_channel(self, url: str) -> list[dict]:
+        """Discover a channel and cluster its videos into proposed series (not yet
+        persisted). LLM assists with naming/clustering when the heuristic is unsure."""
+        videos = self.discovery.discover(url, limit=50)
+        groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title="", videos=videos)]
+        groups = self._refine_with_llm(groups, videos)
+        platform = detect_platform(url).value
+        return [
+            {"title": g.title, "platform": platform, "episodes": [self._video_dict(v) for v in g.videos]}
+            for g in groups
+        ]
+
+    def import_channel(self, url: str, groups: list[dict]) -> list[str]:
+        """Create one series per chosen group, attach the channel as a source, and
+        import that group's episodes. ``groups`` carry the (possibly edited) titles and
+        episode payloads from the preview, so no second network round-trip is needed."""
+        platform = detect_platform(url)
+        created: list[str] = []
+        for grp in groups:
+            episodes_in = grp.get("episodes") or []
+            if not episodes_in:
+                continue
+            series = self.store.create_series(grp.get("title") or "Bộ mới")
+            self.store.add_source(series.id, platform, url)
+            episodes = [self._episode_from_dict(series.id, platform, e) for e in episodes_in]
+            self.store.upsert_episodes(series.id, episodes)
+            cover = next((e.get("thumbnail_url") for e in episodes_in if e.get("thumbnail_url")), None)
+            if cover:
+                self.store.update_series(series.id, cover_url=cover)
+            created.append(series.id)
+        return created
 
     # ----- episodes -------------------------------------------------------
     def list_episodes(self, series_id: str, dub_state: DubState | None = None) -> list[Episode]:
@@ -215,6 +255,98 @@ class LibraryService:
             duration=video.duration,
             uploader=video.uploader,
         )
+
+    def _episode_from_dict(self, series_id: str, platform: Platform, data: dict) -> Episode:
+        return Episode(
+            id=_new_id(),
+            series_id=series_id,
+            platform=Platform(data.get("platform") or platform),
+            platform_video_id=str(data["platform_video_id"]),
+            source_url=data["source_url"],
+            title=data.get("title") or "",
+            thumbnail_url=data.get("thumbnail_url"),
+            duration=data.get("duration"),
+            uploader=data.get("uploader"),
+        )
+
+    @staticmethod
+    def _video_dict(video) -> dict:
+        return {
+            "platform": video.platform.value,
+            "platform_video_id": str(video.platform_video_id),
+            "source_url": video.source_url,
+            "title": video.title,
+            "thumbnail_url": video.thumbnail_url,
+            "duration": video.duration,
+            "uploader": video.uploader,
+        }
+
+    # ----- LLM-assisted naming / clustering -------------------------------
+    def _llm(self) -> LLMConfig:
+        return LLMConfig(provider=self.settings.llm_provider, base_url=self.settings.llm_base_url,
+                         model=self.settings.translate_model, stream=False)
+
+    def _refine_with_llm(self, groups: list[Group], videos: list) -> list[Group]:
+        """Use the LLM only when the heuristic is unsure: many titles lack a "第X集"
+        number (can't trust the reset boundary → re-cluster), or a group has no show
+        hashtag to name it (→ ask for a name). Best-effort: any failure keeps heuristic."""
+        if not videos:
+            return groups
+        missing_ratio = sum(1 for v in videos if episode_number(v.title) is None) / len(videos)
+        weak = [g for g in groups if not any(show_tags(v.title) for v in g.videos)]
+        if missing_ratio <= 0.3 and not weak:
+            return groups
+        try:
+            if missing_ratio > 0.3:
+                return self._llm_cluster(videos) or groups
+            for group in weak:
+                name = self._llm_name(group.videos)
+                if name:
+                    group.title = name
+            return groups
+        except Exception:
+            return groups
+
+    def _llm_cluster(self, videos: list) -> list[Group] | None:
+        lines = "\n".join(f"{i}\t{v.title}" for i, v in enumerate(videos))
+        system = (
+            "Bạn phân loại video của một kênh reup thành các BỘ phim. Một bộ là một câu chuyện "
+            "liên tục, đánh số tập (第X集). Sắp các tập trong bộ theo đúng thứ tự. Đặt tên bộ ngắn "
+            "gọn theo nội dung/tag. Chỉ trả JSON: "
+            '[{"name":"...","episodes":[chỉ_số_theo_thứ_tự_tập]}]'
+        )
+        raw = complete(system, f"Danh sách (chỉ_số<TAB>tiêu_đề):\n{lines}", self._llm())
+        data = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
+        groups: list[Group] = []
+        for grp in data:
+            picked = [videos[i] for i in grp.get("episodes", []) if isinstance(i, int) and 0 <= i < len(videos)]
+            if picked:
+                groups.append(Group(title=str(grp.get("name") or "Bộ mới").strip(), videos=picked))
+        return groups or None
+
+    def _llm_name(self, videos: list) -> str | None:
+        titles = "\n".join(v.title for v in videos[:8])
+        system = "Đặt MỘT tên bộ phim ngắn gọn (≤6 từ) từ các tiêu đề tập. Chỉ trả về tên, không giải thích."
+        name = complete(system, titles, self._llm()).strip().splitlines()[0].strip()
+        return name[:60] or None
+
+
+def _match_group(series_title: str, known_ids: set[str], groups: list[Group]) -> Group | None:
+    """Pick the cluster that belongs to a series: most overlap with its known episodes,
+    else a title match, else (single cluster) that one."""
+    if not groups:
+        return None
+    if len(groups) == 1:
+        return groups[0]
+    best, best_overlap = None, 0
+    for group in groups:
+        overlap = sum(1 for v in group.videos if str(v.platform_video_id) in known_ids)
+        if overlap > best_overlap:
+            best, best_overlap = group, overlap
+    if best:
+        return best
+    title = (series_title or "").strip()
+    return next((g for g in groups if g.title and (g.title in title or title in g.title)), None)
 
 
 def _concat_videos(inputs: list[Path], output: Path, work_dir: Path) -> None:

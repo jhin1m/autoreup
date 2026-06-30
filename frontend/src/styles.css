@@ -1652,3 +1652,38 @@ input:focus-visible,
 .ex-state.done { color: var(--jade); background: var(--jade-soft); }
 .ex-state.rendering { color: var(--amber); background: var(--amber-soft); }
 .ex-state.failed { color: var(--rose); background: var(--rose-soft); }
+
+/* channel import (1 kênh → nhiều bộ) */
+.channel-import { margin-bottom: 18px; display: flex; flex-direction: column; gap: 12px; }
+.ci-head { display: flex; align-items: center; justify-content: space-between; }
+.ci-tag { font-size: 10.5px; letter-spacing: 0.14em; color: var(--faint); }
+.ci-scan { display: flex; gap: 10px; }
+.ci-scan .lib-input { flex: 1; }
+.ci-hint { color: var(--muted); font-size: 12.5px; margin: 0; }
+.ci-groups { display: flex; flex-direction: column; gap: 8px; }
+.ci-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+}
+.ci-group.skip { opacity: 0.45; }
+.ci-group input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--amber); cursor: pointer; flex-shrink: 0; }
+.ci-title-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
+.ci-title-input:focus { border-color: var(--amber); }
+.ci-count { color: var(--amber); font-size: 11.5px; flex-shrink: 0; }
+.ci-sample { color: var(--faint); font-size: 11.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

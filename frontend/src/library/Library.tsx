@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import * as api from "../api";
 import type { Series } from "../types";
 import { thumbSrc } from "../util";
+import { ChannelImport } from "./ChannelImport";
 
 /** Series library — the grid of all series with search + create, the home of the
  *  content-management flow. Opening a series hands off to SeriesDetail. */
@@ -10,6 +11,7 @@ export function Library({ onOpen }: { onOpen: (seriesId: string) => void }) {
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newLink, setNewLink] = useState("");
   const [busy, setBusy] = useState(false);
@@ -69,11 +71,21 @@ export function Library({ onOpen }: { onOpen: (seriesId: string) => void }) {
             placeholder="Tìm series…"
             aria-label="Tìm series"
           />
-          <button className="primary" onClick={() => setCreating((value) => !value)}>
-            {creating ? "Đóng" : "+ Series"}
+          <button className="primary" onClick={() => { setScanning((value) => !value); setCreating(false); }}>
+            {scanning ? "Đóng" : "Quét kênh"}
+          </button>
+          <button className="ghost" onClick={() => { setCreating((value) => !value); setScanning(false); }}>
+            {creating ? "Đóng" : "+ Series thủ công"}
           </button>
         </div>
       </div>
+
+      {scanning ? (
+        <ChannelImport
+          onClose={() => setScanning(false)}
+          onImported={() => { setScanning(false); refresh(query); }}
+        />
+      ) : null}
 
       {creating ? (
         <form className="lib-create panel" onSubmit={submitCreate}>

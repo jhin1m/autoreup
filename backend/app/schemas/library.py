@@ -35,3 +35,18 @@ class CreateExportRequest(BaseModel):
     description: str = ""
     hashtags: list[str] = Field(default_factory=list)
     episode_job_ids: list[str]
+
+
+class PreviewChannelRequest(BaseModel):
+    url: str
+
+
+class ImportGroup(BaseModel):
+    title: str
+    platform: str | None = None
+    episodes: list[dict] = Field(default_factory=list)
+
+
+class ImportChannelRequest(BaseModel):
+    url: str
+    groups: list[ImportGroup]

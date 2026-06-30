@@ -1,4 +1,5 @@
 import type {
+  ChannelGroup,
   Episode,
   Export,
   GlossaryEntry,
@@ -102,6 +103,22 @@ const jsonHeaders = { "Content-Type": "application/json" };
 export async function listSeries(q = ""): Promise<SeriesPage> {
   const response = await ok(await fetch(`${LIB}/series?q=${encodeURIComponent(q)}`), "Không tải được thư viện");
   return (await response.json()) as SeriesPage;
+}
+
+export async function previewChannel(url: string): Promise<ChannelGroup[]> {
+  const response = await ok(
+    await fetch(`${LIB}/preview-channel`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ url }) }),
+    "Không quét được kênh",
+  );
+  return ((await response.json()) as { groups: ChannelGroup[] }).groups;
+}
+
+export async function importChannel(url: string, groups: { title: string; episodes: unknown[] }[]): Promise<string[]> {
+  const response = await ok(
+    await fetch(`${LIB}/import-channel`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ url, groups }) }),
+    "Không tạo được bộ",
+  );
+  return ((await response.json()) as { series_ids: string[] }).series_ids;
 }
 
 export async function createSeries(title: string, sources: { platform: string; url: string }[] = []): Promise<Series> {
