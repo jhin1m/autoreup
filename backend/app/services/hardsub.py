@@ -151,10 +151,15 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         inputs += ["-i", str(voice_track)]
 
     if band is not None:
-        blur = min(23, max(1, config.blur))
+        # boxblur radius must fit the smallest plane it touches. For yuv420p the
+        # chroma plane is half-res, so its max radius is ~band_h/4 (luma allows
+        # ~band_h/2). A fixed radius crashed on short bands (74px -> chroma cap 18).
+        # Clamp luma and chroma radii to their planes so any band height is safe.
+        luma_r = max(1, min(config.blur, band_h // 2))
+        chroma_r = max(1, min(config.blur, band_h // 4))
         cover = (
             f"[0:v]split=2[base][t];"
-            f"[t]crop=iw:{band_h}:0:{band_y},boxblur={blur}:2,boxblur={blur}:2,eq=brightness=-{config.darken:.2f}[bl];"
+            f"[t]crop=iw:{band_h}:0:{band_y},boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{config.darken:.2f}[bl];"
             f"[base][bl]overlay=0:{band_y}[cov];"
         )
     else:
