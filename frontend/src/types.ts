@@ -133,5 +133,9 @@ export type SeriesPage = { items: Series[]; total: number };
 export type ChannelGroup = {
   title: string;
   platform: string;
+  series_id: string | null;       // matched existing series, or null = new
+  existing_title: string | null;
+  new_count: number;              // episodes not yet in the matched series
+  total: number;
   episodes: Record<string, unknown>[];
 };

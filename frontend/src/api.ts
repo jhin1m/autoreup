@@ -113,7 +113,10 @@ export async function previewChannel(url: string): Promise<ChannelGroup[]> {
   return ((await response.json()) as { groups: ChannelGroup[] }).groups;
 }
 
-export async function importChannel(url: string, groups: { title: string; episodes: unknown[] }[]): Promise<string[]> {
+export async function importChannel(
+  url: string,
+  groups: { title: string; series_id: string | null; episodes: unknown[] }[],
+): Promise<string[]> {
   const response = await ok(
     await fetch(`${LIB}/import-channel`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ url, groups }) }),
     "Không tạo được bộ",

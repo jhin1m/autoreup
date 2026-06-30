@@ -44,6 +44,7 @@ class PreviewChannelRequest(BaseModel):
 class ImportGroup(BaseModel):
     title: str
     platform: str | None = None
+    series_id: str | None = None   # set → sync into existing series; null → create new
     episodes: list[dict] = Field(default_factory=list)
 
 

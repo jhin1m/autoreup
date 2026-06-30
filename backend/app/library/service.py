@@ -117,35 +117,81 @@ class LibraryService:
     # ----- channel import (1 channel -> many series) ----------------------
     def preview_channel(self, url: str) -> list[dict]:
         """Discover a channel and cluster its videos into proposed series (not yet
-        persisted). LLM assists with naming/clustering when the heuristic is unsure."""
+        persisted). Each group is matched to an EXISTING series of this channel (so a
+        re-scan syncs instead of duplicating), with a count of how many episodes are new.
+        LLM assists with naming/clustering when the heuristic is unsure."""
         videos = self.discovery.discover(url, limit=50)
         groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title="", videos=videos)]
         groups = self._refine_with_llm(groups, videos)
+        existing = self._existing_for_channel(url)
         platform = detect_platform(url).value
-        return [
-            {"title": g.title, "platform": platform, "episodes": [self._video_dict(v) for v in g.videos]}
-            for g in groups
-        ]
+        out: list[dict] = []
+        for group in groups:
+            gids = {str(v.platform_video_id) for v in group.videos}
+            match = self._match_existing(group, existing)
+            known = match[2] if match else set()
+            new_count = len(gids - known)
+            out.append({
+                "title": group.title,
+                "platform": platform,
+                "series_id": match[0] if match else None,
+                "existing_title": match[1] if match else None,
+                "new_count": new_count,
+                "total": len(group.videos),
+                "episodes": [self._video_dict(v) for v in group.videos],
+            })
+        return out
 
     def import_channel(self, url: str, groups: list[dict]) -> list[str]:
-        """Create one series per chosen group, attach the channel as a source, and
-        import that group's episodes. ``groups`` carry the (possibly edited) titles and
-        episode payloads from the preview, so no second network round-trip is needed."""
+        """Sync chosen groups: a group carrying ``series_id`` upserts new episodes into
+        that existing series; otherwise a new series is created (channel attached as a
+        source). Idempotent — re-scanning a channel adds new episodes + new shows without
+        duplicating. Episode payloads come from the preview, so no extra network call."""
         platform = detect_platform(url)
-        created: list[str] = []
+        touched: list[str] = []
         for grp in groups:
             episodes_in = grp.get("episodes") or []
             if not episodes_in:
                 continue
-            series = self.store.create_series(grp.get("title") or "Bộ mới")
-            self.store.add_source(series.id, platform, url)
-            episodes = [self._episode_from_dict(series.id, platform, e) for e in episodes_in]
-            self.store.upsert_episodes(series.id, episodes)
-            cover = next((e.get("thumbnail_url") for e in episodes_in if e.get("thumbnail_url")), None)
-            if cover:
-                self.store.update_series(series.id, cover_url=cover)
-            created.append(series.id)
-        return created
+            series_id = grp.get("series_id")
+            if series_id and self.store.get_series(series_id, with_sources=False):
+                self.store.update_series(series_id, title=grp.get("title") or None)
+            else:
+                series = self.store.create_series(grp.get("title") or "Bộ mới")
+                self.store.add_source(series.id, platform, url)
+                series_id = series.id
+            episodes = [self._episode_from_dict(series_id, platform, e) for e in episodes_in]
+            self.store.upsert_episodes(series_id, episodes)
+            if not (self.store.get_series(series_id, with_sources=False).cover_url):
+                cover = next((e.get("thumbnail_url") for e in episodes_in if e.get("thumbnail_url")), None)
+                if cover:
+                    self.store.update_series(series_id, cover_url=cover)
+            touched.append(series_id)
+        return touched
+
+    def _existing_for_channel(self, url: str) -> list[tuple[str, str, set[str]]]:
+        """(series_id, title, known platform_video_ids) for series already on this channel."""
+        out: list[tuple[str, str, set[str]]] = []
+        for sid in self.store.series_ids_for_source_url(url):
+            series = self.store.get_series(sid, with_sources=False)
+            if not series:
+                continue
+            ids = {e.platform_video_id for e in self.store.list_episodes(sid)}
+            out.append((sid, series.title, ids))
+        return out
+
+    @staticmethod
+    def _match_existing(group: Group, existing: list[tuple[str, str, set[str]]]) -> tuple[str, str, set[str]] | None:
+        """Match a fresh cluster to an existing series by episode-id overlap, else title."""
+        gids = {str(v.platform_video_id) for v in group.videos}
+        best, best_overlap = None, 0
+        for entry in existing:
+            overlap = len(gids & entry[2])
+            if overlap > best_overlap:
+                best, best_overlap = entry, overlap
+        if best:
+            return best
+        return next((e for e in existing if e[1] and group.title and (e[1] == group.title)), None)
 
     # ----- episodes -------------------------------------------------------
     def list_episodes(self, series_id: str, dub_state: DubState | None = None) -> list[Episode]:

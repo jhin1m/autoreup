@@ -20,7 +20,8 @@ export function ChannelImport({ onClose, onImported }: { onClose: () => void; on
       const result = await api.previewChannel(url.trim());
       setGroups(result);
       setTitles(result.map((g) => g.title));
-      setSkip(new Set());
+      // Pre-skip existing series that have no new episodes — nothing to sync.
+      setSkip(new Set(result.map((g, index) => (g.series_id && g.new_count === 0 ? index : -1)).filter((i) => i >= 0)));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Không quét được kênh");
     } finally {
@@ -31,7 +32,7 @@ export function ChannelImport({ onClose, onImported }: { onClose: () => void; on
   async function importChosen() {
     if (!groups) return;
     const chosen = groups
-      .map((g, index) => ({ title: titles[index]?.trim() || g.title, episodes: g.episodes }))
+      .map((g, index) => ({ title: titles[index]?.trim() || g.title, series_id: g.series_id, episodes: g.episodes }))
       .filter((_, index) => !skip.has(index));
     if (!chosen.length) return;
     setPhase("importing");
@@ -77,7 +78,7 @@ export function ChannelImport({ onClose, onImported }: { onClose: () => void; on
       {groups ? (
         groups.length ? (
           <>
-            <p className="ci-hint">Tìm thấy {groups.length} bộ. Sửa tên, bỏ tick bộ không muốn, rồi tạo.</p>
+            <p className="ci-hint">Tìm thấy {groups.length} bộ. Bộ đã có sẽ được bổ sung tập mới; bộ mới sẽ được tạo.</p>
             <div className="ci-groups">
               {groups.map((group, index) => (
                 <div key={index} className={`ci-group ${skip.has(index) ? "skip" : ""}`}>
@@ -87,13 +88,19 @@ export function ChannelImport({ onClose, onImported }: { onClose: () => void; on
                     value={titles[index] ?? ""}
                     onChange={(event) => setTitles((prev) => prev.map((t, i) => (i === index ? event.target.value : t)))}
                   />
-                  <span className="ci-count mono">{group.episodes.length} tập</span>
-                  <span className="ci-sample">{String((group.episodes[0] as { title?: string })?.title ?? "").slice(0, 30)}…</span>
+                  {group.series_id ? (
+                    <span className={`ci-badge ${group.new_count ? "new" : "same"}`}>
+                      {group.new_count ? `đã có · +${group.new_count} tập mới` : "đã có · không mới"}
+                    </span>
+                  ) : (
+                    <span className="ci-badge fresh">mới · {group.total} tập</span>
+                  )}
+                  <span className="ci-sample">{String((group.episodes[0] as { title?: string })?.title ?? "").slice(0, 28)}…</span>
                 </div>
               ))}
             </div>
             <button className="primary" disabled={!chosenCount || phase === "importing"} onClick={importChosen}>
-              {phase === "importing" ? "Đang tạo…" : `Tạo ${chosenCount} bộ`}
+              {phase === "importing" ? "Đang đồng bộ…" : `Đồng bộ ${chosenCount} bộ`}
             </button>
           </>
         ) : (

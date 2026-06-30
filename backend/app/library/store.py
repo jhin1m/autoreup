@@ -127,6 +127,12 @@ class LibraryStore:
         with self.db.connect() as conn:
             conn.execute("UPDATE series_source SET last_scanned_at = ? WHERE id = ?", (now_iso(), source_id))
 
+    def series_ids_for_source_url(self, url: str) -> list[str]:
+        """Which series already pull from this channel link (to sync, not duplicate)."""
+        with self.db.connect() as conn:
+            rows = conn.execute("SELECT DISTINCT series_id FROM series_source WHERE url = ?", (url,)).fetchall()
+            return [r[0] for r in rows]
+
     # ----- episodes -------------------------------------------------------
     def upsert_episodes(self, series_id: str, episodes: list[Episode]) -> int:
         """Insert new episodes; existing ones (same series+platform+video id) are kept
