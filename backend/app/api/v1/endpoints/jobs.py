@@ -8,7 +8,7 @@ from backend.app.api.deps import get_job_service
 from backend.app.domain.artifacts import ArtifactKind
 from backend.app.domain.jobs import JobState
 from backend.app.schemas.jobs import CreateJobRequest, JobResponse
-from backend.app.services.job_service import JobNotFoundError
+from backend.app.services.job_service import JobBusyError, JobNotFoundError
 
 
 router = APIRouter()
@@ -33,6 +33,24 @@ def get_job(job_id: str) -> JobResponse:
         return JobResponse(job=get_job_service().get(job_id))
     except JobNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
+
+
+@router.post("/{job_id}/cancel", response_model=JobResponse)
+def cancel_job(job_id: str) -> JobResponse:
+    try:
+        return JobResponse(job=get_job_service().request_cancel(job_id))
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+
+
+@router.delete("/{job_id}", status_code=204)
+def delete_job(job_id: str) -> None:
+    try:
+        get_job_service().delete(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail="Job đang chạy — hãy Dừng trước khi xóa.") from exc
 
 
 @router.get("/{job_id}/events")

@@ -16,6 +16,15 @@ export async function fetchJob(jobId: string): Promise<JobManifest> {
   return ((await response.json()) as JobResponse).job;
 }
 
+export async function cancelJob(jobId: string): Promise<JobManifest> {
+  const response = await ok(await fetch(`/api/v1/jobs/${jobId}/cancel`, { method: "POST" }), "Không dừng được công việc");
+  return ((await response.json()) as JobResponse).job;
+}
+
+export async function deleteJob(jobId: string): Promise<void> {
+  await ok(await fetch(`/api/v1/jobs/${jobId}`, { method: "DELETE" }), "Không xóa được công việc");
+}
+
 export async function createJob(url: string): Promise<JobManifest> {
   const response = await ok(
     await fetch("/api/v1/jobs", {

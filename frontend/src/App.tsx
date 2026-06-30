@@ -171,6 +171,29 @@ export function App() {
     setReviewTab("stage");
   }
 
+  async function stopJob(jobId: string) {
+    setMessage("");
+    try {
+      const job = await api.cancelJob(jobId);
+      setJobs((items) => items.map((item) => (item.job_id === jobId ? job : item)));
+      setActiveJob((current) => (current && current.job_id === jobId ? job : current));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không dừng được công việc");
+    }
+  }
+
+  async function removeJob(jobId: string) {
+    if (!window.confirm(`Xóa công việc ${jobId}? Thao tác này xóa luôn video/sub/voice đã tạo và không hoàn tác được.`)) return;
+    setMessage("");
+    try {
+      await api.deleteJob(jobId);
+      setJobs((items) => items.filter((item) => item.job_id !== jobId));
+      setActiveJob((current) => (current && current.job_id === jobId ? null : current));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không xóa được công việc");
+    }
+  }
+
   return (
     <div className="desk">
       <header className="deck">
@@ -295,7 +318,7 @@ export function App() {
         </aside>
       </main>
 
-      <Ledger jobs={jobs} activeId={activeJob?.job_id} onPick={setActiveJob} onRefresh={() => refreshJobs().catch((error) => setMessage(error.message))} />
+      <Ledger jobs={jobs} activeId={activeJob?.job_id} onPick={setActiveJob} onRefresh={() => refreshJobs().catch((error) => setMessage(error.message))} onCancel={stopJob} onDelete={removeJob} />
 
       {cookiePlatform ? (
         <CookieDialog
@@ -668,7 +691,21 @@ function Intake({
 
 /* ---------- ledger ---------- */
 
-function Ledger({ jobs, activeId, onPick, onRefresh }: { jobs: JobManifest[]; activeId?: string; onPick: (job: JobManifest) => void; onRefresh: () => void }) {
+function Ledger({
+  jobs,
+  activeId,
+  onPick,
+  onRefresh,
+  onCancel,
+  onDelete,
+}: {
+  jobs: JobManifest[];
+  activeId?: string;
+  onPick: (job: JobManifest) => void;
+  onRefresh: () => void;
+  onCancel: (jobId: string) => void;
+  onDelete: (jobId: string) => void;
+}) {
   return (
     <footer className="ledger panel">
       <div className="ledger-head">
@@ -679,12 +716,26 @@ function Ledger({ jobs, activeId, onPick, onRefresh }: { jobs: JobManifest[]; ac
       </div>
       <div className="ledger-row">
         {jobs.length ? (
-          jobs.map((job) => (
-            <button key={job.job_id} className={`ticket ${activeId === job.job_id ? "active" : ""}`} onClick={() => onPick(job)}>
-              <span className="mono ticket-id">{job.job_id}</span>
-              <span className={`ticket-state ${job.state}`}>{STATE_VI[job.state]}</span>
-            </button>
-          ))
+          jobs.map((job) => {
+            const live = job.state === "running" || job.state === "queued";
+            return (
+              <div key={job.job_id} className={`ticket-wrap ${activeId === job.job_id ? "active" : ""}`}>
+                <button className={`ticket ${activeId === job.job_id ? "active" : ""}`} onClick={() => onPick(job)}>
+                  <span className="mono ticket-id">{job.job_id}</span>
+                  <span className={`ticket-state ${job.state}`}>{STATE_VI[job.state]}</span>
+                </button>
+                {live ? (
+                  <button className="ticket-act" title="Dừng công việc" onClick={() => onCancel(job.job_id)}>
+                    Dừng
+                  </button>
+                ) : (
+                  <button className="ticket-act danger" title="Xóa công việc" onClick={() => onDelete(job.job_id)}>
+                    ✕
+                  </button>
+                )}
+              </div>
+            );
+          })
         ) : (
           <p className="muted-note">Chưa có công việc nào. Dán một link để bắt đầu.</p>
         )}

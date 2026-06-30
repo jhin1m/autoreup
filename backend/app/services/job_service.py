@@ -1,4 +1,5 @@
 import json
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,11 +16,16 @@ class JobNotFoundError(KeyError):
     pass
 
 
+class JobBusyError(RuntimeError):
+    """Raised when an operation (e.g. delete) needs the job to be stopped first."""
+
+
 class JobService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.pipeline = ProductionPipeline(settings)
         self._lock = threading.Lock()
+        self._cancel_requested: set[str] = set()
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]
@@ -53,12 +59,18 @@ class JobService:
     def run(self, job_id: str) -> None:
         manifest = self.get(job_id)
         context = self.pipeline.create_context(job_id, manifest.input, manifest.config)
+        if self._take_cancel(job_id):
+            return self._mark_canceled(manifest)
         manifest.state = JobState.running
         manifest.touch()
         self.save(manifest)
 
         try:
             for stage in self.pipeline.stages:
+                # Cooperative cancellation: stop at the stage boundary. A stage
+                # already in flight (ffmpeg/LLM) finishes first, then we bail.
+                if self._take_cancel(job_id):
+                    return self._mark_canceled(manifest)
                 record = StageRecord(name=stage.name, status=StageStatus.running, started_at=datetime.now(timezone.utc))
                 manifest.stages.append(record)
                 manifest.touch()
@@ -87,6 +99,56 @@ class JobService:
             manifest.error = str(exc)
             manifest.touch()
             self.save(manifest)
+
+    def request_cancel(self, job_id: str) -> JobManifest:
+        """Ask a pending/running job to stop. No-op for already-finished jobs.
+
+        The running thread owns the state transition (to ``canceled``); here we only
+        record the request so a forced delete never races the pipeline thread."""
+        manifest = self.get(job_id)
+        if manifest.state in {JobState.succeeded, JobState.failed, JobState.canceled}:
+            return manifest
+        with self._lock:
+            self._cancel_requested.add(job_id)
+        return manifest
+
+    def _take_cancel(self, job_id: str) -> bool:
+        with self._lock:
+            if job_id in self._cancel_requested:
+                self._cancel_requested.discard(job_id)
+                return True
+        return False
+
+    def _mark_canceled(self, manifest: JobManifest) -> None:
+        if manifest.stages and manifest.stages[-1].status == StageStatus.running:
+            manifest.stages[-1].status = StageStatus.failed
+            manifest.stages[-1].ended_at = datetime.now(timezone.utc)
+            manifest.stages[-1].error = "canceled"
+        manifest.state = JobState.canceled
+        manifest.touch()
+        self.save(manifest)
+
+    def delete(self, job_id: str) -> None:
+        """Remove a job and all its artifacts. Refuses while it is still running."""
+        manifest = self.get(job_id)  # raises JobNotFoundError
+        if manifest.state == JobState.running:
+            raise JobBusyError(job_id)
+        with self._lock:
+            self._cancel_requested.discard(job_id)
+        # Drop the per-job artifact files in each data subdir (named "<job_id>...").
+        # The shared tts/cache (keyed by text) lives in a "cache" subdir and is left
+        # alone. Guard each path stays inside data_dir.
+        data_dir = self.settings.data_dir.resolve()
+        for sub in (self.settings.packages_dir, self.settings.videos_dir, self.settings.subtitles_dir, self.settings.tts_dir):
+            for path in sub.glob(f"{job_id}*"):
+                resolved = path.resolve()
+                if data_dir not in resolved.parents:
+                    continue
+                if resolved.is_dir():
+                    shutil.rmtree(resolved, ignore_errors=True)
+                else:
+                    resolved.unlink(missing_ok=True)
+        shutil.rmtree(self.settings.jobs_dir / job_id, ignore_errors=True)
 
     def get(self, job_id: str) -> JobManifest:
         path = self.manifest_path(job_id)
