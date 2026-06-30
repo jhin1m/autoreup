@@ -181,20 +181,14 @@ class JobService:
         raise FileNotFoundError(kind)
 
     def list_recent(self, limit: int = 20) -> list[JobManifest]:
-        # Newest first by file mtime — job_ids are random hex, so sorting by the
-        # path string buried recent jobs (e.g. "2c..." sorts below "a...") and the
-        # limit silently dropped them from the UI list.
-        paths = sorted(
-            self.settings.jobs_dir.glob("*/manifest.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        # Newest first by CREATION time — a stable order that doesn't reshuffle when a
+        # job updates (sorting by mtime made the list jump around as jobs ran; sorting
+        # by the path string buried recent jobs because job_ids are random hex).
         manifests = []
-        for path in paths:
+        for path in self.settings.jobs_dir.glob("*/manifest.json"):
             try:
                 manifests.append(JobManifest.model_validate_json(path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, ValueError):
                 continue
-            if len(manifests) >= limit:
-                break
-        return manifests
+        manifests.sort(key=lambda m: m.created_at, reverse=True)
+        return manifests[:limit]

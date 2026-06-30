@@ -19,6 +19,7 @@ class ArtifactKind(StrEnum):
     dubbed_mp4 = "dubbed_mp4"
     hardsub_mp4 = "hardsub_mp4"
     zip_package = "zip_package"
+    thumbnail = "thumbnail"
 
 
 class Artifact(BaseModel):

@@ -166,9 +166,13 @@ class DownloadStage(PipelineStage):
         result = _download_source(settings, context.input_url, context.job_id)
         video = Path(result["path"])
         context.artifacts["video"] = video
+        artifacts = [_artifact(ArtifactKind.video, video, settings.data_dir)]
+        thumb = _make_thumbnail(video, settings.videos_dir / f"{context.job_id}.thumb.jpg")
+        if thumb is not None:
+            artifacts.append(_artifact(ArtifactKind.thumbnail, thumb, settings.data_dir))
         return StageResult(
             name=self.name,
-            artifacts=[_artifact(ArtifactKind.video, video, settings.data_dir)],
+            artifacts=artifacts,
             metrics={
                 "title": result.get("title"),
                 "duration": result.get("duration"),
@@ -426,6 +430,7 @@ def _artifact(kind: ArtifactKind, path: Path, data_dir: Path) -> Artifact:
         ArtifactKind.pipeline_audit: "text/tab-separated-values",
         ArtifactKind.tts_manifest: "application/json",
         ArtifactKind.voice_track: "audio/mp4",
+        ArtifactKind.thumbnail: "image/jpeg",
     }.get(kind, "application/octet-stream")
     return Artifact(
         kind=kind,
@@ -433,6 +438,23 @@ def _artifact(kind: ArtifactKind, path: Path, data_dir: Path) -> Artifact:
         mime_type=mime,
         size_bytes=path.stat().st_size if path.exists() else None,
     )
+
+
+def _make_thumbnail(video: Path, out: Path) -> Path | None:
+    """Grab a small poster frame from the video for the recent-jobs list. Best-effort:
+    a thumbnail is cosmetic, so any ffmpeg hiccup just skips it."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        return None
+    out.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-ss", "1", "-i", str(video),
+         "-frames:v", "1", "-vf", "scale=320:-2", str(out)],
+        capture_output=True, text=True,
+    )
+    return out if completed.returncode == 0 and out.exists() else None
 
 
 def _download_source(settings: Settings, url: str, job_id: str) -> dict:

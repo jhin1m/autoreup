@@ -75,7 +75,9 @@ export function App() {
     events.onmessage = (event) => {
       const job = JSON.parse(event.data) as JobManifest;
       setActiveJob(job);
-      setJobs((items) => [job, ...items.filter((item) => item.job_id !== job.job_id)]);
+      // Update in place — never move-to-front, so the list keeps a stable order
+      // (clicking/streaming a job must not reshuffle the recent-jobs list).
+      setJobs((items) => items.map((item) => (item.job_id === job.job_id ? job : item)));
       if (["succeeded", "failed", "canceled"].includes(job.state)) {
         events.close();
         hydrate(job);
@@ -87,6 +89,13 @@ export function App() {
     };
     return () => events.close();
   }, [activeJob?.job_id]);
+
+  // Stable display order: newest-created first, fixed regardless of which job is
+  // active or updating — so the list never reshuffles under the user's click.
+  const orderedJobs = useMemo(
+    () => [...jobs].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [jobs],
+  );
 
   const stages = activeJob?.config?.stages?.length ? activeJob.config.stages : STAGES;
   const stageMap = useMemo(() => new Map(activeJob?.stages.map((stage) => [stage.name, stage])), [activeJob]);
@@ -318,7 +327,7 @@ export function App() {
         </aside>
       </main>
 
-      <Ledger jobs={jobs} activeId={activeJob?.job_id} onPick={setActiveJob} onRefresh={() => refreshJobs().catch((error) => setMessage(error.message))} onCancel={stopJob} onDelete={removeJob} />
+      <Ledger jobs={orderedJobs} activeId={activeJob?.job_id} onPick={setActiveJob} onRefresh={() => refreshJobs().catch((error) => setMessage(error.message))} onCancel={stopJob} onDelete={removeJob} />
 
       {cookiePlatform ? (
         <CookieDialog
@@ -714,26 +723,30 @@ function Ledger({
           Làm mới
         </button>
       </div>
-      <div className="ledger-row">
+      <div className="ledger-grid">
         {jobs.length ? (
           jobs.map((job) => {
             const live = job.state === "running" || job.state === "queued";
+            const thumb = jobThumb(job);
             return (
-              <div key={job.job_id} className={`ticket-wrap ${activeId === job.job_id ? "active" : ""}`}>
-                <button className={`ticket ${activeId === job.job_id ? "active" : ""}`} onClick={() => onPick(job)}>
-                  <span className="mono ticket-id">{job.job_id}</span>
-                  <span className={`ticket-state ${job.state}`}>{STATE_VI[job.state]}</span>
+              <article key={job.job_id} className={`jcard ${activeId === job.job_id ? "active" : ""}`}>
+                <button className="jcard-main" onClick={() => onPick(job)} title={jobTitle(job)}>
+                  <div className="jthumb">{thumb ? <img src={thumb} alt="" loading="lazy" /> : <span className="reel" aria-hidden />}</div>
+                  <div className="jmeta">
+                    <p className="jtitle">{jobTitle(job)}</p>
+                    <span className={`ticket-state ${job.state}`}>{STATE_VI[job.state]}</span>
+                  </div>
                 </button>
                 {live ? (
-                  <button className="ticket-act" title="Dừng công việc" onClick={() => onCancel(job.job_id)}>
+                  <button className="jcard-act" title="Dừng công việc" onClick={() => onCancel(job.job_id)}>
                     Dừng
                   </button>
                 ) : (
-                  <button className="ticket-act danger" title="Xóa công việc" onClick={() => onDelete(job.job_id)}>
+                  <button className="jcard-act danger" title="Xóa công việc" onClick={() => onDelete(job.job_id)}>
                     ✕
                   </button>
                 )}
-              </div>
+              </article>
             );
           })
         ) : (
@@ -742,6 +755,17 @@ function Ledger({
       </div>
     </footer>
   );
+}
+
+function jobTitle(job: JobManifest): string {
+  const title = job.metrics?.download?.title as string | undefined;
+  if (title && title.trim()) return title.trim();
+  return job.input?.url || job.job_id;
+}
+
+function jobThumb(job: JobManifest): string | undefined {
+  const art = latestArtifact(job, "thumbnail");
+  return art ? `/media/${art.path}` : undefined;
 }
 
 /* ---------- bits + helpers ---------- */

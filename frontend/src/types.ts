@@ -27,6 +27,7 @@ export type JobManifest = {
   config?: { stages?: string[] };
   stages: Stage[];
   artifacts: Artifact[];
+  metrics?: Record<string, Record<string, unknown>>;
   error: string | null;
   created_at: string;
   updated_at: string;
