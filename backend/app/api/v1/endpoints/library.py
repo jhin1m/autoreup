@@ -1,6 +1,9 @@
 """Library REST API — series, episodes, exports. See docs/library-spec.md."""
 
-from fastapi import APIRouter, HTTPException, Query
+from urllib.parse import urlparse
+
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from backend.app.api.deps import get_library_service
 from backend.app.library.models import DubState, Episode, Export, Series, SeriesPage, SeriesSource
@@ -14,6 +17,26 @@ from backend.app.schemas.library import (
 )
 
 router = APIRouter()
+
+# Episode/series covers are remote CDN images that browsers can't load cross-origin
+# (Douyin checks Referer). We proxy them — restricted to known image hosts so this
+# can't be turned into an open SSRF relay.
+_THUMB_HOSTS = ("douyinpic.com", "pstatp.com", "bytecdn.com", "byteimg.com", "douyincdn.com", "hdslb.com", "bilivideo.com")
+
+
+@router.get("/thumb")
+def proxy_thumbnail(url: str) -> Response:
+    host = urlparse(url).netloc.lower()
+    if not any(host.endswith(h) or host == h for h in _THUMB_HOSTS):
+        raise HTTPException(status_code=400, detail="Host ảnh không được phép")
+    try:
+        resp = httpx.get(url, timeout=10, follow_redirects=True,
+                         headers={"Referer": "https://www.douyin.com/", "User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Không tải được ảnh") from exc
+    return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _series_or_404(series_id: str) -> Series:

@@ -1,6 +1,10 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
+import { Library } from "./library/Library";
+import { SeriesDetail } from "./library/SeriesDetail";
 import type { GlossaryEntry, JobManifest, JobState, ProviderSession, SourceVideo, Stage, StageStatus, SubtitleCue } from "./types";
+
+type View = "studio" | "library";
 
 const STAGES = ["download", "asr", "glossary", "translate", "edit", "qa", "voiceover", "package"];
 
@@ -41,6 +45,9 @@ export function App() {
 
   const [discoverResults, setDiscoverResults] = useState<SourceVideo[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
+
+  const [view, setView] = useState<View>("studio");
+  const [librarySeriesId, setLibrarySeriesId] = useState<string | null>(null);
 
   const [reviewTab, setReviewTab] = useState<ReviewTab>("bilingual");
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
@@ -203,6 +210,17 @@ export function App() {
     }
   }
 
+  async function openJobFromLibrary(jobId: string) {
+    setView("studio");
+    try {
+      const job = await api.fetchJob(jobId);
+      setActiveJob(job);
+      setJobs((items) => (items.some((item) => item.job_id === jobId) ? items : [job, ...items]));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không mở được công việc");
+    }
+  }
+
   return (
     <div className="desk">
       <header className="deck">
@@ -212,6 +230,10 @@ export function App() {
             <p className="mark-name">AutoReup</p>
             <p className="mark-sub">Localization Desk · 中文 → Tiếng Việt</p>
           </div>
+          <nav className="view-nav" aria-label="Khu vực">
+            <button className={view === "studio" ? "on" : ""} onClick={() => setView("studio")}>Studio</button>
+            <button className={view === "library" ? "on" : ""} onClick={() => { setView("library"); setLibrarySeriesId(null); }}>Thư viện</button>
+          </nav>
         </div>
         <div className="deck-right">
           <ProviderBar providers={providers} onPick={setCookiePlatform} />
@@ -235,6 +257,14 @@ export function App() {
 
       {message ? <p className="banner">{message}</p> : null}
 
+      {view === "library" ? (
+        librarySeriesId ? (
+          <SeriesDetail seriesId={librarySeriesId} onBack={() => setLibrarySeriesId(null)} onOpenJob={openJobFromLibrary} />
+        ) : (
+          <Library onOpen={(id) => setLibrarySeriesId(id)} />
+        )
+      ) : (
+        <>
       {discoverResults ? (
         <Intake videos={discoverResults} onRun={runUrl} onRunBatch={runBatch} onClose={() => setDiscoverResults(null)} />
       ) : null}
@@ -328,6 +358,8 @@ export function App() {
       </main>
 
       <Ledger jobs={orderedJobs} activeId={activeJob?.job_id} onPick={setActiveJob} onRefresh={() => refreshJobs().catch((error) => setMessage(error.message))} onCancel={stopJob} onDelete={removeJob} />
+        </>
+      )}
 
       {cookiePlatform ? (
         <CookieDialog

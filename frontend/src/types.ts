@@ -70,3 +70,62 @@ export type SourceVideo = {
   download_state: string;
   error?: string | null;
 };
+
+/* ---------- library ---------- */
+
+export type DubState = "none" | "translating" | "dubbed" | "failed";
+export type ExportState = "draft" | "rendering" | "done" | "failed";
+
+export type SeriesSource = {
+  id: string;
+  series_id: string;
+  platform: string;
+  url: string;
+  label: string | null;
+  last_scanned_at: string | null;
+};
+
+export type Series = {
+  id: string;
+  title: string;
+  cover_url: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  episode_count: number;
+  dubbed_count: number;
+  export_count: number;
+  sources: SeriesSource[];
+};
+
+export type Episode = {
+  id: string;
+  series_id: string;
+  platform: string;
+  platform_video_id: string;
+  source_url: string;
+  title: string;
+  thumbnail_url: string | null;
+  duration: number | null;
+  uploader: string | null;
+  discovered_at: string;
+  dub_job_id: string | null;
+  dub_state: DubState;
+};
+
+export type Export = {
+  id: string;
+  series_id: string;
+  title: string;
+  description: string;
+  hashtags: string[];
+  episode_job_ids: string[];
+  output_path: string | null;
+  duration: number | null;
+  state: ExportState;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SeriesPage = { items: Series[]; total: number };
