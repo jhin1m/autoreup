@@ -83,7 +83,7 @@ class RenderResult:
         return [t.anchor_id for t in self.timings if t.needs_repair]
 
 
-def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glue_gap: float = 0.30, crossfade: float = 0.06) -> Path:
+def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glue_gap: float = 0.30, crossfade: float = 0.06, pitch: float = 1.0) -> Path:
     """Assemble the tempo-fitted clips smoothly, then master the voice track.
 
     Kept separate from :func:`render` so the repair loop can re-measure each round
@@ -95,7 +95,7 @@ def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glu
     work_dir = Path(work_dir)
     unmastered = work_dir / "voice.unmastered.m4a"
     assemble_track(result.segments, unmastered, work_dir=work_dir, total_duration=result.total_duration, glue_gap=glue_gap, crossfade=crossfade)
-    master_voice(unmastered, output_audio)
+    master_voice(unmastered, output_audio, pitch=pitch)
     result.voice_track = output_audio
     result.summary["voice_track"] = str(output_audio)
     return output_audio

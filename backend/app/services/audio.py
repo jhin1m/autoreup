@@ -111,13 +111,20 @@ VOICE_MASTER_CHAIN = (
 )
 
 
-def master_voice(input_path: Path, output_path: Path) -> None:
-    """Apply the voice mastering chain so the dub is clear and easy to listen to."""
+def master_voice(input_path: Path, output_path: Path, pitch: float = 1.0) -> None:
+    """Apply the voice mastering chain so the dub is clear and easy to listen to.
+
+    ``pitch`` > 1.0 brightens a too-deep voice WITHOUT changing tempo/duration:
+    resample up (raises pitch + speed) then atempo back down by the same factor."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    chain = f"aresample=44100,{VOICE_MASTER_CHAIN}"
+    if abs(pitch - 1.0) > 1e-3:
+        shift = f"asetrate=44100*{pitch:.4f},aresample=44100,{atempo_chain(1.0 / pitch)}"
+        chain = f"{shift},{chain}"
     run_command([
         "ffmpeg", "-y", "-v", "error",
         "-i", str(input_path),
-        "-filter:a", f"aresample=44100,{VOICE_MASTER_CHAIN}",
+        "-filter:a", chain,
         "-ac", "2", "-c:a", "aac", "-b:a", "192k",
         str(output_path),
     ])

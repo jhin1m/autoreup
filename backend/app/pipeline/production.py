@@ -86,7 +86,7 @@ def _polish_llm(settings: Settings) -> LLMConfig:
 def _hardsub_config(settings: Settings):
     from backend.app.services.hardsub import HardsubConfig
 
-    font = settings.hardsub_font or str(settings.root_dir / "backend" / "app" / "assets" / "fonts" / "Anton-Regular.ttf")
+    font = settings.hardsub_font or str(settings.root_dir / "backend" / "app" / "assets" / "fonts" / "Bangers-Regular.ttf")
     return HardsubConfig(
         font_path=font,
         font_size=settings.hardsub_font_size,
@@ -372,7 +372,7 @@ class VoiceoverStage(PipelineStage):
             logs.append(f"render round {rounds}: {result.summary}")
 
         # Assemble the final track once, after timings have converged.
-        assemble_voice(result, output_audio, work_dir, glue_gap=render_config.glue_gap, crossfade=render_config.crossfade)
+        assemble_voice(result, output_audio, work_dir, glue_gap=render_config.glue_gap, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)
         context.artifacts["speech_rows"] = speech_rows
         # Voice and subtitle are built from the SAME sentence units. Time each
         # sentence's caption within the REAL synthesized clip span (placement + voice
