@@ -1,4 +1,9 @@
-import type { DubState, ExportState } from "./types";
+import type { Artifact, DubState, ExportState, JobManifest } from "./types";
+
+/** The most recent artifact of a kind on a job (used to find a job's dubbed video). */
+export function latestArtifact(job: JobManifest, kind: string): Artifact | undefined {
+  return [...job.artifacts].reverse().find((artifact) => artifact.kind === kind);
+}
 
 /** Route a remote CDN cover through the backend proxy (browsers can't load Douyin
  *  images cross-origin). Local /media paths and empty values pass through unchanged. */

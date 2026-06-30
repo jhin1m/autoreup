@@ -171,6 +171,10 @@ export async function translateEpisodes(seriesId: string, episodeIds: string[]):
   return ((await response.json()) as { jobs: string[] }).jobs;
 }
 
+export async function deleteEpisodeDub(episodeId: string): Promise<void> {
+  await ok(await fetch(`${LIB}/episodes/${episodeId}/dub`, { method: "DELETE" }), "Không xóa được bản dịch");
+}
+
 export async function listExports(seriesId: string): Promise<Export[]> {
   const response = await ok(await fetch(`${LIB}/series/${seriesId}/exports`), "Không tải được bản ghép");
   return (await response.json()) as Export[];

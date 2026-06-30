@@ -199,17 +199,36 @@ class LibraryService:
         return self.store.list_episodes(series_id, dub_state)
 
     def translate(self, series_id: str, episode_ids: list[str]) -> list[str]:
-        """Create a dubbing job per episode and link it back. Returns created job ids."""
+        """Dub each episode (one job). Re-translating an episode replaces its previous
+        dub job + files. Returns the created job ids."""
         job_ids: list[str] = []
         for episode_id in episode_ids:
             ep = self.store.get_episode(episode_id)
             if not ep or ep.series_id != series_id:
                 continue
+            if ep.dub_job_id:
+                try:
+                    self.jobs.delete(ep.dub_job_id)
+                except Exception:
+                    pass
             manifest = self.jobs.create(JobInput(url=ep.source_url, series_id=series_id, source_video_id=ep.id))
             self.jobs.start_background(manifest.job_id)
             self.store.set_episode_dub(ep.id, manifest.job_id, DubState.translating)
             job_ids.append(manifest.job_id)
         return job_ids
+
+    def delete_episode_dub(self, episode_id: str) -> bool:
+        """Drop an episode's dub (job + files) and reset it to not-translated."""
+        ep = self.store.get_episode(episode_id)
+        if not ep:
+            return False
+        if ep.dub_job_id:
+            try:
+                self.jobs.delete(ep.dub_job_id)
+            except Exception:
+                pass
+        self.store.set_episode_dub(episode_id, None, DubState.none)
+        return True
 
     # ----- exports --------------------------------------------------------
     def create_export(self, series_id: str, title: str, description: str, hashtags: list[str], episode_job_ids: list[str]) -> Export:

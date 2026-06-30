@@ -125,6 +125,12 @@ def translate(series_id: str, request: TranslateRequest) -> dict:
     return {"jobs": job_ids}
 
 
+@router.delete("/episodes/{episode_id}/dub", status_code=204)
+def delete_episode_dub(episode_id: str) -> None:
+    if not get_library_service().delete_episode_dub(episode_id):
+        raise HTTPException(status_code=404, detail="Tập không tồn tại")
+
+
 # ----- exports ------------------------------------------------------------
 @router.get("/series/{series_id}/exports", response_model=list[Export])
 def list_exports(series_id: str) -> list[Export]:

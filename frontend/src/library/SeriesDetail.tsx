@@ -2,26 +2,21 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../api";
 import type { Episode, Export, Series } from "../types";
 import { DUB_STATE_VI, EXPORT_STATE_VI, formatDuration, thumbSrc } from "../util";
+import { Preview } from "./Preview";
 
 type Tab = "source" | "dubbed" | "export";
 
 /** One series: manage source links, scan episodes, pick episodes to dub, then pick
- *  dubbed episodes (ordered) to merge into a long export video for YouTube. */
-export function SeriesDetail({
-  seriesId,
-  onBack,
-  onOpenJob,
-}: {
-  seriesId: string;
-  onBack: () => void;
-  onOpenJob: (jobId: string) => void;
-}) {
+ *  dubbed episodes (ordered) to merge into a long export video for YouTube. Watching a
+ *  dubbed episode opens a preview modal in place — no separate studio view. */
+export function SeriesDetail({ seriesId, onBack }: { seriesId: string; onBack: () => void }) {
   const [series, setSeries] = useState<Series | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [exports, setExports] = useState<Export[]>([]);
   const [tab, setTab] = useState<Tab>("source");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
+  const [preview, setPreview] = useState<Episode | null>(null);
 
   const loadSeries = useCallback(async () => setSeries(await api.getSeries(seriesId)), [seriesId]);
   const loadEpisodes = useCallback(async () => setEpisodes(await api.listEpisodes(seriesId)), [seriesId]);
@@ -110,7 +105,7 @@ export function SeriesDetail({
       ) : null}
 
       {tab === "dubbed" ? (
-        <DubbedTab series={series} dubbed={dubbed} onOpenJob={onOpenJob} busy={busy} onExport={(body) => run("export", async () => {
+        <DubbedTab series={series} dubbed={dubbed} onPreview={setPreview} busy={busy} onExport={(body) => run("export", async () => {
           const created = await api.createExport(series.id, body);
           await api.renderExport(created.id);
           await Promise.all([loadExports(), loadSeries()]);
@@ -122,6 +117,22 @@ export function SeriesDetail({
         <ExportTab exports={exports} busy={busy}
           onRender={(id) => run("render", async () => { await api.renderExport(id); await loadExports(); })}
           onDelete={(id) => run("delx", async () => { await api.deleteExport(id); await Promise.all([loadExports(), loadSeries()]); })}
+        />
+      ) : null}
+
+      {preview ? (
+        <Preview
+          episode={preview}
+          onClose={() => setPreview(null)}
+          onRedub={() => { setPreview(null); run("translate", async () => {
+            await api.translateEpisodes(series.id, [preview.id]);
+            await Promise.all([loadEpisodes(), loadSeries()]);
+            setTab("dubbed");
+          }); }}
+          onDelete={() => { setPreview(null); run("deldub", async () => {
+            await api.deleteEpisodeDub(preview.id);
+            await Promise.all([loadEpisodes(), loadSeries()]);
+          }); }}
         />
       ) : null}
     </section>
@@ -213,11 +224,11 @@ function SourceTab({ episodes, busy, onTranslate }: { episodes: Episode[]; busy:
 
 /* ---------- tab: dubbed -> compose export ---------- */
 
-function DubbedTab({ series, dubbed, busy, onOpenJob, onExport }: {
+function DubbedTab({ series, dubbed, busy, onPreview, onExport }: {
   series: Series;
   dubbed: Episode[];
   busy: string;
-  onOpenJob: (jobId: string) => void;
+  onPreview: (episode: Episode) => void;
   onExport: (body: { title: string; description: string; hashtags: string[]; episode_job_ids: string[] }) => void;
 }) {
   const [order, setOrder] = useState<string[]>([]); // selected episode ids, in click order
@@ -244,7 +255,7 @@ function DubbedTab({ series, dubbed, busy, onOpenJob, onExport }: {
               selected={idx >= 0}
               order={idx >= 0 ? idx + 1 : undefined}
               onToggle={() => toggle(ep.id)}
-              onOpen={ep.dub_job_id ? () => onOpenJob(ep.dub_job_id!) : undefined}
+              onOpen={() => onPreview(ep)}
             />
           );
         })}
