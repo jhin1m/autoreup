@@ -36,6 +36,8 @@ class StageName(StrEnum):
 class JobInput(BaseModel):
     url: str
     notes: str = ""  # per-video context (cast/gender/register/terms) fed to translation
+    series_id: str | None = None       # library link: which series this dub belongs to
+    source_video_id: str | None = None  # library link: the episode this dub is for
 
 
 class PipelineConfig(BaseModel):

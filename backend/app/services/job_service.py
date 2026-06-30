@@ -29,7 +29,12 @@ class JobService:
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]
-        job_input = JobInput(url=extract_url(job_input.url), notes=job_input.notes)
+        job_input = JobInput(
+            url=extract_url(job_input.url),
+            notes=job_input.notes,
+            series_id=job_input.series_id,
+            source_video_id=job_input.source_video_id,
+        )
         manifest = JobManifest(
             schema_version=self.settings.schema_version,
             job_id=job_id,
