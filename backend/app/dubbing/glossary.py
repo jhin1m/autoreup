@@ -21,11 +21,11 @@ def _source_text(anchors: list[Anchor]) -> str:
     return joined[:_MAX_SOURCE_CHARS]
 
 
-def extract_glossary(anchors: list[Anchor], config: LLMConfig, genre: str = "") -> list[GlossaryEntry]:
+def extract_glossary(anchors: list[Anchor], config: LLMConfig, genre: str = "", notes: str = "") -> list[GlossaryEntry]:
     source = _source_text(anchors)
     if not source.strip():
         return []
-    user = GLOSSARY_USER.format(genre=genre or "(không rõ, tự suy ra)", source=source)
+    user = GLOSSARY_USER.format(genre=genre or "(không rõ, tự suy ra)", notes=notes or "(không có)", source=source)
     raw = complete(GLOSSARY_SYSTEM, user, config)
     entries: list[GlossaryEntry] = []
     seen: set[str] = set()

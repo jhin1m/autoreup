@@ -373,6 +373,38 @@ input {
   color: var(--muted);
   word-break: break-all;
 }
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.seg-toggle {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--ink-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+.seg-toggle button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 600 11px/1 var(--font-body);
+  letter-spacing: 0.01em;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.seg-toggle button:hover {
+  color: var(--text);
+}
+.seg-toggle button.on {
+  color: var(--ink);
+  background: var(--jade);
+}
 
 /* screen / preview */
 

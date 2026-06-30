@@ -30,6 +30,13 @@ class TranslateError(RuntimeError):
 class TranslateConfig:
     max_caption_chars: int = 32
     context_anchors: int = 3  # anchors of trailing context shown as the dub tail
+    voice_cps: float = 13.0   # per-anchor char budget = duration * voice_cps (natural read pace)
+    min_budget_chars: int = 12
+    notes: str = ""           # per-video context (cast/gender/register) injected into the prompt
+
+
+def _budget_chars(anchor: Anchor, voice_cps: float, floor: int) -> int:
+    return max(floor, int(round((anchor.end - anchor.start) * voice_cps)))
 
 
 @dataclass(slots=True)
@@ -38,9 +45,12 @@ class _State:
     tail: str = ""
 
 
-def _format_anchor_rows(anchors: list[Anchor]) -> str:
+def _format_anchor_rows(anchors: list[Anchor], voice_cps: float, floor: int) -> str:
+    # Each row carries an explicit character budget = how much Vietnamese fits in the
+    # time this line is spoken. The model must condense to it (meaning over verbatim).
     return "\n".join(
-        f"{a.id}\t{a.start:.2f}-{a.end:.2f}\t{a.source_zh}" for a in anchors
+        f"{a.id}\t{a.start:.2f}-{a.end:.2f}\t≤{_budget_chars(a, voice_cps, floor)}\t{a.source_zh}"
+        for a in anchors
     )
 
 
@@ -116,9 +126,10 @@ def translate_chunk(
     valid_ids = {a.id for a in chunk_anchors}
     user = TRANSLATE_USER.format(
         glossary=format_glossary(glossary),
+        notes=config.notes or "(không có)",
         memory=_format_memory(state.memory),
         prev_tail=state.tail or "(đầu video)",
-        anchors=_format_anchor_rows(chunk_anchors),
+        anchors=_format_anchor_rows(chunk_anchors, config.voice_cps, config.min_budget_chars),
         max_caption_chars=config.max_caption_chars,
     )
     raw = complete(TRANSLATE_SYSTEM, user, llm)

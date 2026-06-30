@@ -45,6 +45,7 @@ export function App() {
   const [reviewTab, setReviewTab] = useState<ReviewTab>("bilingual");
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
   const [showAllFiles, setShowAllFiles] = useState(false);
+  const [preferDubbed, setPreferDubbed] = useState(true);
 
   const refreshJobs = useCallback(async () => {
     const recent = await api.listJobs();
@@ -95,6 +96,9 @@ export function App() {
   const videoArtifact = activeJob ? latestArtifact(activeJob, "video") : undefined;
   const vttArtifact = activeJob ? latestArtifact(activeJob, "subtitle_vtt") : undefined;
   const voiceArtifact = activeJob ? latestArtifact(activeJob, "voice_track") : undefined;
+  const dubbedArtifact = activeJob ? latestArtifact(activeJob, "dubbed_mp4") ?? latestArtifact(activeJob, "soft_sub_mp4") : undefined;
+  const showDubbed = preferDubbed && !!dubbedArtifact;
+  const previewArtifact = showDubbed ? dubbedArtifact : videoArtifact;
   const qaStage = stageMap.get("qa");
 
   async function submitJob(event: FormEvent) {
@@ -188,18 +192,27 @@ export function App() {
           <div className="panel-head">
             <div className="panel-title">
               <h2>Xem trước</h2>
-              <p className="mono small">{activeJob ? activeJob.input.url : "Chưa chọn công việc"}</p>
+              <p className="mono small">{showDubbed ? "Bản lồng tiếng Việt" : activeJob ? activeJob.input.url : "Chưa chọn công việc"}</p>
             </div>
-            <StatePill state={activeJob?.state ?? "queued"} />
+            <div className="head-right">
+              {dubbedArtifact ? (
+                <div className="seg-toggle">
+                  <button className={showDubbed ? "" : "on"} onClick={() => setPreferDubbed(false)}>Gốc</button>
+                  <button className={showDubbed ? "on" : ""} onClick={() => setPreferDubbed(true)}>Lồng tiếng</button>
+                </div>
+              ) : null}
+              <StatePill state={activeJob?.state ?? "queued"} />
+            </div>
           </div>
           <div className="viewport">
-            {videoArtifact ? (
+            {previewArtifact ? (
               <>
                 <video
+                  key={previewArtifact.path}
                   ref={videoRef}
                   controls
                   playsInline
-                  src={`/media/${videoArtifact.path}`}
+                  src={`/media/${previewArtifact.path}`}
                   onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
                 >
                   {vttArtifact ? (

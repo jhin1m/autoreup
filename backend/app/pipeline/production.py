@@ -39,6 +39,7 @@ from backend.app.dubbing.repair import RepairConfig, expand, repair
 from backend.app.dubbing.translate import TranslateConfig, translate
 from backend.app.dubbing.tsv_io import write_json, write_tsv
 from backend.app.infrastructure.downloader import YtDlpDownloader
+from backend.app.services.audio import plan_placements
 from backend.app.infrastructure.packaging import package_outputs
 from backend.app.infrastructure.process import run_command
 from backend.app.pipeline.contracts import PipelineContext, PipelineStage, StageResult
@@ -135,7 +136,7 @@ class GlossaryStage(PipelineStage):
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
-        glossary = extract_glossary(anchors, _translate_llm(settings), genre=context.config.content_genre)
+        glossary = extract_glossary(anchors, _translate_llm(settings), genre=context.config.content_genre, notes=context.config.content_notes)
         context.artifacts["glossary"] = glossary
         rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
         tsv_path = settings.subtitles_dir / f"{context.job_id}.glossary.tsv"
@@ -160,7 +161,7 @@ class TranslateStage(PipelineStage):
         chunks = build_chunks(anchors, flat_scene_map(anchors), ChunkConfig())
         speech_rows = translate(
             anchors, chunks, glossary, _translate_llm(settings),
-            TranslateConfig(max_caption_chars=settings.display_max_chars),
+            TranslateConfig(max_caption_chars=settings.display_max_chars, voice_cps=settings.tts_voice_cps, notes=context.config.content_notes),
         )
         context.artifacts["chunks"] = chunks
         context.artifacts["speech_rows"] = speech_rows
@@ -247,12 +248,16 @@ class VoiceoverStage(PipelineStage):
             min_tempo=settings.tts_min_tempo,
             max_tempo=settings.tts_max_tempo,
             fixed_tempo=settings.tts_fixed_tempo,
+            glue_gap=settings.tts_glue_gap,
+            crossfade=settings.tts_crossfade,
+            min_duration=settings.min_duration,
         )
         work_dir = context.job_dir / "tts"
         cache_dir = settings.tts_cache_dir
         output_audio = settings.tts_dir / f"{context.job_id}.voice.m4a"
+        segments = context.artifacts.get("segments")
 
-        result = render(speech_rows, anchors, render_config, work_dir, cache_dir)
+        result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments)
         logs = [f"render round 0: {result.summary}"]
         repair_cfg = RepairConfig(max_caption_chars=settings.display_max_chars)
         rounds = 0
@@ -260,10 +265,13 @@ class VoiceoverStage(PipelineStage):
             # Overflow: voice overruns the window -> shorten. Underfull: voice far
             # shorter than the source (often dropped content) -> complete it.
             overflow = {t.anchor_id: (t.target_duration, t.tts_duration) for t in result.timings if t.needs_repair}
+            # Only restore lines that are clearly gutted (voice fills <40% of the
+            # window) — leftover window at natural pace is an intended pause, not a
+            # dropped idea, so we must not re-inflate it back into a rushed line.
             underfull = {
                 t.anchor_id: (t.target_duration, t.tts_duration)
                 for t in result.timings
-                if t.target_duration >= 2.0 and t.tts_duration < t.target_duration * 0.6
+                if t.target_duration >= 2.5 and t.tts_duration < t.target_duration * 0.4
             }
             if not overflow and not underfull:
                 break
@@ -279,13 +287,21 @@ class VoiceoverStage(PipelineStage):
             rounds += 1
             if not changed:
                 break
-            result = render(speech_rows, anchors, render_config, work_dir, cache_dir)
+            result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments)
             logs.append(f"render round {rounds}: {result.summary}")
 
         # Assemble the final track once, after timings have converged.
-        assemble_voice(result, output_audio, work_dir)
+        assemble_voice(result, output_audio, work_dir, glue_gap=render_config.glue_gap, crossfade=render_config.crossfade)
         context.artifacts["speech_rows"] = speech_rows
-        cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"))
+        # Voice and subtitle are built from the SAME sentence units. Time each
+        # sentence's caption within the REAL synthesized clip span (placement + voice
+        # duration), so the caption matches the dub's actual timing — from the TTS.
+        placements, _track_end = plan_placements(result.segments, render_config.glue_gap, render_config.crossfade)
+        voice_windows = {
+            round(seg_start, 3): (place, place + dur)
+            for (seg_start, _clip, _play, _end), (place, _p, dur, _g) in zip(result.segments, placements)
+        }
+        cues = build_display_cues(speech_rows, settings.min_duration, anchors, segments, max_chars=settings.subtitle_max_line_chars, voice_windows=voice_windows, lead=settings.subtitle_lead)
         write_subtitles(cues, context.artifacts["subtitle_json"], context.artifacts["subtitle_srt"])
         context.artifacts["display_cues"] = cues
 

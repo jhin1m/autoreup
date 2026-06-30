@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -124,6 +123,23 @@ def master_voice(input_path: Path, output_path: Path) -> None:
     ])
 
 
+def trim_silence(path: Path, threshold_db: float = -45.0, keep: float = 0.03) -> None:
+    """Strip leading/trailing silence from a synthesized clip so it starts and ends on
+    speech. CapCut adds ~0.1-0.2s of head silence; left in, the clip (placed at the
+    source time) and its caption both lead the actual voice by that much. ``keep``
+    leaves a hair of padding so the first/last phoneme isn't clipped."""
+    tmp = path.with_name(path.stem + ".trim" + path.suffix)
+    chain = (
+        f"silenceremove=start_periods=1:start_silence={keep}:start_threshold={threshold_db}dB:detection=peak,"
+        f"areverse,"
+        f"silenceremove=start_periods=1:start_silence={keep}:start_threshold={threshold_db}dB:detection=peak,"
+        f"areverse"
+    )
+    run_command(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-af", chain, str(tmp)])
+    if tmp.exists() and tmp.stat().st_size > 512:
+        tmp.replace(path)
+
+
 def render_silence(path: Path, duration: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     run_command([
@@ -135,45 +151,94 @@ def render_silence(path: Path, duration: float) -> None:
     ])
 
 
-def assemble_track(
-    segments: list[tuple[float, Path, float]], output_path: Path, work_dir: Path, total_duration: float | None = None
-) -> None:
-    """Concat clips at absolute start times, padding gaps with silence.
+def plan_placements(
+    segments: list[tuple[float, Path, float, float]], glue_gap: float, crossfade: float
+) -> tuple[list[tuple[float, Path, float, bool]], float]:
+    """Resolve each clip's slot on the output timeline + how it joins the previous.
 
-    ``segments`` is ``(start, path, duration)`` — the clip duration is supplied by
-    the caller (already known from the tempo-fit step) to avoid re-probing each
-    clip. Absolute scheduling: each clip starts at its own ``start``; an overlong
-    clip never shifts the next one's start, so overflow stays local to one anchor.
+    ``segments`` is ``(anchor_start, clip_path, playback_duration, anchor_end)`` in
+    play order. Returns ``(placements, track_end)`` where each placement is
+    ``(place_start, path, duration, glued_head)``:
+
+    * Real pause — ``next.start - this.end >= glue_gap``: the clip keeps its absolute
+      onset, so the voice stays locked to the picture ("khớp ảnh") and the space
+      before it is a genuine on-screen beat.
+    * Contiguous — gap ``< glue_gap``: no real pause on screen, so the clip butt-joins
+      right after the previous voice (overlapping by ``crossfade``); the artificial
+      underfill silence is dropped so prosody flows with no stop-start "khựng".
     """
-    concat_items: list[Path] = []
-    silence_jobs: list[tuple[Path, float]] = []
+    placements: list[tuple[float, Path, float, bool]] = []
     cursor = 0.0
-    for index, (start, path, duration) in enumerate(segments):
-        gap = start - cursor
-        if gap > 0.01:
-            silence = work_dir / "silence" / f"gap-{index:05d}.m4a"
-            silence_jobs.append((silence, gap))
-            concat_items.append(silence)
-            cursor += gap
-        concat_items.append(path)
-        cursor += duration
-    if total_duration and total_duration - cursor > 0.01:
-        silence = work_dir / "silence" / "tail.m4a"
-        silence_jobs.append((silence, total_duration - cursor))
-        concat_items.append(silence)
-    if not concat_items:
+    prev_end: float | None = None
+    for start, path, duration, end in segments:
+        if prev_end is None:
+            place, glued = start, False
+        elif start - prev_end < glue_gap:
+            place, glued = max(0.0, cursor - crossfade), True
+        else:
+            place, glued = max(start, cursor), False
+        placements.append((place, path, duration, glued))
+        cursor = place + duration
+        prev_end = end
+    return placements, cursor
+
+
+def assemble_track(
+    segments: list[tuple[float, Path, float, float]],
+    output_path: Path,
+    work_dir: Path,
+    total_duration: float | None = None,
+    glue_gap: float = 0.30,
+    crossfade: float = 0.06,
+) -> None:
+    """Place tempo-fitted clips on a timeline and smooth the joins.
+
+    One ffmpeg filtergraph: fade each clip's edges (equal-power ``qsin`` where it
+    overlaps a glued neighbour, a short declick otherwise), delay it into its slot,
+    then ``amix``. amix sums, so the matched crossfades stay at unity while gaps
+    between real beats stay silent. Overflow stays local — a long clip never pushes a
+    later real-beat onset earlier, only consumes its own trailing silence.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not segments:
         render_silence(output_path, max(0.1, total_duration or 0.1))
         return
 
-    # Silence clips are independent — generate them concurrently.
-    if silence_jobs:
-        with ThreadPoolExecutor(max_workers=min(8, len(silence_jobs))) as pool:
-            list(pool.map(lambda job: render_silence(*job), silence_jobs))
+    placements, cursor = plan_placements(segments, glue_gap, crossfade)
+    track_end = max(cursor, total_duration or 0.0)
 
-    list_path = work_dir / "concat.txt"
-    list_path.parent.mkdir(parents=True, exist_ok=True)
-    list_path.write_text(
-        "\n".join(f"file '{path.resolve().as_posix()}'" for path in concat_items) + "\n", encoding="utf-8"
-    )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    run_command(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(output_path)])
+    declick = 0.008
+    n = len(placements)
+    inputs: list[str] = []
+    chains: list[str] = []
+    labels: list[str] = []
+    for index, (place, path, duration, glued_head) in enumerate(placements):
+        inputs += ["-i", str(path)]
+        glued_tail = index + 1 < n and placements[index + 1][3]
+        fin = min(crossfade if glued_head else declick, duration / 2)
+        fout = min(crossfade if glued_tail else declick, duration / 2)
+        fin_curve = "qsin" if glued_head else "tri"
+        fout_curve = "qsin" if glued_tail else "tri"
+        delay_ms = max(0, int(round(place * 1000)))
+        chains.append(
+            f"[{index}:a]aresample=44100,"
+            f"afade=t=in:curve={fin_curve}:st=0:d={fin:.3f},"
+            f"afade=t=out:curve={fout_curve}:st={max(0.0, duration - fout):.3f}:d={fout:.3f},"
+            f"adelay={delay_ms}:all=1[a{index}]"
+        )
+        labels.append(f"[a{index}]")
+
+    if n == 1:
+        graph = chains[0] + ";[a0]apad[mix]"
+    else:
+        graph = ";".join(chains) + ";" + "".join(labels) + f"amix=inputs={n}:normalize=0:dropout_transition=0,apad[mix]"
+
+    run_command([
+        "ffmpeg", "-y", "-v", "error",
+        *inputs,
+        "-filter_complex", graph,
+        "-map", "[mix]",
+        "-t", f"{max(0.1, track_end):.3f}",
+        "-ac", "2", "-c:a", "aac", "-b:a", "192k",
+        str(output_path),
+    ])

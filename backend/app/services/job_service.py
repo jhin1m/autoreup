@@ -23,13 +23,14 @@ class JobService:
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]
-        job_input = JobInput(url=extract_url(job_input.url))
+        job_input = JobInput(url=extract_url(job_input.url), notes=job_input.notes)
         manifest = JobManifest(
             schema_version=self.settings.schema_version,
             job_id=job_id,
             input=job_input,
             config=PipelineConfig(
                 content_genre=self.settings.content_genre,
+                content_notes=job_input.notes or self.settings.content_notes,
                 max_chars=self.settings.max_chars,
                 display_max_chars=self.settings.display_max_chars,
                 display_max_lines=self.settings.display_max_lines,

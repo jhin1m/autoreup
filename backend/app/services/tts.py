@@ -43,11 +43,15 @@ def clean_tts_text(text: str, text_mode: str = "natural") -> str:
         # No pauses at all.
         text = TTS_PUNCT_RE.sub(" ", text)
     else:
-        # "natural": flow as one utterance. Keep light comma pauses, but turn the
-        # heavy stops (. ? ! ; : …) into commas so the voice doesn't halt
-        # mid-block when an anchor spans several sentences. Display keeps the real
-        # punctuation; only the spoken text is smoothed.
-        text = re.sub(r"[.!?;:…—–。！？；：]+", ",", text)
+        # "natural": trust the translation's punctuation — in well-formed Vietnamese a
+        # comma/period IS a natural reading pause. Turn EVERY clause/sentence boundary
+        # into ONE uniform light comma-pause so the prosody is consistent (no boundary
+        # runs on while another pauses). Dashes are not pauses -> space.
+        text = re.sub(r"[—–]+", " ", text)
+        text = re.sub(r"[,.!?…;:、，。！？；：]+", ", ", text)
+        # A comma right before a short closing/tag word is an odd micro-pause in
+        # speech (e.g. "có đúng, không" -> "có đúng không"); drop just that one.
+        text = re.sub(r",\s+(không|chứ|nhé|nha|nhỉ|ạ|à|ư|hả|hử)\b", r" \1", text)
     text = " ".join(text.split())
     text = re.sub(r"(\s*[,，]\s*)+", ", ", text)  # collapse/normalize commas
     text = re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text)

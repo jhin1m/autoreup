@@ -35,10 +35,12 @@ class StageName(StrEnum):
 
 class JobInput(BaseModel):
     url: str
+    notes: str = ""  # per-video context (cast/gender/register/terms) fed to translation
 
 
 class PipelineConfig(BaseModel):
     content_genre: str = ""  # optional hint; glossary is extracted data-driven per video
+    content_notes: str = ""  # per-video context for the translator (e.g. "Tống Phù Lai là nam")
     max_chars: int = 60
     display_max_chars: int = 32
     display_max_lines: int = 1

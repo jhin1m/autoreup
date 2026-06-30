@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     polish_model: str = "gpt-5.4"
     llm_stream: bool = True
     content_genre: str = ""  # optional hint; glossary is extracted data-driven per video
+    content_notes: str = ""  # default per-video context for the translator (cast/gender/register)
     asr_worker_url: str | None = None
     asr_model: str = "@cf/openai/whisper-large-v3-turbo"
     cookies_file: str | None = None
@@ -28,6 +29,8 @@ class Settings(BaseSettings):
     max_chars: int = 60
     display_max_chars: int = 32
     display_max_lines: int = 1
+    subtitle_max_line_chars: int = 40  # pro single-line width for the on-screen caption
+    subtitle_lead: float = 0.12  # caption appears this much BEFORE the voice (pro lead-in ~3 frames)
     max_cps: float = 32.0
     target_cps: float = 22.0
     max_low_quality_rate: float = 0.15
@@ -45,14 +48,27 @@ class Settings(BaseSettings):
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
     tts_text_mode: str = "natural"  # keep punctuation so the voice-over pauses naturally
-    tts_target_chars_per_second: float = 12.0
+    # Voice speaking-rate budget: the translator condenses each line to
+    # ``duration * tts_voice_cps`` characters so it reads within the time the
+    # character speaks at the voice's own natural pace (measured ~19.8 ch/s for
+    # BV421). Budget sits just under that so lines fit at tempo ~1.0 with a touch of
+    # natural pause — condensing the over-dense source (22-29 ch/s) without needless
+    # content loss or underfill.
+    tts_voice_cps: float = 18.0
     tts_post_tempo: float = 1.12
-    # Stable forward pace: never slow below 1.0 (no dragging), speed up to 1.18 to
-    # fit long lines; beyond that the repair loop shortens the text. Set
-    # tts_fixed_tempo to force one rigid rate for every clip (costs more repair).
+    # Read at (near-)natural pace so the dub is intelligible: never slow below 1.0
+    # (no dragging) and only a hair of speed-up (1.08) for slightly-long lines.
+    # Density is fixed at the source — the translator condenses to tts_voice_cps and
+    # the repair loop shortens whatever still overruns — NOT by speeding the voice.
     tts_min_tempo: float = 1.0
-    tts_max_tempo: float = 1.18
+    tts_max_tempo: float = 1.08
     tts_fixed_tempo: float | None = None
+    # Voice is the master clock and stays neo'd at each anchor's onset so it matches
+    # the picture ("khớp ảnh") AND the subtitle (which is derived from the voice
+    # window). glue_gap=0 disables the earlier-shifting glue — it traded picture/sub
+    # sync for marginal smoothness. crossfade still declicks clip edges.
+    tts_glue_gap: float = 0.0
+    tts_crossfade: float = 0.06
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True
     tts_group_max_gap: float = 2.0
