@@ -36,15 +36,47 @@ def detect_platform(url: str) -> Platform:
 
 
 class SourceDiscovery:
-    def __init__(self, cookie_vault: CookieVault):
+    def __init__(self, cookie_vault: CookieVault, settings=None):
         self.cookie_vault = cookie_vault
+        self.settings = settings  # needed for the headless Douyin channel lister
 
     def discover(self, url: str, limit: int = 12) -> list[SourceVideo]:
         url = extract_url(url)
         platform = detect_platform(url)
         if platform == Platform.bilibili and self._is_bilibili_space(url):
             return self._discover_bilibili_space(url, limit)
+        if platform == Platform.douyin and self._is_douyin_user(url):
+            return self._discover_douyin_user(url, limit)
         return [self._discover_single(url, platform)]
+
+    def _discover_douyin_user(self, url: str, limit: int) -> list[SourceVideo]:
+        """List a Douyin creator's posts via the headless browser, one card each."""
+        if self.settings is None:
+            raise RuntimeError("SourceDiscovery cần settings để liệt kê kênh Douyin.")
+        from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
+
+        sec_uid = _extract_sec_uid(url)
+        page_url = f"https://www.douyin.com/user/{sec_uid}" if sec_uid else extract_url(url)
+        extractor = DouyinBrowserExtractor(
+            self.settings.videos_dir, self.cookie_vault, self.settings.root_dir,
+            self.settings.browser_path, self.settings.node_bin,
+        )
+        posts = extractor.list_user_posts(page_url, limit)
+        videos: list[SourceVideo] = []
+        for post in posts:
+            vid = str(post.get("id") or "")
+            if not vid:
+                continue
+            videos.append(SourceVideo(
+                id=self._id_for(Platform.douyin, vid),
+                platform=Platform.douyin,
+                platform_video_id=vid,
+                source_url=f"https://www.douyin.com/video/{vid}",
+                title=post.get("desc") or f"Video Douyin {vid}",
+                thumbnail_url=post.get("cover"),
+                duration=post.get("duration"),
+            ))
+        return videos
 
     def _discover_single(self, url: str, platform: Platform) -> SourceVideo:
         if platform == Platform.bilibili:
@@ -183,10 +215,22 @@ class SourceDiscovery:
         parsed = urlparse(url)
         return parsed.netloc.endswith("bilibili.com") and parsed.path.startswith("/") and parsed.path.split("/")[1:2] != ["video"] and "space.bilibili.com" in parsed.netloc
 
+    @staticmethod
+    def _is_douyin_user(url: str) -> bool:
+        parsed = urlparse(url)
+        return "douyin.com" in parsed.netloc and parsed.path.startswith("/user/")
+
 
 def _short_reason(exc: Exception) -> str:
     text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
     return text[:120]
+
+
+def _extract_sec_uid(url: str) -> str | None:
+    parsed = urlparse(url)
+    if "douyin.com" in parsed.netloc and parsed.path.startswith("/user/"):
+        return parsed.path.rstrip("/").split("/")[-1] or None
+    return None
 
 
 def _extract_video_id(url: str) -> str | None:

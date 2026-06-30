@@ -1204,6 +1204,27 @@ input:focus-visible,
   color: var(--amber);
   border-color: var(--amber);
 }
+.intake-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.vcard.sel {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, var(--panel-2));
+}
+.vpick {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.vpick input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--amber);
+  cursor: pointer;
+}
 
 /* modal */
 .modal-scrim {

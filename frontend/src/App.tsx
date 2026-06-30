@@ -123,6 +123,36 @@ export function App() {
     }
   }
 
+  async function runBatch(urls: string[]) {
+    if (!urls.length) return;
+    setMessage("");
+    setSubmitting(true);
+    try {
+      const created: JobManifest[] = [];
+      for (const target of urls) {
+        try {
+          created.push(await api.createJob(target));
+        } catch {
+          /* skip the ones that fail; report the count that succeeded */
+        }
+      }
+      if (created.length) {
+        setUrl("");
+        setDiscoverResults(null);
+        setActiveJob(created[0]);
+        setJobs((items) => {
+          const ids = new Set(created.map((job) => job.job_id));
+          return [...created, ...items.filter((item) => !ids.has(item.job_id))];
+        });
+        setMessage(`Đã tạo ${created.length}/${urls.length} công việc.`);
+      } else {
+        setMessage("Không tạo được công việc nào.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function runDiscover() {
     if (!url.trim()) return;
     setMessage("");
@@ -174,7 +204,7 @@ export function App() {
       {message ? <p className="banner">{message}</p> : null}
 
       {discoverResults ? (
-        <Intake videos={discoverResults} onRun={runUrl} onClose={() => setDiscoverResults(null)} />
+        <Intake videos={discoverResults} onRun={runUrl} onRunBatch={runBatch} onClose={() => setDiscoverResults(null)} />
       ) : null}
 
       <Transport
@@ -560,34 +590,74 @@ function CookieDialog({ session, onClose, onSaved }: { session?: ProviderSession
 
 /* ---------- intake (discover) ---------- */
 
-function Intake({ videos, onRun, onClose }: { videos: SourceVideo[]; onRun: (url: string) => void; onClose: () => void }) {
+function Intake({
+  videos,
+  onRun,
+  onRunBatch,
+  onClose,
+}: {
+  videos: SourceVideo[];
+  onRun: (url: string) => void;
+  onRunBatch: (urls: string[]) => void;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  function toggle(url: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(url) ? next.delete(url) : next.add(url);
+      return next;
+    });
+  }
+  const allSelected = videos.length > 0 && selected.size === videos.length;
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(videos.map((video) => video.source_url)));
+  }
+
   return (
     <section className="intake panel">
       <div className="intake-head">
         <span className="intake-tag">ĐÃ QUÉT · {videos.length} VIDEO</span>
-        <button className="link" onClick={onClose}>
-          Ẩn
-        </button>
+        <div className="intake-actions">
+          {videos.length ? (
+            <button className="link" onClick={toggleAll}>
+              {allSelected ? "Bỏ chọn" : "Chọn tất cả"}
+            </button>
+          ) : null}
+          <button className="ghost tiny" disabled={!selected.size} onClick={() => onRunBatch([...selected])}>
+            Dựng {selected.size || ""} video
+          </button>
+          <button className="link" onClick={onClose}>
+            Ẩn
+          </button>
+        </div>
       </div>
       {videos.length ? (
         <div className="intake-grid">
-          {videos.map((video) => (
-            <article key={video.id} className="vcard">
-              <div className="vthumb">{video.thumbnail_url ? <img src={video.thumbnail_url} alt="" loading="lazy" /> : <span className="reel" aria-hidden />}</div>
-              <div className="vmeta">
-                <p className="vtitle">{video.title || video.platform_video_id}</p>
-                <p className="mono tiny">
-                  {video.platform}
-                  {video.duration ? ` · ${formatTime(video.duration)}` : ""}
-                  {video.uploader ? ` · ${video.uploader}` : ""}
-                </p>
-                {video.error ? <p className="vnote">{video.error}</p> : null}
-              </div>
-              <button className="ghost tiny" onClick={() => onRun(video.source_url)}>
-                Dựng
-              </button>
-            </article>
-          ))}
+          {videos.map((video) => {
+            const isSel = selected.has(video.source_url);
+            return (
+              <article key={video.id} className={`vcard ${isSel ? "sel" : ""}`}>
+                <label className="vpick" title="Chọn để dựng hàng loạt">
+                  <input type="checkbox" checked={isSel} onChange={() => toggle(video.source_url)} />
+                </label>
+                <div className="vthumb">{video.thumbnail_url ? <img src={video.thumbnail_url} alt="" loading="lazy" /> : <span className="reel" aria-hidden />}</div>
+                <div className="vmeta">
+                  <p className="vtitle">{video.title || video.platform_video_id}</p>
+                  <p className="mono tiny">
+                    {video.platform}
+                    {video.duration ? ` · ${formatTime(video.duration)}` : ""}
+                    {video.uploader ? ` · ${video.uploader}` : ""}
+                  </p>
+                  {video.error ? <p className="vnote">{video.error}</p> : null}
+                </div>
+                <button className="ghost tiny" onClick={() => onRun(video.source_url)}>
+                  Dựng
+                </button>
+              </article>
+            );
+          })}
         </div>
       ) : (
         <p className="muted-note">Không tìm thấy video trong nguồn này.</p>

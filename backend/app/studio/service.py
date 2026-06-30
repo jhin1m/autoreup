@@ -13,7 +13,7 @@ class StudioService:
         self.settings = settings
         self.store = StudioStore(settings.data_dir / "studio" / "state.json")
         self.cookie_vault = CookieVault(settings.provider_cookies_dir)
-        self.discovery = SourceDiscovery(self.cookie_vault)
+        self.discovery = SourceDiscovery(self.cookie_vault, settings)
 
     def state(self):
         return self.store.load()

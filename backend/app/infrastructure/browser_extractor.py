@@ -48,11 +48,42 @@ class DouyinBrowserExtractor:
         self.videos_dir = videos_dir
         self.cookie_vault = cookie_vault
         self.script = root_dir / "tools" / "douyin_extract.mjs"
+        self.posts_script = root_dir / "tools" / "douyin_user_posts.mjs"
         self.browser_path = find_browser(browser_path)
         self.node_bin = node_bin
 
     def available(self) -> bool:
         return bool(self.browser_path) and shutil.which(self.node_bin) is not None and self.script.exists()
+
+    def list_user_posts(self, user_url: str, limit: int = 24) -> list[dict]:
+        """List a creator's recent posts via the headless browser.
+
+        Loads the /user/<sec_uid> page (Douyin's JS signs the request), captures the
+        aweme/post API responses, and returns ``[{id, desc, duration, cover}, ...]``.
+        """
+        if not self.browser_path:
+            raise BrowserExtractError("Không tìm thấy Chrome/Edge để chạy headless. Đặt AUTOREUP_BROWSER_PATH.")
+        if not self.posts_script.exists():
+            raise BrowserExtractError("Thiếu script liệt kê kênh (douyin_user_posts.mjs).")
+        cookies = self.cookie_vault.cookie_objects("douyin")
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(cookies, handle)
+            cookies_path = handle.name
+        try:
+            result = subprocess.run(
+                [self.node_bin, str(self.posts_script), "--url", user_url, "--cookies", cookies_path,
+                 "--browser", self.browser_path, "--limit", str(limit), "--timeout", "55000"],
+                capture_output=True, text=True, timeout=120,
+            )
+        finally:
+            Path(cookies_path).unlink(missing_ok=True)
+        if result.returncode != 0 or not result.stdout.strip():
+            raise BrowserExtractError(_reason(result.stderr) or "Không liệt kê được video của kênh.")
+        try:
+            info = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise BrowserExtractError("Kết quả liệt kê kênh không hợp lệ.") from exc
+        return info.get("videos") or []
 
     def download(self, url: str, video_id: str) -> dict:
         if not shutil.which(self.node_bin):
