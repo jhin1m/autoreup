@@ -1,33 +1,35 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as api from "../api";
+import { useImportChannel } from "../queries";
+import { useToast } from "../toast";
 import type { ChannelGroup } from "../types";
 
-/** Paste a channel link → auto-cluster its videos into series ("bộ") → review/rename →
- *  create. A channel mixes several shows, so each detected group becomes its own series. */
-export function ChannelImport({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
-  const [url, setUrl] = useState("");
+/** Channel → series. Given a channel URL, auto-cluster its videos into shows; existing
+ *  series are matched (sync, not duplicate). User reviews names / unticks, then imports. */
+export function ChannelImport({ url, onDone }: { url: string; onDone: () => void }) {
   const [groups, setGroups] = useState<ChannelGroup[] | null>(null);
   const [titles, setTitles] = useState<string[]>([]);
   const [skip, setSkip] = useState<Set<number>>(new Set());
-  const [phase, setPhase] = useState<"idle" | "scanning" | "importing">("idle");
-  const [message, setMessage] = useState("");
+  const [scanning, setScanning] = useState(true);
+  const importChannel = useImportChannel();
+  const { toast } = useToast();
 
-  async function scan() {
-    if (!url.trim()) return;
-    setPhase("scanning");
-    setMessage("");
-    try {
-      const result = await api.previewChannel(url.trim());
-      setGroups(result);
-      setTitles(result.map((g) => g.title));
-      // Pre-skip existing series that have no new episodes — nothing to sync.
-      setSkip(new Set(result.map((g, index) => (g.series_id && g.new_count === 0 ? index : -1)).filter((i) => i >= 0)));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Không quét được kênh");
-    } finally {
-      setPhase("idle");
-    }
-  }
+  useEffect(() => {
+    let alive = true;
+    api
+      .previewChannel(url)
+      .then((result) => {
+        if (!alive) return;
+        setGroups(result);
+        setTitles(result.map((g) => g.title));
+        setSkip(new Set(result.map((g, i) => (g.series_id && g.new_count === 0 ? i : -1)).filter((i) => i >= 0)));
+      })
+      .catch((error) => alive && toast(error instanceof Error ? error.message : "Không quét được kênh", "error"))
+      .finally(() => alive && setScanning(false));
+    return () => {
+      alive = false;
+    };
+  }, [url, toast]);
 
   async function importChosen() {
     if (!groups) return;
@@ -35,14 +37,12 @@ export function ChannelImport({ onClose, onImported }: { onClose: () => void; on
       .map((g, index) => ({ title: titles[index]?.trim() || g.title, series_id: g.series_id, episodes: g.episodes }))
       .filter((_, index) => !skip.has(index));
     if (!chosen.length) return;
-    setPhase("importing");
-    setMessage("");
     try {
-      await api.importChannel(url.trim(), chosen);
-      onImported();
+      const ids = await importChannel.mutateAsync({ url, groups: chosen });
+      toast(`Đã đồng bộ ${ids.length} bộ`, "success");
+      onDone();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Không tạo được bộ");
-      setPhase("idle");
+      toast(error instanceof Error ? error.message : "Không tạo được bộ", "error");
     }
   }
 
@@ -54,59 +54,35 @@ export function ChannelImport({ onClose, onImported }: { onClose: () => void; on
     });
   const chosenCount = groups ? groups.length - skip.size : 0;
 
+  if (scanning) return <p className="ci-hint">Đang quét kênh…</p>;
+  if (!groups || !groups.length) return <p className="muted-note">Không tách được bộ nào từ kênh này.</p>;
+
   return (
-    <div className="channel-import panel">
-      <div className="ci-head">
-        <span className="ci-tag mono">QUÉT KÊNH → TỰ TÁCH BỘ</span>
-        <button className="link" onClick={onClose}>Đóng</button>
+    <>
+      <p className="ci-hint">Tìm thấy {groups.length} bộ. Bộ đã có sẽ được bổ sung tập mới; bộ mới sẽ được tạo.</p>
+      <div className="ci-groups">
+        {groups.map((group, index) => (
+          <div key={index} className={`ci-group ${skip.has(index) ? "skip" : ""}`}>
+            <input type="checkbox" checked={!skip.has(index)} onChange={() => toggleSkip(index)} />
+            <input
+              className="ci-title-input"
+              value={titles[index] ?? ""}
+              onChange={(event) => setTitles((prev) => prev.map((t, i) => (i === index ? event.target.value : t)))}
+            />
+            {group.series_id ? (
+              <span className={`ci-badge ${group.new_count ? "new" : "same"}`}>
+                {group.new_count ? `đã có · +${group.new_count} tập mới` : "đã có · không mới"}
+              </span>
+            ) : (
+              <span className="ci-badge fresh">mới · {group.total} tập</span>
+            )}
+            <span className="ci-sample">{String((group.episodes[0] as { title?: string })?.title ?? "").slice(0, 28)}…</span>
+          </div>
+        ))}
       </div>
-      <div className="ci-scan">
-        <input
-          className="lib-input"
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-          placeholder="Dán link kênh (1 kênh nhiều bộ — hệ thống tự tách)…"
-          autoFocus
-        />
-        <button className="primary" disabled={phase === "scanning" || !url.trim()} onClick={scan}>
-          {phase === "scanning" ? "Đang quét…" : "Quét"}
-        </button>
-      </div>
-
-      {message ? <p className="lib-msg">{message}</p> : null}
-
-      {groups ? (
-        groups.length ? (
-          <>
-            <p className="ci-hint">Tìm thấy {groups.length} bộ. Bộ đã có sẽ được bổ sung tập mới; bộ mới sẽ được tạo.</p>
-            <div className="ci-groups">
-              {groups.map((group, index) => (
-                <div key={index} className={`ci-group ${skip.has(index) ? "skip" : ""}`}>
-                  <input type="checkbox" checked={!skip.has(index)} onChange={() => toggleSkip(index)} />
-                  <input
-                    className="ci-title-input"
-                    value={titles[index] ?? ""}
-                    onChange={(event) => setTitles((prev) => prev.map((t, i) => (i === index ? event.target.value : t)))}
-                  />
-                  {group.series_id ? (
-                    <span className={`ci-badge ${group.new_count ? "new" : "same"}`}>
-                      {group.new_count ? `đã có · +${group.new_count} tập mới` : "đã có · không mới"}
-                    </span>
-                  ) : (
-                    <span className="ci-badge fresh">mới · {group.total} tập</span>
-                  )}
-                  <span className="ci-sample">{String((group.episodes[0] as { title?: string })?.title ?? "").slice(0, 28)}…</span>
-                </div>
-              ))}
-            </div>
-            <button className="primary" disabled={!chosenCount || phase === "importing"} onClick={importChosen}>
-              {phase === "importing" ? "Đang đồng bộ…" : `Đồng bộ ${chosenCount} bộ`}
-            </button>
-          </>
-        ) : (
-          <p className="muted-note">Không tách được bộ nào từ kênh này.</p>
-        )
-      ) : null}
-    </div>
+      <button className="primary" disabled={!chosenCount || importChannel.isPending} onClick={importChosen}>
+        {importChannel.isPending ? "Đang đồng bộ…" : `Đồng bộ ${chosenCount} bộ`}
+      </button>
+    </>
   );
 }

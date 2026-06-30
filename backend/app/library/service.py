@@ -114,6 +114,27 @@ class LibraryService:
         total = len(self.store.list_episodes(series_id))
         return {"added": added, "total": total}
 
+    def add_video(self, url: str, series_id: str | None = None, title: str | None = None) -> dict:
+        """Single-video intake: discover one video and add it as an episode — into an
+        existing series, or a fresh 1-episode series. Returns the series + episode ids."""
+        videos = self.discovery.discover(url, limit=1)
+        if not videos:
+            raise LibraryError("Không lấy được video từ link này")
+        video = videos[0]
+        if series_id and self.store.get_series(series_id, with_sources=False):
+            sid = series_id
+        else:
+            series = self.store.create_series(title or video.title or "Video lẻ")
+            sid = series.id
+            if video.thumbnail_url:
+                self.store.update_series(sid, cover_url=video.thumbnail_url)
+        self.store.upsert_episodes(sid, [self._episode_from_source(sid, video)])
+        episode = next(
+            (e for e in self.store.list_episodes(sid) if e.platform_video_id == str(video.platform_video_id)),
+            None,
+        )
+        return {"series_id": sid, "episode_id": episode.id if episode else None}
+
     # ----- channel import (1 channel -> many series) ----------------------
     def preview_channel(self, url: str) -> list[dict]:
         """Discover a channel and cluster its videos into proposed series (not yet

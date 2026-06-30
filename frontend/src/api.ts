@@ -113,6 +113,14 @@ export async function previewChannel(url: string): Promise<ChannelGroup[]> {
   return ((await response.json()) as { groups: ChannelGroup[] }).groups;
 }
 
+export async function addVideo(url: string, seriesId?: string, title?: string): Promise<{ series_id: string; episode_id: string | null }> {
+  const response = await ok(
+    await fetch(`${LIB}/add-video`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ url, series_id: seriesId ?? null, title: title ?? null }) }),
+    "Không thêm được video",
+  );
+  return (await response.json()) as { series_id: string; episode_id: string | null };
+}
+
 export async function importChannel(
   url: string,
   groups: { title: string; series_id: string | null; episodes: unknown[] }[],

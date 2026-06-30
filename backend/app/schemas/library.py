@@ -41,6 +41,12 @@ class PreviewChannelRequest(BaseModel):
     url: str
 
 
+class AddVideoRequest(BaseModel):
+    url: str
+    series_id: str | None = None
+    title: str | None = None
+
+
 class ImportGroup(BaseModel):
     title: str
     platform: str | None = None

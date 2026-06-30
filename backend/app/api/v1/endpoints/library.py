@@ -10,6 +10,7 @@ from backend.app.library.models import DubState, Episode, Export, Series, Series
 from backend.app.library.service import LibraryError
 from backend.app.schemas.library import (
     AddSourceRequest,
+    AddVideoRequest,
     CreateExportRequest,
     CreateSeriesRequest,
     ImportChannelRequest,
@@ -58,6 +59,14 @@ def preview_channel(request: PreviewChannelRequest) -> dict:
 def import_channel(request: ImportChannelRequest) -> dict:
     ids = get_library_service().import_channel(request.url, [g.model_dump() for g in request.groups])
     return {"series_ids": ids}
+
+
+@router.post("/add-video")
+def add_video(request: AddVideoRequest) -> dict:
+    try:
+        return get_library_service().add_video(request.url, request.series_id, request.title)
+    except LibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ----- series -------------------------------------------------------------
