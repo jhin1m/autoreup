@@ -48,8 +48,10 @@ class _State:
 def _format_anchor_rows(anchors: list[Anchor], voice_cps: float, floor: int) -> str:
     # Each row carries an explicit character budget = how much Vietnamese fits in the
     # time this line is spoken. The model must condense to it (meaning over verbatim).
+    # No raw start-end timestamp column: the prompt never uses it, and having it inline
+    # made the model occasionally echo "8.03-14.39 ≤114 ..." into the translated TEXT.
     return "\n".join(
-        f"{a.id}\t{a.start:.2f}-{a.end:.2f}\t≤{_budget_chars(a, voice_cps, floor)}\t{a.source_zh}"
+        f"{a.id}\t≤{_budget_chars(a, voice_cps, floor)}\t{a.source_zh}"
         for a in anchors
     )
 

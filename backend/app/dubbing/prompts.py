@@ -71,10 +71,12 @@ TRANSLATE_SYSTEM = (
     "cắt dòng ĐÚNG TẠI dấu câu; không có dấu trong một đoạn dài thì nó buộc phải cắt giữa cụm (xấu). "
     "TUYỆT ĐỐI không để một mệnh đề dài liền mạch không dấu vượt {max_caption_chars} ký tự. Không cắt đôi "
     "từ hai âm tiết (vd 'rắc rối', 'chuẩn bị') — cứ viết tự nhiên, dấu câu lo việc ngắt.\n"
-    "Mỗi dòng gắn đúng một ANCHOR_ID có trong chunk. Dùng ⟂ để tách hai lượt thoại KHÁC người trong "
-    "cùng anchor.\n"
-    "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng:\n"
+    "Mỗi dòng gắn đúng một ANCHOR_ID có trong chunk. Dùng ⟂ (CHỈ ký tự này) để tách hai lượt thoại KHÁC "
+    "người trong cùng anchor — KHÔNG dùng | hay / để ngắt.\n"
+    "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
     "ANCHOR_ID<TAB>TEXT\n"
+    "TEXT chỉ là lời thoại tiếng Việt: TUYỆT ĐỐI KHÔNG chép lại cột ≤N ngân sách hay bất kỳ số/nhãn nào từ "
+    "input vào TEXT; không mở đầu bằng '≤123' hay dấu | / .\n"
     "Sau bảng thoại, có thể thêm tối đa 5 dòng MEMORY<TAB>KEY<TAB>VALUE để chunk sau biết tên/diễn biến/"
     "xưng hô đã chốt."
 )
@@ -84,9 +86,10 @@ TRANSLATE_USER = (
     "BỐI CẢNH/NHÂN VẬT người dùng cung cấp (ưu tiên tuyệt đối):\n{notes}\n\n"
     "MEMORY (đã chốt ở các chunk trước):\n{memory}\n\n"
     "ĐUÔI THOẠI TRƯỚC (nối mạch, không dịch lại):\n{prev_tail}\n\n"
-    "CHUNK HIỆN TẠI — ANCHOR_ID<TAB>TIME<TAB>≤CHARS<TAB>SOURCE_ZH:\n{anchors}\n\n"
-    "Cột ≤CHARS là ngân sách ký tự (đọc kịp trong thời gian nói); mỗi dòng hiển thị nên ≤ khoảng "
-    "{max_caption_chars} ký tự. Viết lời Việt cho MỌI ANCHOR_ID ở trên, rồi (tuỳ chọn) các dòng MEMORY. Chỉ TSV."
+    "CHUNK HIỆN TẠI — ANCHOR_ID<TAB>≤CHARS<TAB>SOURCE_ZH:\n{anchors}\n\n"
+    "Cột ≤CHARS là ngân sách ký tự (đọc kịp trong thời gian nói) — DÙNG để cô đọng, KHÔNG chép vào TEXT; "
+    "mỗi dòng hiển thị nên ≤ khoảng {max_caption_chars} ký tự. Viết lời Việt cho MỌI ANCHOR_ID ở trên, rồi "
+    "(tuỳ chọn) các dòng MEMORY. Chỉ TSV."
 )
 
 # --- Editor: gated QA over the translated rows ------------------------------
