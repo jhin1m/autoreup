@@ -94,13 +94,19 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     blank = sub_dir / "blank.png"
     Image.new("RGBA", (width, height), (0, 0, 0, 0)).save(blank)
 
+    # Anchor every caption to a FIXED baseline from the font's own metrics — NOT each
+    # line's bounding box. The bbox height varies with the glyphs present (a comma/period
+    # adds a descender, Vietnamese tone marks add height), so centering by bbox made the
+    # text jump up/down between cues. A constant baseline keeps it rock-steady; only
+    # ascenders/descenders extend from it, which is how subtitles are supposed to sit.
+    ascent, descent = font.getmetrics()
+    baseline_y = caption_cy + (ascent - descent) // 2  # center the fixed line-box on the band
+
     def render(text: str, path: Path) -> None:
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=3)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw.text(((width - tw) // 2 - bbox[0], caption_cy - th // 2 - bbox[1]), text,
-                  font=font, fill=(255, 255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0, 255))
+        draw.text((width // 2, baseline_y), text, font=font, anchor="ms",
+                  fill=(255, 255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0, 255))
         img.save(path)
 
     ordered = sorted([c for c in cues if (c.get("text") or "").strip()], key=lambda c: float(c["start"]))
