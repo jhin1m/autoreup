@@ -73,6 +73,8 @@ TRANSLATE_SYSTEM = (
     "cắt dòng ĐÚNG TẠI dấu câu; không có dấu trong một đoạn dài thì nó buộc phải cắt giữa cụm (xấu). "
     "TUYỆT ĐỐI không để một mệnh đề dài liền mạch không dấu vượt {max_caption_chars} ký tự. Không cắt đôi "
     "từ hai âm tiết (vd 'rắc rối', 'chuẩn bị') — cứ viết tự nhiên, dấu câu lo việc ngắt.\n"
+    "Nhẩm đếm ký tự MỖI đoạn giữa hai dấu: nếu một đoạn vượt {max_caption_chars} ký tự thì thêm dấu ngắt "
+    "hoặc lược ý phụ tới khi vừa — ưu tiên đọc-kịp hơn đủ chi tiết.\n"
     "Mỗi dòng gắn đúng một ANCHOR_ID có trong chunk. Dùng ⟂ (CHỈ ký tự này) để tách hai lượt thoại KHÁC "
     "người trong cùng anchor — KHÔNG dùng | hay / để ngắt.\n"
     "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
