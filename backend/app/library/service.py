@@ -296,7 +296,7 @@ class LibraryService:
                 raise LibraryError("Không tìm thấy video đã lồng tiếng cho các tập đã chọn")
             out = self.exports_dir / export.series_id / f"{export_id}.mp4"
             work = self.exports_dir / export.series_id / f"{export_id}.work"
-            _concat_videos(inputs, out, work)
+            _concat_videos(inputs, out, work, self.settings)
             rel = str(out.relative_to(self.settings.data_dir))
             self.store.update_export(export_id, state=ExportState.done.value, output_path=rel,
                                      duration=_probe_duration(out))
@@ -471,12 +471,12 @@ def _match_group(series_title: str, known_ids: set[str], groups: list[Group]) ->
     return next((g for g in groups if g.title and (g.title in title or title in g.title)), None)
 
 
-def _concat_videos(inputs: list[Path], output: Path, work_dir: Path) -> None:
-    """Normalise each episode to a common spec, then concat losslessly.
+def _concat_videos(inputs: list[Path], output: Path, work_dir: Path, settings) -> None:
+    """Concat episodes into one video, re-encoding as little as possible.
 
-    Episodes can differ in resolution/codec/fps, so a plain concat would fail or glitch.
-    We re-encode each to 1080p / 30fps / h264 + aac (uniform), then stream-copy them
-    together with the concat demuxer — straight join, no transition card."""
+    Hardsub now emits canonical 1080p/30fps/h264 + aac, so in the common case every clip
+    already shares a spec and we stream-copy them straight together (no second encode).
+    Only if a clip is off-spec (e.g. a legacy hardsub) do we normalise that clip first."""
     if not shutil.which("ffmpeg"):
         raise LibraryError("Cần ffmpeg để ghép video")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -484,27 +484,49 @@ def _concat_videos(inputs: list[Path], output: Path, work_dir: Path) -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    normalized: list[Path] = []
+    from backend.app.infrastructure.ffmpeg_encode import video_encode_args, canonical_scale_filter
+    target = (settings.video_width, settings.video_height, "h264")
+    scale_filter = canonical_scale_filter(settings)
+
+    clips: list[Path] = []
     for index, src in enumerate(inputs):
+        if _probe_video_params(src) == target:
+            clips.append(src)  # already canonical -> copy as-is
+            continue
         norm = work_dir / f"{index:03d}.mp4"
         subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-i", str(src),
-             "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,"
-                    "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            ["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", scale_filter,
+             *video_encode_args(settings),
              "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", str(norm)],
             check=True, capture_output=True, text=True,
         )
-        normalized.append(norm)
+        clips.append(norm)
 
     list_file = work_dir / "concat.txt"
-    list_file.write_text("".join(f"file '{p.name}'\n" for p in normalized), encoding="utf-8")
+    list_file.write_text("".join(f"file '{p.resolve()}'\n" for p in clips), encoding="utf-8")
     subprocess.run(
         ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(list_file),
          "-c", "copy", str(output)],
-        check=True, capture_output=True, text=True, cwd=str(work_dir),
+        check=True, capture_output=True, text=True,
     )
     shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _probe_video_params(path: Path) -> tuple[int, int, str] | None:
+    """(width, height, codec) of the first video stream, or None on failure.
+
+    Read fields by name (key=value) — ffprobe's CSV order is not the requested order."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,codec_name",
+             "-of", "default=noprint_wrappers=1", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        fields = dict(line.split("=", 1) for line in out.strip().splitlines() if "=" in line)
+        return int(fields["width"]), int(fields["height"]), fields["codec_name"]
+    except Exception:
+        return None
 
 
 def _probe_duration(path: Path) -> float | None:

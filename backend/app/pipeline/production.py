@@ -85,6 +85,7 @@ def _polish_llm(settings: Settings) -> LLMConfig:
 
 def _hardsub_config(settings: Settings):
     from backend.app.services.hardsub import HardsubConfig
+    from backend.app.infrastructure.ffmpeg_encode import video_encode_args, canonical_scale_filter
 
     font = settings.hardsub_font or str(settings.root_dir / "backend" / "app" / "assets" / "fonts" / "Bangers-Regular.ttf")
     return HardsubConfig(
@@ -94,6 +95,8 @@ def _hardsub_config(settings: Settings):
         band_pad=settings.hardsub_band_pad,
         darken=settings.hardsub_darken,
         bed_volume=settings.dub_bed_volume,
+        video_codec_args=tuple(video_encode_args(settings)),
+        scale_filter=canonical_scale_filter(settings),
     )
 
 

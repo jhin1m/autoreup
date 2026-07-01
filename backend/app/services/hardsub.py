@@ -30,6 +30,10 @@ class HardsubConfig:
     blur: int = 20            # boxblur radius (ffmpeg caps at 23); applied twice for strong coverage
     darken: float = 0.12
     bed_volume: float = 0.18
+    # Encoder + canonical geometry (filled from Settings). Defaults keep the old libx264,
+    # source-resolution behaviour so hardsub works standalone.
+    video_codec_args: tuple[str, ...] = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
+    scale_filter: str = ""  # empty = keep source size; else scale/pad/fps to a canonical output
 
 
 def detect_sub_band(video: Path, config: HardsubConfig) -> tuple[int, int, int, int] | None:
@@ -164,7 +168,8 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         )
     else:
         cover = "[0:v]copy[cov];"
-    video_graph = cover + "[cov][1:v]overlay=0:0[vo]"
+    scale = f",{config.scale_filter}" if config.scale_filter else ""
+    video_graph = cover + f"[cov][1:v]overlay=0:0{scale}[vo]"
 
     if has_voice:
         audio_graph = (
@@ -181,8 +186,9 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         "ffmpeg", "-y", "-v", "error", *inputs,
         "-filter_complex", video_graph + audio_graph,
         "-map", "[vo]", *amap,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
+        *config.video_codec_args,
+        # Fixed audio params so a compilation can concat hardsubs with `-c copy`.
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         str(output),
     ])
     return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues)}

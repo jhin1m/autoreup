@@ -1,4 +1,5 @@
 import json
+import queue
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -26,6 +27,12 @@ class JobService:
         self.pipeline = ProductionPipeline(settings)
         self._lock = threading.Lock()
         self._cancel_requested: set[str] = set()
+        # Bounded FIFO queue so picking many episodes at once doesn't spawn one
+        # pipeline thread per job (ASR + ffmpeg + TTS × N oversubscribes the box and
+        # crashes it). A small pool of workers drains the queue; the rest wait.
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._queued: set[str] = set()  # job_ids waiting or in flight, for de-dup
+        self._workers_started = False
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]
@@ -58,8 +65,35 @@ class JobService:
         return manifest
 
     def start_background(self, job_id: str) -> None:
-        thread = threading.Thread(target=self.run, args=(job_id,), daemon=True)
-        thread.start()
+        """Enqueue a job to run on the worker pool (FIFO, bounded concurrency)."""
+        with self._lock:
+            if job_id in self._queued:
+                return
+            self._queued.add(job_id)
+            self._ensure_workers()
+        self._queue.put(job_id)
+
+    def _ensure_workers(self) -> None:
+        """Lazily spin up the worker pool on first use. Caller holds ``self._lock``."""
+        if self._workers_started:
+            return
+        self._workers_started = True
+        count = max(1, self.settings.max_concurrent_jobs)
+        for i in range(count):
+            threading.Thread(target=self._worker_loop, name=f"job-worker-{i}", daemon=True).start()
+
+    def _worker_loop(self) -> None:
+        while True:
+            job_id = self._queue.get()
+            try:
+                self.run(job_id)
+            except Exception:
+                # run() already records failure on the manifest; never let a worker die.
+                pass
+            finally:
+                with self._lock:
+                    self._queued.discard(job_id)
+                self._queue.task_done()
 
     def run(self, job_id: str) -> None:
         manifest = self.get(job_id)

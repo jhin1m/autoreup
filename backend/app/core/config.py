@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     cookies_file: str | None = None
     browser_path: str | None = None  # Chrome/Edge binary for the headless Douyin extractor
     node_bin: str = "node"
+    # How many dub jobs run at once. Each job is CPU/RAM-heavy (ASR + ffmpeg + TTS),
+    # so starting a thread per episode (e.g. picking 30 chapters) oversubscribes the
+    # machine and crashes it. Jobs beyond this wait in a queue and run FIFO.
+    max_concurrent_jobs: int = 2
     max_chars: int = 60
     display_max_chars: int = 32
     display_max_lines: int = 1
@@ -84,6 +88,15 @@ class Settings(BaseSettings):
     hardsub_blur: int = 20
     hardsub_band_pad: int = 26
     hardsub_darken: float = 0.12
+    # Prefer Apple hardware H.264 encoder on macOS (h264_videotoolbox) over libx264:
+    # ~5-10x faster and offloads the CPU, so many concurrent dub jobs don't oversubscribe
+    # the box. Falls back to libx264 off-macOS or when videotoolbox isn't in the ffmpeg
+    # build. Hardsub already emits canonical 1080p/30fps so exports just stream-copy.
+    video_hw_encode: bool = True
+    video_bitrate: str = "8M"   # target for hardware encode (no CRF on videotoolbox)
+    video_fps: int = 30
+    video_width: int = 1920
+    video_height: int = 1080
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
     tts_text_mode: str = "natural"  # keep punctuation so the voice-over pauses naturally
