@@ -33,6 +33,33 @@ class JobService:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._queued: set[str] = set()  # job_ids waiting or in flight, for de-dup
         self._workers_started = False
+        self._reconcile_orphans()
+
+    def _reconcile_orphans(self) -> None:
+        """A fresh process has no worker threads for jobs a previous run left mid-flight,
+        and the pipeline can't resume a stage that was interrupted. Any job still marked
+        running/queued on disk at startup is orphaned (e.g. the server was restarted while
+        it was in voiceover/package) — mark it failed so the UI stops showing a permanent
+        'đang chạy' and the user can retry, instead of a job that hangs forever."""
+        try:
+            paths = list(self.settings.jobs_dir.glob("*/manifest.json"))
+        except OSError:
+            return
+        for path in paths:
+            try:
+                manifest = JobManifest.model_validate_json(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, ValueError, OSError):
+                continue
+            if manifest.state not in {JobState.running, JobState.queued}:
+                continue
+            if manifest.stages and manifest.stages[-1].status == StageStatus.running:
+                manifest.stages[-1].status = StageStatus.failed
+                manifest.stages[-1].ended_at = datetime.now(timezone.utc)
+                manifest.stages[-1].error = "interrupted (server restart)"
+            manifest.state = JobState.failed
+            manifest.error = "Bị gián đoạn khi khởi động lại server — bấm dịch lại để chạy tiếp."
+            manifest.touch()
+            self.save(manifest)
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]
