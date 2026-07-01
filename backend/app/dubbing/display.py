@@ -19,7 +19,7 @@ from pathlib import Path
 
 from backend.app.services.subtitle_formats import write_srt, write_vtt
 from .models import Anchor, AsrSegment, SpeechRow
-from .text import strip_explicit_turn_markers
+from .text import sanitize_caption, strip_explicit_turn_markers
 from .tsv_io import write_json
 
 _MIN_CUE_CHARS = 6
@@ -205,7 +205,7 @@ def build_timed_units(
     for anchor_id in order:
         rows = by_anchor[anchor_id]
         anchor = anchor_by_id.get(anchor_id)
-        vi_text = strip_explicit_turn_markers(" ".join(r.text for r in rows))
+        vi_text = sanitize_caption(strip_explicit_turn_markers(" ".join(r.text for r in rows)))
         if not vi_text:
             continue
         anchor_start, anchor_end = rows[0].anchor_start, rows[0].anchor_end

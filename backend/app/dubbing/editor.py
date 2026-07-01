@@ -16,7 +16,7 @@ from .glossary import format_glossary
 from .llm import LLMConfig, complete, parse_tsv_rows
 from .models import Anchor, GlossaryEntry, SpeechRow
 from .prompts import EDITOR_SYSTEM, EDITOR_USER
-from .text import clean, has_han, split_text_for_explicit_turns
+from .text import clean, has_han, sanitize_caption, split_text_for_explicit_turns
 
 _PATCH_SEVERITIES = {"BLOCKER", "ERROR"}
 
@@ -61,8 +61,8 @@ def _parse_findings_and_patches(raw: str) -> tuple[set[int], dict[int, str]]:
             patch = parse_tsv_rows(f"{cells[0]}\t{cells[1]}", expected_cols=3)
             if patch:
                 _, anchor_id, text = patch[0]
-                if anchor_id.strip().isdigit() and clean(text):
-                    patches[int(anchor_id)] = clean(text)
+                if anchor_id.strip().isdigit() and sanitize_caption(text):
+                    patches[int(anchor_id)] = sanitize_caption(text)
     return flagged, patches
 
 

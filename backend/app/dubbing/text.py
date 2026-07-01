@@ -29,6 +29,38 @@ def has_han(text: object) -> bool:
     return bool(HAN_RE.search(str(text or "")))
 
 
+# --- caption sanitation ----------------------------------------------------
+# The translator is fed rows shaped ANCHOR_ID<TAB>TIME<TAB>≤CHARS<TAB>SOURCE and
+# sometimes echoes the TIME/≤CHARS columns into its TEXT, or emits a stray '|' / '/'
+# where it should use ⟂, or doubles a comma. None of that should reach the voice or
+# the subtitle, so every translated line is run through sanitize_caption.
+_LEAD_TIME_RE = re.compile(r"^\s*\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:≤\s*\d+)?\s*")
+_LEAD_CPS_RE = re.compile(r"^\s*≤\s*\d+\s*")
+_LEAD_JUNK_RE = re.compile(r"^[\s|/·•▪◦>»]+")
+_SEP_RE = re.compile(r"\s[|/]\s")                     # spaced pipe/slash used as a separator
+_MULTI_COMMA_RE = re.compile(r"\s*[,，](?:\s*[,，])+")  # ",," / ", ," / "，，" -> ", "
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?…])")
+_EMPTY_QUOTES_RE = re.compile(r"[\"“”]{2,}")           # "", “”, """ -> gone
+_TRAIL_JUNK_RE = re.compile(r"[\s,;:|/·–—]+$")         # trailing bare separators (keep . ! ? … and quotes)
+
+
+def sanitize_caption(text: object) -> str:
+    """Strip leaked input columns / stray separators / doubled punctuation the LLM adds,
+    so neither the TTS nor the subtitle carries junk like '8.03-14.39 ≤114 ...', '| ...',
+    '..., / ...', ',,' or '""'."""
+    t = clean(text)
+    t = _LEAD_TIME_RE.sub("", t)
+    t = _LEAD_CPS_RE.sub("", t)
+    t = _LEAD_JUNK_RE.sub("", t)
+    t = _SEP_RE.sub(" ", t)
+    t = t.replace("|", " ")           # any remaining stray pipe (never valid in captions)
+    t = _EMPTY_QUOTES_RE.sub("", t)
+    t = _MULTI_COMMA_RE.sub(", ", t)
+    t = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", t)
+    t = _TRAIL_JUNK_RE.sub("", t)
+    return clean(t)
+
+
 def strip_explicit_turn_markers(text: object) -> str:
     return clean(EXPLICIT_TURN_BREAK_RE.sub(" ", clean(text)))
 

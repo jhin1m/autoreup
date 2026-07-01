@@ -16,7 +16,7 @@ from .glossary import format_glossary
 from .llm import LLMConfig, complete, parse_tsv_rows
 from .models import Anchor, Chunk, GlossaryEntry, SpeechRow
 from .prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
-from .text import clean, has_han, split_text_for_explicit_turns
+from .text import clean, has_han, sanitize_caption, split_text_for_explicit_turns
 
 _TAIL_CHARS = 240
 _MEMORY_LIMIT = 40
@@ -78,7 +78,7 @@ def _parse_chunk_output(raw: str, valid_ids: set[int]) -> tuple[dict[int, str], 
             continue
         if anchor_id not in valid_ids:
             continue
-        text = clean(cells[1])
+        text = sanitize_caption(cells[1])
         if text:
             texts[anchor_id] = text
     return texts, memory
