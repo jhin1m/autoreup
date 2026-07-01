@@ -26,10 +26,12 @@ class Settings(BaseSettings):
     cookies_file: str | None = None
     browser_path: str | None = None  # Chrome/Edge binary for the headless Douyin extractor
     node_bin: str = "node"
-    # How many dub jobs run at once. Each job is CPU/RAM-heavy (ASR + ffmpeg + TTS),
-    # so starting a thread per episode (e.g. picking 30 chapters) oversubscribes the
-    # machine and crashes it. Jobs beyond this wait in a queue and run FIFO.
-    max_concurrent_jobs: int = 2
+    # How many dub jobs run at once. Jobs beyond this wait in a FIFO queue. Most of a
+    # job's wall time is waiting on remote services (download, ASR, LLM, CapCut TTS) and
+    # the one CPU-heavy step (encode) is now GPU-offloaded, so the local machine isn't the
+    # limit — the ceiling is remote fan-out (≈ max_concurrent_jobs × tts_workers requests
+    # to CapCut). 4 overlaps I/O waits well; lower if CapCut/LLM start throttling.
+    max_concurrent_jobs: int = 4
     max_chars: int = 60
     display_max_chars: int = 32
     display_max_lines: int = 1

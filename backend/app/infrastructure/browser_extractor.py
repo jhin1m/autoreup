@@ -128,7 +128,9 @@ class DouyinBrowserExtractor:
                  "--browser", self.browser_path, "--timeout", "55000"],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                # Backstop only: the script has its own 78s watchdog and fails fast on a
+                # CAPTCHA page, so this should rarely fire.
+                timeout=95,
             )
         finally:
             Path(cookies_path).unlink(missing_ok=True)

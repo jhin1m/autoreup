@@ -64,6 +64,16 @@ function done(payload) {
   process.exit(0);
 }
 
+// Hard watchdog: a CDP send can hang (e.g. Douyin serves a CAPTCHA interstitial and the
+// page never settles), stalling the main loop past its own deadline. This guarantees the
+// process exits — and fails FAST with a clear reason — instead of hanging until the
+// caller's kill. Budget = devtools wait (15s) + loop timeout + a small buffer.
+const watchdog = setTimeout(
+  () => fail("Douyin không phản hồi (có thể đang chặn / yêu cầu xác minh CAPTCHA). Thử lại sau hoặc cập nhật cookie."),
+  15000 + timeout + 8000,
+);
+watchdog.unref?.();
+
 async function getJson(pathname) {
   const res = await fetch(`http://127.0.0.1:${debugPort}${pathname}`);
   return res.json();
@@ -206,6 +216,11 @@ async function main() {
         sessionId,
       );
       const data = JSON.parse(ev.result.value || "{}");
+      // Douyin's verification interstitial — bail immediately with a clear reason
+      // rather than spinning until the deadline.
+      if (/验证|verify|captcha|安全验证/i.test(data.title || "")) {
+        fail("Douyin yêu cầu xác minh (CAPTCHA). Cần cập nhật cookie Douyin.");
+      }
       title = (data.title || "").replace(/ - 抖音$/, "").trim() || title;
       if (data.dur && isFinite(data.dur)) duration = data.dur;
       if (isStream(data.src) && !isAudio(data.src) && !video) video = data.src;
