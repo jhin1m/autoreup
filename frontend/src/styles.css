@@ -1768,3 +1768,11 @@ select.lib-input { cursor: pointer; }
 .settings-state { font-size: 11px; color: var(--muted); }
 .settings-row.ok .prov-dot { background: var(--jade); }
 .settings-row.off .prov-dot { background: var(--rose); }
+
+/* bilingual titles */
+.ep-title-zh { margin: 1px 0 3px; font-size: 10.5px; color: var(--faint); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-bar-left { display: flex; align-items: center; gap: 16px; }
+.pv-titles { min-width: 0; }
+.pv-title-zh { margin: 2px 0 0; font-size: 11px; color: var(--faint); }
+.pv-cover { max-height: 200px; border-radius: 8px; object-fit: contain; }
+.pv-empty img.pv-cover { max-width: 90%; }

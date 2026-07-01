@@ -105,6 +105,7 @@ export type Episode = {
   platform_video_id: string;
   source_url: string;
   title: string;
+  title_vi: string | null;
   thumbnail_url: string | null;
   duration: number | null;
   uploader: string | null;

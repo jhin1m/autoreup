@@ -134,6 +134,12 @@ def translate(series_id: str, request: TranslateRequest) -> dict:
     return {"jobs": job_ids}
 
 
+@router.post("/series/{series_id}/translate-titles")
+def translate_titles(series_id: str) -> dict:
+    _series_or_404(series_id)
+    return {"translated": get_library_service().translate_titles(series_id)}
+
+
 @router.delete("/episodes/{episode_id}/dub", status_code=204)
 def delete_episode_dub(episode_id: str) -> None:
     if not get_library_service().delete_episode_dub(episode_id):

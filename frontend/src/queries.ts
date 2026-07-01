@@ -84,6 +84,11 @@ export function useDeleteEpisodeDub(seriesId: string) {
   return useMutation({ mutationFn: (episodeId: string) => api.deleteEpisodeDub(episodeId), onSuccess: () => invalidate(seriesId) });
 }
 
+export function useTranslateTitles(seriesId: string) {
+  const invalidate = useSeriesInvalidator();
+  return useMutation({ mutationFn: () => api.translateTitles(seriesId), onSuccess: () => invalidate(seriesId) });
+}
+
 export function useCreateExport(seriesId: string) {
   const invalidate = useSeriesInvalidator();
   return useMutation({

@@ -15,6 +15,7 @@ import {
   useScanSeries,
   useSeries,
   useTranslate,
+  useTranslateTitles,
 } from "../queries";
 import { useToast } from "../toast";
 import type { Episode, Series } from "../types";
@@ -96,7 +97,7 @@ export function SeriesPage() {
         <TabButton active={tab === "export"} onClick={() => setTab("export")}>Export · {series.export_count}</TabButton>
       </div>
 
-      {tab === "source" ? <SourceTab episodes={episodes} pending={translate.isPending} onTranslate={doTranslate} /> : null}
+      {tab === "source" ? <SourceTab seriesId={id} episodes={episodes} pending={translate.isPending} onTranslate={doTranslate} onPreview={setPreview} /> : null}
 
       {tab === "dubbed" ? (
         <DubbedTab series={series} dubbed={dubbed} onPreview={setPreview} pending={createExport.isPending}
@@ -194,8 +195,16 @@ function SourceBar({ series, scanning, onScan }: { series: Series; scanning: boo
 
 /* ---------- tab: source episodes -> translate ---------- */
 
-function SourceTab({ episodes, pending, onTranslate }: { episodes: Episode[]; pending: boolean; onTranslate: (ids: string[]) => void }) {
+function SourceTab({ seriesId, episodes, pending, onTranslate, onPreview }: {
+  seriesId: string;
+  episodes: Episode[];
+  pending: boolean;
+  onTranslate: (ids: string[]) => void;
+  onPreview: (episode: Episode) => void;
+}) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const translateTitles = useTranslateTitles(seriesId);
+  const { toast } = useToast();
   const toggle = (id: string) => setSelected((prev) => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -203,22 +212,33 @@ function SourceTab({ episodes, pending, onTranslate }: { episodes: Episode[]; pe
   });
   const selectable = episodes.filter((e) => e.dub_state === "none" || e.dub_state === "failed");
   const allSel = selectable.length > 0 && selectable.every((e) => selected.has(e.id));
+  const untranslated = episodes.filter((e) => !e.title_vi).length;
 
   if (!episodes.length) return <p className="muted-note">Chưa có tập. Thêm link kênh rồi bấm “Quét tập mới”.</p>;
 
   return (
     <>
       <div className="sd-bar">
-        <button className="link" onClick={() => setSelected(allSel ? new Set() : new Set(selectable.map((e) => e.id)))}>
-          {allSel ? "Bỏ chọn" : "Chọn tất cả chưa dịch"}
-        </button>
+        <div className="sd-bar-left">
+          <button className="link" onClick={() => setSelected(allSel ? new Set() : new Set(selectable.map((e) => e.id)))}>
+            {allSel ? "Bỏ chọn" : "Chọn tất cả chưa dịch"}
+          </button>
+          {untranslated ? (
+            <button className="link" disabled={translateTitles.isPending} onClick={async () => {
+              const n = await translateTitles.mutateAsync();
+              toast(`Đã dịch ${n} tiêu đề`, "success");
+            }}>
+              {translateTitles.isPending ? "Đang dịch tiêu đề…" : `Dịch tiêu đề (${untranslated})`}
+            </button>
+          ) : null}
+        </div>
         <button className="primary" disabled={!selected.size || pending} onClick={() => onTranslate([...selected])}>
           {pending ? "Đang tạo…" : `Dịch ${selected.size || ""} tập`}
         </button>
       </div>
       <div className="ep-grid">
         {episodes.map((ep) => (
-          <EpisodeCard key={ep.id} ep={ep} selected={selected.has(ep.id)} onToggle={() => toggle(ep.id)} />
+          <EpisodeCard key={ep.id} ep={ep} selected={selected.has(ep.id)} onToggle={() => toggle(ep.id)} onOpen={() => onPreview(ep)} />
         ))}
       </div>
     </>
@@ -351,7 +371,8 @@ function EpisodeCard({ ep, selected, order, onToggle, onOpen }: {
       <button className="ep-main" onClick={onOpen ?? onToggle} title={ep.title}>
         <div className="ep-thumb">{ep.thumbnail_url ? <img src={thumbSrc(ep.thumbnail_url)} alt="" loading="lazy" /> : <span className="reel" aria-hidden />}</div>
         <div className="ep-meta">
-          <p className="ep-title">{ep.title}</p>
+          <p className="ep-title">{ep.title_vi || ep.title}</p>
+          {ep.title_vi ? <p className="ep-title-zh">{ep.title}</p> : null}
           <p className="mono tiny">
             <span className={`dub-dot ${ep.dub_state}`} />{DUB_STATE_VI[ep.dub_state]}
             {ep.duration ? ` · ${formatDuration(ep.duration)}` : ""}

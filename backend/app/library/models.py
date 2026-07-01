@@ -53,6 +53,7 @@ class Episode(BaseModel):
     platform_video_id: str
     source_url: str
     title: str
+    title_vi: str | None = None   # Vietnamese title (bilingual display)
     thumbnail_url: str | None = None
     duration: float | None = None
     uploader: str | None = None

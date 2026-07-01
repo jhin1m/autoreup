@@ -67,6 +67,17 @@ CREATE INDEX IF NOT EXISTS idx_export_series ON export(series_id);
 """
 
 
+# Additive column migrations applied on top of the base schema (SQLite can't do
+# "ADD COLUMN IF NOT EXISTS", so we check first). Append-only, never rewrite.
+_MIGRATIONS = [
+    ("title_vi", "ALTER TABLE episode ADD COLUMN title_vi TEXT"),  # Vietnamese title (bilingual UI)
+]
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
 class LibraryDB:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -83,6 +94,9 @@ class LibraryDB:
             conn = sqlite3.connect(self.path)
             try:
                 conn.executescript(_SCHEMA)
+                for column, ddl in _MIGRATIONS:
+                    if not _has_column(conn, "episode", column):
+                        conn.execute(ddl)
                 conn.commit()
             finally:
                 conn.close()

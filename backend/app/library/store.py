@@ -251,11 +251,17 @@ class LibraryStore:
             export_count=r["export_count"] if "export_count" in keys else 0,
         )
 
+    def set_episode_title_vi(self, episode_id: str, title_vi: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute("UPDATE episode SET title_vi = ? WHERE id = ?", (title_vi, episode_id))
+
     @staticmethod
     def _row_to_episode(r) -> Episode:
+        keys = r.keys()
         return Episode(
             id=r["id"], series_id=r["series_id"], platform=Platform(r["platform"]),
             platform_video_id=r["platform_video_id"], source_url=r["source_url"], title=r["title"],
+            title_vi=r["title_vi"] if "title_vi" in keys else None,
             thumbnail_url=r["thumbnail_url"], duration=r["duration"], uploader=r["uploader"],
             discovered_at=r["discovered_at"], dub_job_id=r["dub_job_id"], dub_state=DubState(r["dub_state"]),
         )

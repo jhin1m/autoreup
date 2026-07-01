@@ -115,6 +115,7 @@ class LibraryService:
             cover = next((e.thumbnail_url for e in self.store.list_episodes(series_id) if e.thumbnail_url), None)
             if cover:
                 self.store.update_series(series_id, cover_url=cover)
+        self._translate_titles_bg(series_id)
         total = len(self.store.list_episodes(series_id))
         return {"added": added, "total": total}
 
@@ -137,6 +138,7 @@ class LibraryService:
             (e for e in self.store.list_episodes(sid) if e.platform_video_id == str(video.platform_video_id)),
             None,
         )
+        self._translate_titles_bg(sid)
         return {"series_id": sid, "episode_id": episode.id if episode else None}
 
     # ----- channel import (1 channel -> many series) ----------------------
@@ -191,6 +193,7 @@ class LibraryService:
                 cover = next((e.get("thumbnail_url") for e in episodes_in if e.get("thumbnail_url")), None)
                 if cover:
                     self.store.update_series(series_id, cover_url=cover)
+            self._translate_titles_bg(series_id)
             touched.append(series_id)
         return touched
 
@@ -370,6 +373,35 @@ class LibraryService:
             "duration": video.duration,
             "uploader": video.uploader,
         }
+
+    # ----- title translation (bilingual display) --------------------------
+    def translate_titles(self, series_id: str) -> int:
+        """Batch-translate untranslated episode titles to Vietnamese (kept alongside the
+        original for bilingual display). Best-effort — LLM hiccup leaves titles as-is."""
+        pending = [e for e in self.store.list_episodes(series_id) if not e.title_vi]
+        if not pending:
+            return 0
+        lines = "\n".join(f"{i}\t{e.title}" for i, e in enumerate(pending))
+        system = (
+            "Dịch tiêu đề tập phim sang tiếng Việt: TỰ NHIÊN, ngắn gọn, cuốn hút; GIỮ số tập "
+            "(vd '第37集'→'Tập 37'); BỎ hashtag và ký hiệu thừa. Chỉ trả JSON: "
+            '[{"i": chỉ_số, "vi": "tiêu đề tiếng Việt"}]'
+        )
+        try:
+            raw = complete(system, f"Danh sách (chỉ_số<TAB>tiêu_đề):\n{lines}", self._llm())
+            data = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
+        except Exception:
+            return 0
+        count = 0
+        for item in data:
+            i, vi = item.get("i"), (item.get("vi") or "").strip()
+            if isinstance(i, int) and 0 <= i < len(pending) and vi:
+                self.store.set_episode_title_vi(pending[i].id, vi)
+                count += 1
+        return count
+
+    def _translate_titles_bg(self, series_id: str) -> None:
+        threading.Thread(target=lambda: self.translate_titles(series_id), daemon=True).start()
 
     # ----- LLM-assisted naming / clustering -------------------------------
     def _llm(self) -> LLMConfig:
