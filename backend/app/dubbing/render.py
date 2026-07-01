@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from backend.app.services.audio import align_audio, assemble_track, master_voice, probe_duration, require_ffmpeg, trim_silence
+from backend.app.services.audio import align_audio, assemble_track, master_voice, probe_duration, require_ffmpeg, speed_clip, trim_silence
 from backend.app.services.tts import (
     HttpTtsProvider,
     TtsBlock,
@@ -188,6 +188,7 @@ def render(
                 rp.parent.mkdir(parents=True, exist_ok=True)
                 rp.write_bytes(audio)
                 trim_silence(rp)
+                speed_clip(rp, config.synth_rate)  # CapCut ignores its rate param; apply it here
 
     def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path, float, float], tuple[int, float]]:
         raw_path = raw_path_for(block)
@@ -197,6 +198,7 @@ def render(
                 raise RuntimeError(f"native synth produced no audio for block {block.block_id}")
             raw_path.write_bytes(provider.synthesize(block.text))
             trim_silence(raw_path)  # drop the TTS head/tail silence so speech lands at placement
+            speed_clip(raw_path, config.synth_rate)  # CapCut ignores its rate param; apply it here
 
         target = block.duration + config.voice_lead
         # Cache the tempo-fitted clip too, keyed by (raw clip, target window, tempo

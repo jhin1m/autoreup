@@ -130,6 +130,18 @@ def master_voice(input_path: Path, output_path: Path, pitch: float = 1.0) -> Non
     ])
 
 
+def speed_clip(path: Path, rate: float) -> None:
+    """Speed up (or slow) a clip in place by ``rate`` via atempo. Needed because the
+    CapCut synth IGNORES its ``rate`` parameter (verified: 1.0 and 1.4 give identical
+    audio), so the only way to change the speaking rate is to time-stretch locally."""
+    if abs(rate - 1.0) < 1e-3:
+        return
+    tmp = path.with_name(path.stem + ".sp" + path.suffix)
+    run_command(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-filter:a", atempo_chain(rate), str(tmp)])
+    if tmp.exists() and tmp.stat().st_size > 512:
+        tmp.replace(path)
+
+
 def trim_silence(path: Path, threshold_db: float = -45.0, keep: float = 0.03) -> None:
     """Strip leading/trailing silence from a synthesized clip so it starts and ends on
     speech. CapCut adds ~0.1-0.2s of head silence; left in, the clip (placed at the

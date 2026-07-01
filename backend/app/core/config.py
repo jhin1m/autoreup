@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     capcut_batch_concurrency: int = 8  # concurrent batch requests
     tts_voice: str = "BV421_vivn_streaming"
     tts_speed: float = 1.0  # neutral synth; timing is fitted by ffmpeg tempo, not provider speed
-    tts_synth_rate: float = 1.28  # CapCut playback rate at synth — >1.0 = snappier (less "chậm"); raised from 1.22
+    tts_synth_rate: float = 1.06  # local atempo speed-up applied post-synth (CapCut ignores its own rate param); >1.0 = snappier
     # Master-stage pitch lift via resample+atempo. That double time-stretch is the main
     # source of the raspy "rè" artifact (ffmpeg here has no rubberband for a clean shift),
     # so keep it OFF (1.0). The presence EQ in VOICE_MASTER_CHAIN already adds brightness.
@@ -128,7 +128,11 @@ class Settings(BaseSettings):
     # the picture ("khớp ảnh") AND the subtitle (which is derived from the voice
     # window). glue_gap=0 disables the earlier-shifting glue — it traded picture/sub
     # sync for marginal smoothness. crossfade still declicks clip edges.
-    tts_glue_gap: float = 0.0
+    # Close underfill micro-gaps: when the condensed voice is shorter than its source
+    # window, the leftover silence made the dub feel choppy/slow ("chậm chậm"). Any gap
+    # smaller than this butt-joins to the previous line so speech flows continuously; only
+    # real on-screen pauses (>= this) keep their absolute onset for picture sync.
+    tts_glue_gap: float = 0.22
     tts_crossfade: float = 0.06
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True
