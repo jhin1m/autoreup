@@ -1,7 +1,31 @@
 import { useEffect, useState } from "react";
 import * as api from "../api";
 import type { Episode, JobManifest } from "../types";
-import { latestArtifact } from "../util";
+import { STAGE_VI, dubErrorVi, latestArtifact } from "../util";
+
+const STAGE_ORDER = ["download", "asr", "glossary", "translate", "edit", "qa", "voiceover", "package"];
+
+/** Pipeline checklist so a translating/failed episode shows how far it got and where. */
+function StageProgress({ ep }: { ep: Episode }) {
+  const done = ep.dub_stage_index ?? 0;
+  const failed = ep.dub_state === "failed";
+  return (
+    <div className="pv-stages">
+      <ol>
+        {STAGE_ORDER.map((name, i) => {
+          const state = failed && i === done - 1 ? "fail" : i < done ? "done" : i === done && !failed ? "now" : "todo";
+          return (
+            <li key={name} className={`stg ${state}`}>
+              <span className="stg-mark" aria-hidden>{state === "done" ? "✓" : state === "fail" ? "✕" : state === "now" ? "●" : "○"}</span>
+              {STAGE_VI[name] ?? name}
+            </li>
+          );
+        })}
+      </ol>
+      {failed && ep.dub_error ? <p className="pv-err" title={ep.dub_error}>⚠ {dubErrorVi(ep.dub_error)}</p> : null}
+    </div>
+  );
+}
 
 /** Watch/inspect one episode — the only "studio" surface. A dubbed episode plays its
  *  local video (original/dubbed toggle); a not-yet-dubbed one shows the cover with a
@@ -48,14 +72,14 @@ export function Preview({
             <video key={art.path} controls autoPlay playsInline src={`/media/${art.path}`} />
           ) : (
             <div className="pv-empty">
-              {episode.thumbnail_url ? <img className="pv-cover" src={`/api/v1/library/thumb?url=${encodeURIComponent(episode.thumbnail_url)}`} alt="" /> : <span className="reel" aria-hidden />}
-              <p>
-                {error
-                  ? "Không tải được video."
-                  : episode.dub_state === "translating"
-                    ? "Đang lồng tiếng…"
-                    : "Tập này chưa lồng tiếng. Xem bản gốc rồi bấm Dịch."}
-              </p>
+              {episode.dub_state === "translating" || episode.dub_state === "failed" ? (
+                <StageProgress ep={episode} />
+              ) : (
+                <>
+                  {episode.thumbnail_url ? <img className="pv-cover" src={`/api/v1/library/thumb?url=${encodeURIComponent(episode.thumbnail_url)}`} alt="" /> : <span className="reel" aria-hidden />}
+                  <p>{error ? "Không tải được video." : "Tập này chưa lồng tiếng. Xem bản gốc rồi bấm Dịch."}</p>
+                </>
+              )}
             </div>
           )}
         </div>

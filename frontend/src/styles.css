@@ -1776,3 +1776,19 @@ select.lib-input { cursor: pointer; }
 .pv-title-zh { margin: 2px 0 0; font-size: 11px; color: var(--faint); }
 .pv-cover { max-height: 200px; border-radius: 8px; object-fit: contain; }
 .pv-empty img.pv-cover { max-width: 90%; }
+
+/* Dub progress: pipeline checklist in Preview + inline error on cards */
+.pv-stages { width: 100%; max-width: 340px; margin: 0 auto; text-align: left; }
+.pv-stages ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pv-stages .stg { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--faint); }
+.pv-stages .stg-mark { width: 16px; text-align: center; }
+.pv-stages .stg.done { color: var(--jade); }
+.pv-stages .stg.now { color: var(--amber); font-weight: 600; }
+.pv-stages .stg.now .stg-mark { animation: pulse 1.2s ease-in-out infinite; }
+.pv-stages .stg.fail { color: var(--rose); font-weight: 600; }
+.pv-stages .stg.todo { color: var(--faint); }
+.pv-err { margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--rose-soft);
+  color: #f3b6a8; font-size: 12px; word-break: break-word; }
+.ep-error { margin: 2px 0 0; color: var(--rose); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 100%; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
-from backend.app.domain.jobs import JobInput, JobState
+from backend.app.domain.jobs import JobInput, JobState, StageStatus
 from backend.app.dubbing.llm import LLMConfig, complete
 from backend.app.library.db import LibraryDB
 from backend.app.library.grouping import Group, cluster_into_series, episode_number, show_tags
@@ -224,7 +224,31 @@ class LibraryService:
     # ----- episodes -------------------------------------------------------
     def list_episodes(self, series_id: str, dub_state: DubState | None = None) -> list[Episode]:
         self._reconcile(series_id)
-        return self.store.list_episodes(series_id, dub_state)
+        episodes = self.store.list_episodes(series_id, dub_state)
+        for ep in episodes:
+            if ep.dub_job_id and ep.dub_state in {DubState.translating, DubState.failed}:
+                self._attach_dub_progress(ep)
+        return episodes
+
+    def _attach_dub_progress(self, ep: Episode) -> None:
+        """Fill an episode's transient dub_stage/index/total/error from its job manifest so
+        the UI can show 'bước X/8 · <stage>' while translating and the reason if it failed."""
+        try:
+            m = self.jobs.get(ep.dub_job_id)
+        except Exception:
+            return
+        ep.dub_stage_total = len(m.config.stages) if m.config and m.config.stages else 8
+        if m.state == JobState.failed:
+            failed = next((s for s in reversed(m.stages) if s.status == StageStatus.failed), None)
+            ep.dub_stage = failed.name if failed else None
+            ep.dub_stage_index = len(m.stages)
+            ep.dub_error = m.error or (failed.error if failed else None)
+        elif not m.stages:
+            ep.dub_stage = "queued"
+            ep.dub_stage_index = 0
+        else:
+            ep.dub_stage = m.stages[-1].name
+            ep.dub_stage_index = len(m.stages)
 
     def translate(self, series_id: str, episode_ids: list[str]) -> list[str]:
         """Dub each episode (one job). Re-translating an episode replaces its previous

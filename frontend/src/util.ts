@@ -36,3 +36,43 @@ export const EXPORT_STATE_VI: Record<ExportState, string> = {
   done: "Xong",
   failed: "Lỗi",
 };
+
+// Pipeline stage → human label, in run order. Keep in sync with backend StageName.
+export const STAGE_VI: Record<string, string> = {
+  queued: "Đang chờ",
+  download: "Tải video",
+  asr: "Nhận dạng lời",
+  glossary: "Lập thuật ngữ",
+  translate: "Dịch",
+  edit: "Biên tập",
+  qa: "Kiểm tra",
+  voiceover: "Lồng tiếng",
+  package: "Ghép & burn phụ đề",
+};
+
+/** Turn a raw pipeline error into a short, actionable Vietnamese message. */
+export function dubErrorVi(error: string | null | undefined): string {
+  const e = error ?? "";
+  if (/timed out|timeout/i.test(e) && /douyin_extract|download/i.test(e))
+    return "Không tải được video (Douyin chặn hoặc hết thời gian). Thử lại sau ít phút.";
+  if (/Connection refused|Errno 61/i.test(e)) return "Máy chủ dịch (LLM :8099) chưa bật.";
+  if (/验证码|captcha/i.test(e)) return "Douyin yêu cầu xác minh (CAPTCHA). Cần cookie mới.";
+  if (/ffmpeg|boxblur|libx264|videotoolbox/i.test(e)) return "Lỗi khi dựng/burn video (ffmpeg).";
+  if (/ASR worker|asr/i.test(e)) return "Lỗi nhận dạng lời (ASR worker).";
+  return e.length > 160 ? e.slice(0, 160) + "…" : e || "Lỗi không rõ.";
+}
+
+/** "bước 5/8 · Lồng tiếng" for a translating episode, or null if no progress data. */
+export function dubProgressLabel(ep: {
+  dub_stage: string | null;
+  dub_stage_index: number | null;
+  dub_stage_total: number | null;
+}): string | null {
+  if (!ep.dub_stage) return null;
+  const label = STAGE_VI[ep.dub_stage] ?? ep.dub_stage;
+  if (ep.dub_stage === "queued") return label;
+  if (ep.dub_stage_index && ep.dub_stage_total) {
+    return `bước ${ep.dub_stage_index}/${ep.dub_stage_total} · ${label}`;
+  }
+  return label;
+}

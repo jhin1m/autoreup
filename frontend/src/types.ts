@@ -112,6 +112,10 @@ export type Episode = {
   discovered_at: string;
   dub_job_id: string | null;
   dub_state: DubState;
+  dub_stage: string | null;
+  dub_stage_index: number | null;
+  dub_stage_total: number | null;
+  dub_error: string | null;
 };
 
 export type Export = {

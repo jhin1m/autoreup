@@ -60,6 +60,12 @@ class Episode(BaseModel):
     discovered_at: str = Field(default_factory=now_iso)
     dub_job_id: str | None = None
     dub_state: DubState = DubState.none
+    # Transient dub progress, filled from the job manifest at list time (not persisted):
+    # which stage it's on (X of total) while translating, or the error if it failed.
+    dub_stage: str | None = None
+    dub_stage_index: int | None = None
+    dub_stage_total: int | None = None
+    dub_error: str | None = None
 
 
 class Series(BaseModel):

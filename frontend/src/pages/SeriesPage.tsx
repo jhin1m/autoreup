@@ -19,7 +19,7 @@ import {
 } from "../queries";
 import { useToast } from "../toast";
 import type { Episode, Series } from "../types";
-import { DUB_STATE_VI, EXPORT_STATE_VI, formatDuration, thumbSrc } from "../util";
+import { DUB_STATE_VI, EXPORT_STATE_VI, dubErrorVi, dubProgressLabel, formatDuration, thumbSrc } from "../util";
 
 type Tab = "source" | "dubbed" | "export";
 
@@ -375,8 +375,12 @@ function EpisodeCard({ ep, selected, order, onToggle, onOpen }: {
           {ep.title_vi ? <p className="ep-title-zh">{ep.title}</p> : null}
           <p className="mono tiny">
             <span className={`dub-dot ${ep.dub_state}`} />{DUB_STATE_VI[ep.dub_state]}
+            {ep.dub_state === "translating" && dubProgressLabel(ep) ? ` · ${dubProgressLabel(ep)}` : ""}
             {ep.duration ? ` · ${formatDuration(ep.duration)}` : ""}
           </p>
+          {ep.dub_state === "failed" && ep.dub_error ? (
+            <p className="ep-error tiny" title={ep.dub_error}>⚠ {dubErrorVi(ep.dub_error)}</p>
+          ) : null}
         </div>
       </button>
     </article>
