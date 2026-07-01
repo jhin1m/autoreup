@@ -15,6 +15,7 @@ from backend.app.schemas.library import (
     CreateSeriesRequest,
     ImportChannelRequest,
     PreviewChannelRequest,
+    SuggestExportRequest,
     TranslateRequest,
     UpdateSeriesRequest,
 )
@@ -147,6 +148,15 @@ def delete_episode_dub(episode_id: str) -> None:
 
 
 # ----- exports ------------------------------------------------------------
+@router.post("/series/{series_id}/suggest-export")
+def suggest_export(series_id: str, request: SuggestExportRequest) -> dict:
+    _series_or_404(series_id)
+    try:
+        return get_library_service().suggest_export_meta(series_id, request.episode_ids)
+    except LibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/series/{series_id}/exports", response_model=list[Export])
 def list_exports(series_id: str) -> list[Export]:
     _series_or_404(series_id)

@@ -427,6 +427,37 @@ class LibraryService:
     def _translate_titles_bg(self, series_id: str) -> None:
         threading.Thread(target=lambda: self.translate_titles(series_id), daemon=True).start()
 
+    # ----- export metadata suggestion (YouTube title/description) ----------
+    def suggest_export_meta(self, series_id: str, episode_ids: list[str]) -> dict:
+        """Ask the LLM for a catchy YouTube title + description + hashtags for the
+        compilation, from the series name and the (Vietnamese) titles of its episodes."""
+        series = self.store.get_series(series_id)
+        eps = [self.store.get_episode(eid) for eid in episode_ids]
+        eps = [e for e in eps if e and e.series_id == series_id]
+        if not series or not eps:
+            raise LibraryError("Chọn tập đã dịch để gợi ý tiêu đề")
+        listing = "\n".join(f"{i+1}. {e.title_vi or e.title}" for i, e in enumerate(eps))
+        system = (
+            "Bạn là chuyên gia đặt tiêu đề YouTube cho kênh THUYẾT MINH phim/truyện Việt (kiểu triệu view). "
+            "Từ tên bộ và danh sách các tập trong MỘT video tổng hợp, hãy tạo:\n"
+            "- title: tiêu đề CUỐN HÚT, gây tò mò, chuẩn YouTube, ≤100 ký tự (có thể nêu 'Tập X-Y' hoặc 'Trọn bộ');\n"
+            "- description: 2-4 câu tóm nội dung hấp dẫn + 1 câu kêu gọi đăng ký/theo dõi;\n"
+            "- hashtags: 5-8 hashtag tiếng Việt liên quan, mỗi tag KHÔNG có dấu cách.\n"
+            'Chỉ trả JSON: {"title": "...", "description": "...", "hashtags": ["#...", "#..."]}'
+        )
+        user = f"Tên bộ: {series.title}\nCác tập trong video (theo thứ tự):\n{listing}"
+        try:
+            raw = complete(system, user, self._llm())
+            data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+        except Exception as exc:
+            raise LibraryError("Không tạo được gợi ý (máy chủ LLM lỗi)") from exc
+        tags = data.get("hashtags") or []
+        return {
+            "title": (data.get("title") or "").strip(),
+            "description": (data.get("description") or "").strip(),
+            "hashtags": [t if str(t).startswith("#") else f"#{t}" for t in tags if str(t).strip()],
+        }
+
     # ----- LLM-assisted naming / clustering -------------------------------
     def _llm(self) -> LLMConfig:
         return LLMConfig(provider=self.settings.llm_provider, base_url=self.settings.llm_base_url,

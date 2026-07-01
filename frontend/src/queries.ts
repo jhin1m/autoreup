@@ -101,6 +101,10 @@ export function useCreateExport(seriesId: string) {
   });
 }
 
+export function useSuggestExport(seriesId: string) {
+  return useMutation({ mutationFn: (episodeIds: string[]) => api.suggestExport(seriesId, episodeIds) });
+}
+
 export function useRenderExport(seriesId: string) {
   const invalidate = useSeriesInvalidator();
   return useMutation({ mutationFn: (exportId: string) => api.renderExport(exportId), onSuccess: () => invalidate(seriesId) });

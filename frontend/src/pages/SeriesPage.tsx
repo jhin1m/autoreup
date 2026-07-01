@@ -14,6 +14,7 @@ import {
   useRenderExport,
   useScanSeries,
   useSeries,
+  useSuggestExport,
   useTranslate,
   useTranslateTitles,
 } from "../queries";
@@ -261,6 +262,20 @@ function DubbedTab({ series, dubbed, pending, onPreview, onExport }: {
   const [description, setDescription] = useState("");
   const [hashtags, setHashtags] = useState("#trungsinh #quantruong #thuyetminh");
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const suggest = useSuggestExport(series.id);
+  const { toast } = useToast();
+
+  async function doSuggest() {
+    try {
+      const s = await suggest.mutateAsync(order);
+      if (s.title) setTitle(s.title);
+      if (s.description) setDescription(s.description);
+      if (s.hashtags?.length) setHashtags(s.hashtags.join(" "));
+      toast("Đã gợi ý tiêu đề & mô tả", "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Không tạo được gợi ý", "error");
+    }
+  }
 
   const toggle = (id: string) => setOrder((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   const chosen = order.map((id) => dubbed.find((e) => e.id === id)).filter(Boolean) as Episode[];
@@ -310,6 +325,9 @@ function DubbedTab({ series, dubbed, pending, onPreview, onExport }: {
               </li>
             ))}
           </ol>
+          <button className="ghost ec-suggest" disabled={suggest.isPending} onClick={doSuggest}>
+            {suggest.isPending ? "Đang nghĩ tiêu đề…" : "✨ Gợi ý tiêu đề & mô tả (AI)"}
+          </button>
           <input className="lib-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`Tiêu đề YouTube (vd: ${series.title} — Full)`} />
           <textarea className="lib-input ec-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Mô tả video…" rows={3} />
           <input className="lib-input" value={hashtags} onChange={(e) => setHashtags(e.target.value)} placeholder="#hashtag …" />

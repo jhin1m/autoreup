@@ -1792,3 +1792,6 @@ select.lib-input { cursor: pointer; }
 .ep-error { margin: 2px 0 0; color: var(--rose); overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; max-width: 100%; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* Export: AI suggest button sits full-width above the title/desc fields */
+.ec-suggest { width: 100%; margin: 4px 0 8px; }

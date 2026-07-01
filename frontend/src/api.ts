@@ -204,6 +204,17 @@ export async function createExport(
   return (await response.json()) as Export;
 }
 
+export async function suggestExport(
+  seriesId: string,
+  episodeIds: string[],
+): Promise<{ title: string; description: string; hashtags: string[] }> {
+  const response = await ok(
+    await fetch(`${LIB}/series/${seriesId}/suggest-export`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ episode_ids: episodeIds }) }),
+    "Không tạo được gợi ý",
+  );
+  return (await response.json()) as { title: string; description: string; hashtags: string[] };
+}
+
 export async function renderExport(exportId: string): Promise<Export> {
   const response = await ok(await fetch(`${LIB}/exports/${exportId}/render`, { method: "POST" }), "Không render được");
   return (await response.json()) as Export;

@@ -37,6 +37,10 @@ class CreateExportRequest(BaseModel):
     episode_job_ids: list[str]
 
 
+class SuggestExportRequest(BaseModel):
+    episode_ids: list[str]
+
+
 class PreviewChannelRequest(BaseModel):
     url: str
 
