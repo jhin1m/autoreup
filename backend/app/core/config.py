@@ -81,8 +81,11 @@ class Settings(BaseSettings):
     capcut_batch_concurrency: int = 8  # concurrent batch requests
     tts_voice: str = "BV421_vivn_streaming"
     tts_speed: float = 1.0  # neutral synth; timing is fitted by ffmpeg tempo, not provider speed
-    tts_synth_rate: float = 1.22  # CapCut playback rate at synth — >1.0 = snappier (less "chậm")
-    tts_pitch_shift: float = 1.06  # master-stage pitch lift (tempo-preserving) — >1.0 brightens a "trầm" voice
+    tts_synth_rate: float = 1.28  # CapCut playback rate at synth — >1.0 = snappier (less "chậm"); raised from 1.22
+    # Master-stage pitch lift via resample+atempo. That double time-stretch is the main
+    # source of the raspy "rè" artifact (ffmpeg here has no rubberband for a clean shift),
+    # so keep it OFF (1.0). The presence EQ in VOICE_MASTER_CHAIN already adds brightness.
+    tts_pitch_shift: float = 1.0
     dub_bed_volume: float = 0.18  # original audio kept as a quiet bed under the VI voice (was 0.38)
     # Hardsub: cover the original burned-in subtitle (OCR/cv2-detected band) + burn VI
     hardsub_font: str = ""  # empty -> vendored Bangers (comic display, Vietnamese-capable)
