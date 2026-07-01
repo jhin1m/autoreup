@@ -57,8 +57,10 @@ export function SeriesPage() {
   async function doTranslate(ids: string[]) {
     try {
       await translate.mutateAsync(ids);
-      toast(`Đang dịch ${ids.length} tập`, "success");
-      setTab("dubbed");
+      // Stay on the source tab: the episodes are now "translating" (not yet "dubbed"),
+      // and this tab shows their per-stage progress. Jumping to "Đã dịch" would land on
+      // an empty list until the jobs finish, which reads as "nothing happened".
+      toast(`Đang dịch ${ids.length} tập — theo dõi tiến độ ở đây`, "success");
     } catch (error) {
       toast(error instanceof Error ? error.message : "Lỗi tạo job dịch", "error");
     }
