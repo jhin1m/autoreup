@@ -24,6 +24,10 @@ from backend.app.services.job_service import JobService
 from backend.app.studio.models import Platform
 from backend.app.studio.providers import SourceDiscovery, detect_platform
 
+# Walk the whole channel when scanning (bounded by has_more/timeout in the lister),
+# not just the newest page — otherwise older episodes of a show are silently missed.
+_CHANNEL_SCAN_LIMIT = 500
+
 # Maps a dubbing job's state to the episode dub_state we cache.
 _JOB_TO_DUB = {
     JobState.queued: DubState.translating,
@@ -100,7 +104,7 @@ class LibraryService:
         known = {e.platform_video_id for e in self.store.list_episodes(series_id)}
         added = 0
         for source in series.sources:
-            videos = self.discovery.discover(source.url, limit=50)
+            videos = self.discovery.discover(source.url, limit=_CHANNEL_SCAN_LIMIT)
             groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title=series.title, videos=videos)]
             picked = _match_group(series.title, known, groups)
             if picked:
@@ -141,7 +145,7 @@ class LibraryService:
         persisted). Each group is matched to an EXISTING series of this channel (so a
         re-scan syncs instead of duplicating), with a count of how many episodes are new.
         LLM assists with naming/clustering when the heuristic is unsure."""
-        videos = self.discovery.discover(url, limit=50)
+        videos = self.discovery.discover(url, limit=_CHANNEL_SCAN_LIMIT)
         groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title="", videos=videos)]
         groups = self._refine_with_llm(groups, videos)
         existing = self._existing_for_channel(url)

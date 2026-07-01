@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Preview } from "../library/Preview";
 import {
   useAddSource,
+  useAddVideo,
   useCreateExport,
   useDeleteEpisodeDub,
   useDeleteExport,
@@ -139,14 +140,29 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 
 function SourceBar({ series, scanning, onScan }: { series: Series; scanning: boolean; onScan: () => void }) {
   const [link, setLink] = useState("");
+  const [videoLink, setVideoLink] = useState("");
   const addSource = useAddSource(series.id);
   const deleteSource = useDeleteSource(series.id);
+  const addVideo = useAddVideo();
+  const { toast } = useToast();
 
   async function add(event: FormEvent) {
     event.preventDefault();
     if (!link.trim()) return;
     await addSource.mutateAsync(link.trim());
     setLink("");
+  }
+
+  async function addTap(event: FormEvent) {
+    event.preventDefault();
+    if (!videoLink.trim()) return;
+    try {
+      await addVideo.mutateAsync({ url: videoLink.trim(), seriesId: series.id });
+      setVideoLink("");
+      toast("Đã thêm tập vào bộ", "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Không thêm được tập", "error");
+    }
   }
 
   return (
@@ -163,7 +179,11 @@ function SourceBar({ series, scanning, onScan }: { series: Series; scanning: boo
       </div>
       <form className="sd-add-source" onSubmit={add}>
         <input value={link} onChange={(event) => setLink(event.target.value)} placeholder="Dán link kênh…" aria-label="Link kênh" />
-        <button className="ghost tiny" disabled={addSource.isPending || !link.trim()}>Thêm</button>
+        <button className="ghost tiny" disabled={addSource.isPending || !link.trim()}>+ Nguồn</button>
+      </form>
+      <form className="sd-add-source" onSubmit={addTap}>
+        <input value={videoLink} onChange={(event) => setVideoLink(event.target.value)} placeholder="Dán link 1 video (thêm tập thiếu)…" aria-label="Link video" />
+        <button className="ghost tiny" disabled={addVideo.isPending || !videoLink.trim()}>+ Tập</button>
       </form>
       <button className="primary" disabled={scanning || !series.sources.length} onClick={onScan}>
         {scanning ? "Đang quét…" : "Quét tập mới"}

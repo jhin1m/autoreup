@@ -55,11 +55,14 @@ class DouyinBrowserExtractor:
     def available(self) -> bool:
         return bool(self.browser_path) and shutil.which(self.node_bin) is not None and self.script.exists()
 
-    def list_user_posts(self, user_url: str, limit: int = 24) -> list[dict]:
-        """List a creator's recent posts via the headless browser.
+    def list_user_posts(self, user_url: str, limit: int = 200, timeout_ms: int = 105000) -> list[dict]:
+        """List a creator's posts via the headless browser.
 
-        Loads the /user/<sec_uid> page (Douyin's JS signs the request), captures the
-        aweme/post API responses, and returns ``[{id, desc, duration, cover}, ...]``.
+        Loads the /user/<sec_uid> page (Douyin's JS signs the request), scrolls to
+        lazy-load, captures the aweme/post API responses, and returns
+        ``[{id, desc, duration, cover}, ...]``. The lister scrolls until the channel
+        runs out (has_more=false) or ``limit``/``timeout_ms`` is hit — so a high limit +
+        generous timeout walks the WHOLE channel, not just the newest page.
         """
         if not self.browser_path:
             raise BrowserExtractError("Không tìm thấy Chrome/Edge để chạy headless. Đặt AUTOREUP_BROWSER_PATH.")
@@ -72,8 +75,8 @@ class DouyinBrowserExtractor:
         try:
             result = subprocess.run(
                 [self.node_bin, str(self.posts_script), "--url", user_url, "--cookies", cookies_path,
-                 "--browser", self.browser_path, "--limit", str(limit), "--timeout", "55000"],
-                capture_output=True, text=True, timeout=120,
+                 "--browser", self.browser_path, "--limit", str(limit), "--timeout", str(timeout_ms)],
+                capture_output=True, text=True, timeout=timeout_ms / 1000 + 20,
             )
         finally:
             Path(cookies_path).unlink(missing_ok=True)
