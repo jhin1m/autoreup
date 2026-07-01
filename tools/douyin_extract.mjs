@@ -248,16 +248,23 @@ async function main() {
         } catch { /* body not ready yet — retry next loop */ }
       }
     }
-    // A muxed top-gear MP4 needs no separate audio track — ship as soon as we have it.
+    // TRUSTED: gear from the detail API, scoped to the target aweme_id — this is the
+    // only source we can prove belongs to the requested video.
     if (bestGear) done({ video: absUrl(bestGear.url), muxed: true, width: bestGear.w, height: bestGear.h, title, duration });
-    // Fallback: the adaptive tracks we sniffed off the wire (video + audio, muxed later).
-    if (video && audio) done({ video, audio, title, duration });
-    if (video && !videoReadySince) videoReadySince = Date.now();
-    if (video && Date.now() - videoReadySince > 6000) done({ video, audio, title, duration });
+    // Sniffed adaptive tracks carry no id, so a stream we grab off the wire could be an
+    // autoplay RECOMMENDATION, not the target — using it would dub the wrong video. Only
+    // trust the sniff when the URL had no id to match against (best-effort last resort).
+    if (!wantId) {
+      if (video && audio) done({ video, audio, title, duration });
+      if (video && !videoReadySince) videoReadySince = Date.now();
+      if (video && Date.now() - videoReadySince > 6000) done({ video, audio, title, duration });
+    }
   }
   if (bestGear) done({ video: absUrl(bestGear.url), muxed: true, width: bestGear.w, height: bestGear.h, title, duration });
-  if (video) done({ video, audio, title, duration });
-  fail("timed out waiting for video stream URL");
+  if (!wantId && video) done({ video, audio, title, duration });
+  fail(wantId
+    ? "Không lấy được đúng video mục tiêu (detail-API của Douyin không phản hồi — có thể bị rate-limit). Thử lại sau."
+    : "timed out waiting for video stream URL");
 }
 
 main().catch((e) => fail(e.message));
