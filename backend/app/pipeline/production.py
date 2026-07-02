@@ -99,6 +99,7 @@ def _hardsub_config(settings: Settings):
         bed_volume=settings.dub_bed_volume,
         video_codec_args=tuple(video_encode_args(settings)),
         scale_filter=canonical_scale_filter(settings),
+        sharpen=settings.video_sharpen,
     )
 
 

@@ -34,6 +34,10 @@ class HardsubConfig:
     # source-resolution behaviour so hardsub works standalone.
     video_codec_args: tuple[str, ...] = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
     scale_filter: str = ""  # empty = keep source size; else scale/pad/fps to a canonical output
+    # Contrast-adaptive sharpening on the picture (NOT the caption overlay, which is
+    # already crisp). Douyin sources sit around 1Mbps for 1080p — visibly soft; a
+    # light CAS restores perceived detail without unsharp's halos. 0 disables.
+    sharpen: float = 0.35
 
 
 def detect_sub_band(video: Path, config: HardsubConfig) -> tuple[int, int, int, int] | None:
@@ -174,8 +178,9 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         )
     else:
         cover = "[0:v]copy[cov];"
+    sharpen = f"cas={config.sharpen:.2f}," if config.sharpen > 0 else ""
     scale = f",{config.scale_filter}" if config.scale_filter else ""
-    video_graph = cover + f"[cov][1:v]overlay=0:0{scale}[vo]"
+    video_graph = cover + f"[cov]{sharpen}null[base2];[base2][1:v]overlay=0:0{scale}[vo]"
 
     if has_voice:
         audio_graph = (

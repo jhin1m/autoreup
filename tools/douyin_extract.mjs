@@ -155,6 +155,7 @@ function pickBestGear(bitRate) {
     const urls = pa.url_list || pa.urlList || [];
     if (!urls.length) continue;
     const w = pa.width || 0, h = pa.height || 0, br = g.bit_rate || g.bitRate || 0;
+    if (DEBUG) console.error(`gear: ${w}x${h} @${br} ${g.gear_name || g.gearName || ""} ${g.format || ""} hdr=${g.is_h265 ?? g.isH265 ?? "?"}`);
     const area = w * h, barea = best ? best.w * best.h : -1;
     if (!best || area > barea || (area === barea && br > best.br)) {
       best = { w, h, br, gear: g.gear_name || g.gearName || "", url: urls[0] };

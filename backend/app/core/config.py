@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     # build. Hardsub already emits canonical 1080p/30fps so exports just stream-copy.
     video_hw_encode: bool = True
     video_bitrate: str = "8M"   # target for hardware encode (no CRF on videotoolbox)
+    # Light CAS sharpening on the picture during hardsub: Douyin serves ~1Mbps for
+    # 1080p (measured: best gear 981kbps), visibly soft. 0 disables.
+    video_sharpen: float = 0.35
     video_fps: int = 30
     video_width: int = 1920
     video_height: int = 1080
