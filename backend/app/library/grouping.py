@@ -57,12 +57,30 @@ class Group:
 
 
 def cluster_into_series(videos: list) -> list[Group]:
-    """Group videos into series by episode-number reset along upload order.
+    """Group videos into series.
 
     ``videos`` are SourceVideo-like (``.platform_video_id``, ``.title``). Numeric video
     ids increase with upload time, so sorting by id ascending recovers upload order.
+
+    Rule 1 — one-show channel: when nearly every title carries a 第X集 number and no
+    number appears twice, the channel is a single serialized show. Re-uploads used to
+    fool the reset heuristic here: a creator re-posting 第9集/第15集 AFTER 第76集 made
+    the numbers "reset" several times and one 72-episode show shattered into five
+    phantom series. Unique numbers can't come from two interleaved shows (both would
+    restart at 1), so this case is safe to merge outright, ordered by episode.
+
+    Rule 2 — otherwise: cut at episode-number resets along upload order (two shows
+    interleave as 1..N then 1..M).
     """
     ordered = sorted(videos, key=lambda v: _sort_key(v.platform_video_id))
+
+    numbered = [(episode_number(v.title), v) for v in ordered]
+    nums = [n for n, _ in numbered if n is not None]
+    if len(nums) >= max(2, int(0.8 * len(ordered))) and len(nums) == len(set(nums)):
+        by_episode = sorted((n, i, v) for i, (n, v) in enumerate(numbered) if n is not None)
+        merged = [v for _n, _i, v in by_episode] + [v for n, v in numbered if n is None]
+        return [Group(title=_name_group(merged), videos=merged)]
+
     groups: list[list] = []
     last_num: int | None = None
     for video in ordered:
@@ -85,9 +103,14 @@ def _name_group(videos: list) -> str:
             counts[tag] = counts.get(tag, 0) + 1
     if counts:
         return max(counts, key=lambda tag: (counts[tag], len(tag)))
-    # No show tag anywhere — strip the "第X集：" prefix off the first title.
-    first = videos[0].title if videos else "Bộ mới"
-    return re.sub(r"^第\s*[0-9零一二两三四五六七八九十]+\s*集[：:、\s]*", "", first).split("#")[0].strip() or "Bộ mới"
+    # No show tag anywhere — take the first title that still says something once the
+    # "第X集" prefix is stripped (bare-numbered channels only describe episode 1),
+    # trimmed to its first clause so a synopsis blob doesn't become the series name.
+    for video in videos:
+        body = re.sub(r"^第\s*[0-9零一二两三四五六七八九十]+\s*集[：:、\s]*", "", video.title).split("#")[0].strip()
+        if body:
+            return re.split(r"[，。！？,!?]", body)[0].strip()[:40] or body[:40]
+    return "Bộ mới"
 
 
 def _sort_key(video_id: str):

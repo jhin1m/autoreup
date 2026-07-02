@@ -555,9 +555,18 @@ class LibraryService:
 
     def _llm_name(self, videos: list) -> str | None:
         titles = "\n".join(v.title for v in videos[:8])
-        system = "Đặt MỘT tên bộ phim ngắn gọn (≤6 từ) từ các tiêu đề tập. Chỉ trả về tên, không giải thích."
+        # Grounding guard: titles like "第72集" carry no content and the model used to
+        # INVENT a show name from thin air ("Tình Yêu Không Hẹn Mà Đến" for a survival
+        # story). It must name only from words that exist, or decline.
+        system = (
+            "Đặt MỘT tên bộ phim ngắn gọn (≤6 từ) CHỈ DÙNG thông tin có thật trong các tiêu đề tập. "
+            "Nếu tiêu đề chỉ là số tập, không có nội dung gì — trả về đúng chuỗi KHONG. "
+            "Chỉ trả về tên, không giải thích."
+        )
         name = complete(system, titles, self._llm()).strip().splitlines()[0].strip()
-        return name[:60] or None
+        if not name or name.upper() in {"KHONG", "KHÔNG"}:
+            return None
+        return name[:60]
 
 
 def _match_group(series_title: str, known_ids: set[str], groups: list[Group]) -> Group | None:
