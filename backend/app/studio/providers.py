@@ -63,18 +63,14 @@ class SourceDiscovery:
         return [self._discover_single(url, platform)]
 
     def _discover_douyin_user(self, url: str, limit: int) -> list[SourceVideo]:
-        """List a Douyin creator's posts via the headless browser, one card each."""
+        """List a Douyin creator's posts. Signed web API first (no browser); fall back
+        to the headless browser only when the API is risk-controlled."""
         if self.settings is None:
             raise RuntimeError("SourceDiscovery cần settings để liệt kê kênh Douyin.")
-        from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
 
         sec_uid = _extract_sec_uid(url)
         page_url = f"https://www.douyin.com/user/{sec_uid}" if sec_uid else extract_url(url)
-        extractor = DouyinBrowserExtractor(
-            self.settings.videos_dir, self.cookie_vault, self.settings.root_dir,
-            self.settings.browser_path, self.settings.node_bin,
-        )
-        posts = extractor.list_user_posts(page_url, limit)
+        posts = self._list_douyin_posts(page_url, limit)
         videos: list[SourceVideo] = []
         for post in posts:
             vid = str(post.get("id") or "")
@@ -90,6 +86,21 @@ class SourceDiscovery:
                 duration=post.get("duration"),
             ))
         return videos
+
+    def _list_douyin_posts(self, page_url: str, limit: int) -> list[dict]:
+        from backend.app.infrastructure.douyin.api_client import DouyinApiError
+        from backend.app.infrastructure.douyin.extractor import DouyinApiExtractor
+
+        try:
+            return DouyinApiExtractor(self.settings.videos_dir, self.cookie_vault).list_user_posts(page_url, limit)
+        except DouyinApiError:
+            from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
+
+            extractor = DouyinBrowserExtractor(
+                self.settings.videos_dir, self.cookie_vault, self.settings.root_dir,
+                self.settings.browser_path, self.settings.node_bin,
+            )
+            return extractor.list_user_posts(page_url, limit)
 
     def _discover_single(self, url: str, platform: Platform) -> SourceVideo:
         if platform == Platform.bilibili:

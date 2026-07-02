@@ -13,3 +13,5 @@ anthropic==0.42.0
 # onnxruntime runs it — torch is NOT imported at runtime.
 silero-vad==6.2.1
 onnxruntime==1.27.0
+# Douyin a_bogus signature (infrastructure/douyin): gmssl provides the SM3 hash.
+gmssl==3.2.2

@@ -590,11 +590,19 @@ def _download_source(settings: Settings, url: str, job_id: str) -> dict:
     vault = CookieVault(settings.provider_cookies_dir)
     platform = detect_platform(url)
     if platform.value == "douyin":
-        from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
+        # Signed web API first (in-process, no browser); fall back to the headless
+        # browser only when the API is risk-controlled (empty response).
+        from backend.app.infrastructure.douyin.extractor import DouyinApiExtractor
+        from backend.app.infrastructure.douyin.api_client import DouyinApiError
 
-        extractor = DouyinBrowserExtractor(settings.videos_dir, vault, settings.root_dir, settings.browser_path, settings.node_bin)
-        if extractor.available():
-            return extractor.download(url, job_id)
+        try:
+            return DouyinApiExtractor(settings.videos_dir, vault).download(url, job_id)
+        except DouyinApiError:
+            from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
+
+            extractor = DouyinBrowserExtractor(settings.videos_dir, vault, settings.root_dir, settings.browser_path, settings.node_bin)
+            if extractor.available():
+                return extractor.download(url, job_id)
 
     cookies_file = (vault.netscape_file(platform.value) if platform.value in {"douyin", "bilibili"} else None)
     return YtDlpDownloader(settings.videos_dir).download(url, str(cookies_file) if cookies_file else settings.cookies_file, job_id)
