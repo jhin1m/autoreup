@@ -70,11 +70,9 @@ TRANSLATE_SYSTEM = (
     "không tự đổi qua lại, không dùng đại từ miệt thị (ả/mụ/thị/gã/hắn/y/lão) cho nhân vật trung tính/"
     "chính diện. BỐI CẢNH người dùng ưu tiên tuyệt đối.\n"
     "4. NGỮ CẢNH TRƯỚC (nếu có) chỉ để nối mạch — KHÔNG dịch lại phần đó.\n"
-    "5. NGẮT DÒNG PHỤ ĐỀ (phải khớp với cách hệ thống cắt dòng): đặt DẤU CÂU (phẩy, chấm, ?, !, :) ở "
-    "các CHỖ NGẮT TỰ NHIÊN sao cho MỖI MỆNH ĐỀ nằm giữa hai dấu ≤ ~{max_caption_chars} ký tự. Hệ thống "
-    "cắt dòng ĐÚNG TẠI dấu câu; không có dấu trong một đoạn dài thì nó buộc phải cắt giữa cụm (xấu). "
-    "TUYỆT ĐỐI không để một mệnh đề dài liền mạch không dấu vượt {max_caption_chars} ký tự. Không cắt đôi "
-    "từ hai âm tiết (vd 'rắc rối', 'chuẩn bị') — cứ viết tự nhiên, dấu câu lo việc ngắt.\n"
+    "5. VIẾT NHƯ LỜI NÓI: ưu tiên CÂU NGẮN, mỗi câu trọn một ý, dứt câu bằng . ? ! Dấu phẩy chỉ dùng "
+    "khi ngữ pháp cần — KHÔNG chèn phẩy để chia cụm (nghe băm vụn, mất giọng kể); hệ thống tự lo cắt "
+    "dòng hiển thị.\n"
     "Mỗi dòng gắn đúng một ANCHOR_ID có trong chunk. Dùng ⟂ (CHỈ ký tự này) để tách hai lượt thoại KHÁC "
     "người trong cùng anchor — KHÔNG dùng | hay / để ngắt.\n"
     "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
@@ -100,8 +98,8 @@ REPAIR_SYSTEM = (
     "và đúng XƯNG HÔ theo glossary; bỏ chữ thừa/filler; vẫn tự nhiên, dễ nghe.\n"
     "Output DUY NHẤT là TSV, không markdown, KHÔNG Hán tự, mỗi dòng:\n"
     "ANCHOR_ID<TAB>TEXT\n"
-    "Mỗi bản viết lại phải NGẮN HƠN bản cũ. Giữ ⟂ nếu cần tách lượt thoại. Đặt dấu câu ở chỗ ngắt tự nhiên "
-    "(mỗi mệnh đề đủ ngắn để hiển thị một dòng); không cắt đôi từ hai âm tiết."
+    "Mỗi bản viết lại phải NGẮN HƠN bản cũ. Giữ ⟂ nếu cần tách lượt thoại. Viết như lời nói: câu ngắn, "
+    "dấu phẩy chỉ khi ngữ pháp cần — không chèn phẩy để chia cụm."
 )
 
 REPAIR_USER = (
@@ -119,7 +117,7 @@ EXPAND_SYSTEM = (
     "Với mỗi anchor: nếu lời Việt đã truyền đạt ĐỦ ý câu gốc thì GIỮ NGUYÊN; nếu còn THIẾU ý, viết lại "
     "ĐẦY ĐỦ toàn bộ ý câu gốc, tự nhiên, dài hơn cho khớp thời lượng thoại gốc, đúng XƯNG HÔ theo glossary. "
     "TUYỆT ĐỐI không bịa thông tin ngoài câu gốc.\n"
-    "Đặt dấu câu ở chỗ ngắt tự nhiên (mỗi mệnh đề đủ ngắn để hiển thị một dòng); không cắt đôi từ hai âm tiết.\n"
+    "Viết như lời nói: câu ngắn, dấu phẩy chỉ khi ngữ pháp cần — không chèn phẩy để chia cụm.\n"
     "Output DUY NHẤT là TSV, KHÔNG Hán tự, mỗi dòng:\n"
     "ANCHOR_ID<TAB>TEXT"
 )
