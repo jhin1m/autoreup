@@ -59,6 +59,9 @@ class RenderConfig:
     # picture ("khớp ảnh"). crossfade is the equal-power overlap at glued joins.
     glue_gap: float = 0.30
     crossfade: float = 0.06
+    # Hard cap on how far a glued clip may LEAD its source onset (accumulated
+    # condensation drift had the dub a full second ahead of the on-screen speaker).
+    max_lead: float = 0.3
 
 
 @dataclass(slots=True)
@@ -85,7 +88,7 @@ class RenderResult:
         return [t.anchor_id for t in self.timings if t.needs_repair]
 
 
-def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glue_gap: float = 0.30, crossfade: float = 0.06, pitch: float = 1.0) -> Path:
+def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glue_gap: float = 0.30, crossfade: float = 0.06, pitch: float = 1.0, max_lead: float = 0.3) -> Path:
     """Assemble the tempo-fitted clips smoothly, then master the voice track.
 
     Kept separate from :func:`render` so the repair loop can re-measure each round
@@ -96,7 +99,7 @@ def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glu
     output_audio = Path(output_audio)
     work_dir = Path(work_dir)
     unmastered = work_dir / "voice.unmastered.m4a"
-    assemble_track(result.segments, unmastered, work_dir=work_dir, total_duration=result.total_duration, glue_gap=glue_gap, crossfade=crossfade)
+    assemble_track(result.segments, unmastered, work_dir=work_dir, total_duration=result.total_duration, glue_gap=glue_gap, crossfade=crossfade, max_lead=max_lead)
     master_voice(unmastered, output_audio, pitch=pitch)
     result.voice_track = output_audio
     result.summary["voice_track"] = str(output_audio)

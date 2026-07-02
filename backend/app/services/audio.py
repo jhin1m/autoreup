@@ -180,7 +180,7 @@ def render_silence(path: Path, duration: float) -> None:
 
 
 def plan_placements(
-    segments: list[tuple[float, Path, float, float]], glue_gap: float, crossfade: float
+    segments: list[tuple[float, Path, float, float]], glue_gap: float, crossfade: float, max_lead: float = 0.3
 ) -> tuple[list[tuple[float, Path, float, bool]], float]:
     """Resolve each clip's slot on the output timeline + how it joins the previous.
 
@@ -194,6 +194,12 @@ def plan_placements(
     * Contiguous — gap ``< glue_gap``: no real pause on screen, so the clip butt-joins
       right after the previous voice (overlapping by ``crossfade``); the artificial
       underfill silence is dropped so prosody flows with no stop-start "khựng".
+
+    ``max_lead`` bounds how far a glued clip may run AHEAD of its source time: over a
+    long continuous run, condensed (shorter) lines pulled every following line earlier
+    and the accumulated drift had the dub speaking a full second before the on-screen
+    speaker. A clip never starts more than ``max_lead`` before its source onset — the
+    leftover space is a short natural breath, not a stall.
     """
     placements: list[tuple[float, Path, float, bool]] = []
     cursor = 0.0
@@ -202,7 +208,7 @@ def plan_placements(
         if prev_end is None:
             place, glued = start, False
         elif start - prev_end < glue_gap:
-            place, glued = max(0.0, cursor - crossfade), True
+            place, glued = max(0.0, cursor - crossfade, start - max_lead), True
         else:
             place, glued = max(start, cursor), False
         placements.append((place, path, duration, glued))
@@ -218,6 +224,7 @@ def assemble_track(
     total_duration: float | None = None,
     glue_gap: float = 0.30,
     crossfade: float = 0.06,
+    max_lead: float = 0.3,
 ) -> None:
     """Place tempo-fitted clips on a timeline and smooth the joins.
 
@@ -232,7 +239,7 @@ def assemble_track(
         render_silence(output_path, max(0.1, total_duration or 0.1))
         return
 
-    placements, cursor = plan_placements(segments, glue_gap, crossfade)
+    placements, cursor = plan_placements(segments, glue_gap, crossfade, max_lead)
     track_end = max(cursor, total_duration or 0.0)
 
     declick = 0.008

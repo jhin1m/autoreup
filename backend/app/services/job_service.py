@@ -48,11 +48,11 @@ class JobService:
             return self._job_locks.setdefault(job_id, threading.Lock())
 
     def _reconcile_orphans(self) -> None:
-        """A fresh process has no worker threads for jobs a previous run left mid-flight,
-        and the pipeline can't resume a stage that was interrupted. Any job still marked
-        running/queued on disk at startup is orphaned (e.g. the server was restarted while
-        it was in voiceover/package) — mark it failed so the UI stops showing a permanent
-        'đang chạy' and the user can retry, instead of a job that hangs forever."""
+        """A fresh process has no worker threads for jobs a previous run left mid-flight.
+        Any job still marked running/queued on disk at startup was interrupted by the
+        restart — RE-ENQUEUE it: the runner resumes at the first stage whose outputs
+        don't hydrate from disk, so the finished work is kept and the user never has to
+        notice the restart (no more permanent 'đang chạy' zombies, no manual retry)."""
         try:
             paths = list(self.settings.jobs_dir.glob("*/manifest.json"))
         except OSError:
@@ -68,10 +68,11 @@ class JobService:
                 manifest.stages[-1].status = StageStatus.failed
                 manifest.stages[-1].ended_at = datetime.now(timezone.utc)
                 manifest.stages[-1].error = "interrupted (server restart)"
-            manifest.state = JobState.failed
-            manifest.error = "Bị gián đoạn khi khởi động lại server — bấm dịch lại để chạy tiếp."
+            manifest.state = JobState.queued
+            manifest.error = None
             manifest.touch()
             self.save(manifest)
+            self.start_background(manifest.job_id)
 
     def create(self, job_input: JobInput) -> JobManifest:
         job_id = uuid4().hex[:12]

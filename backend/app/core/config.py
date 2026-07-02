@@ -139,6 +139,11 @@ class Settings(BaseSettings):
     # smaller than this butt-joins to the previous line so speech flows continuously; only
     # real on-screen pauses (>= this) keep their absolute onset for picture sync.
     tts_glue_gap: float = 0.22
+    # A glued clip may start at most this far BEFORE its source onset. Condensed
+    # lines in a long continuous run used to drag every following line earlier
+    # (dub spoke ~1s before the on-screen speaker); this caps that drift while
+    # keeping the butt-joined flow.
+    tts_max_lead: float = 0.3
     tts_crossfade: float = 0.06
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True

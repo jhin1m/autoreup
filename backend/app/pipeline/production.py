@@ -445,6 +445,7 @@ class VoiceoverStage(PipelineStage):
             max_tempo=settings.tts_max_tempo,
             fixed_tempo=settings.tts_fixed_tempo,
             glue_gap=settings.tts_glue_gap,
+            max_lead=settings.tts_max_lead,
             crossfade=settings.tts_crossfade,
             min_duration=settings.min_duration,
             workers=settings.tts_workers,
@@ -491,12 +492,12 @@ class VoiceoverStage(PipelineStage):
             logs.append(f"render round {rounds}: {result.summary}")
 
         # Assemble the final track once, after timings have converged.
-        assemble_voice(result, output_audio, work_dir, glue_gap=render_config.glue_gap, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)
+        assemble_voice(result, output_audio, work_dir, glue_gap=render_config.glue_gap, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift, max_lead=render_config.max_lead)
         context.artifacts["speech_rows"] = speech_rows
         # Voice and subtitle are built from the SAME sentence units. Time each
         # sentence's caption within the REAL synthesized clip span (placement + voice
         # duration), so the caption matches the dub's actual timing — from the TTS.
-        placements, _track_end = plan_placements(result.segments, render_config.glue_gap, render_config.crossfade)
+        placements, _track_end = plan_placements(result.segments, render_config.glue_gap, render_config.crossfade, render_config.max_lead)
         voice_windows = {
             round(seg_start, 3): (place, place + dur)
             for (seg_start, _clip, _play, _end), (place, _p, dur, _g) in zip(result.segments, placements)
