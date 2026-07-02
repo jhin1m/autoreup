@@ -19,6 +19,7 @@ from .abogus import ABogus
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 _DETAIL = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
 _POST = "https://www.douyin.com/aweme/v1/web/aweme/post/"
+_MIX = "https://www.douyin.com/aweme/v1/web/mix/aweme/"
 
 _BASE_PARAMS = {
     "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
@@ -33,6 +34,13 @@ _BASE_PARAMS = {
 
 class DouyinApiError(RuntimeError):
     pass
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(slots=True)
@@ -130,6 +138,37 @@ class DouyinApiClient:
             "thumbnail": cover[0] if cover else None,
             "uploader": author.get("nickname"),
         }
+
+    def mix_episodes(self, mix_id: str, limit: int = 300, page: int = 20) -> tuple[str, list[dict]]:
+        """Episodes of a 合集/playlet (短剧) → ``(mix_name, [{id, desc, duration, cover,
+        episode, paid}, ...])`` in episode order. ``paid`` flags a locked episode."""
+        out: list[dict] = []
+        name = ""
+        cursor = 0
+        while len(out) < limit:
+            data = self._get(_MIX, {"mix_id": str(mix_id), "cursor": str(cursor), "count": str(page)})
+            for aweme in data.get("aweme_list") or []:
+                aid = str(aweme.get("aweme_id") or "")
+                if not aid:
+                    continue
+                video = aweme.get("video") or {}
+                cover = (video.get("cover") or {}).get("url_list") or []
+                mix = aweme.get("mix_info") or {}
+                name = name or (mix.get("mix_name") or "").strip()
+                paid_status = (aweme.get("series_paid_info") or {}).get("series_paid_status", 0)
+                out.append({
+                    "id": aid,
+                    "desc": (aweme.get("desc") or "").strip(),
+                    "duration": (video.get("duration") or 0) / 1000 or None,
+                    "cover": cover[0] if cover else None,
+                    "episode": _int_or_none((mix.get("statis") or {}).get("current_episode")),
+                    "paid": bool(paid_status) or not (video.get("bit_rate")),
+                })
+            cursor = data.get("cursor") or 0
+            if not data.get("has_more") or not cursor:
+                break
+        out.sort(key=lambda e: e.get("episode") or 0)
+        return name, out[:limit]
 
     def user_posts(self, sec_user_id: str, limit: int = 200, page: int = 18) -> list[dict]:
         out: list[dict] = []

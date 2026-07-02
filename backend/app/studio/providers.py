@@ -34,6 +34,9 @@ def canonical_source_url(url: str) -> str:
         bvid = _extract_video_id(url)
         if bvid:
             return f"https://www.bilibili.com/video/{bvid}"
+    mix_id = _extract_douyin_mix_id(url)
+    if mix_id:
+        return f"https://www.douyin.com/collection/{mix_id}"
     return url
 
 
@@ -139,6 +142,33 @@ class SourceDiscovery:
         except Exception:
             return None
 
+    def _discover_douyin_mix(self, url: str, limit: int) -> tuple[str, list[SourceVideo]] | None:
+        mix_id = _extract_douyin_mix_id(url)
+        if not mix_id:
+            return None
+        from backend.app.infrastructure.douyin.api_client import DouyinApiClient, DouyinApiError
+
+        cookie = self.cookie_vault.read_header("douyin") or ""
+        try:
+            mix_name, episodes = DouyinApiClient(cookie).mix_episodes(mix_id, limit=limit)
+        except DouyinApiError:
+            return None
+        videos: list[SourceVideo] = []
+        for ep in episodes:
+            videos.append(SourceVideo(
+                id=self._id_for(Platform.douyin, ep["id"]),
+                platform=Platform.douyin,
+                platform_video_id=ep["id"],
+                source_url=f"https://www.douyin.com/video/{ep['id']}",
+                title=ep.get("desc") or (f"Tập {ep['episode']}" if ep.get("episode") else ep["id"]),
+                thumbnail_url=ep.get("cover"),
+                duration=ep.get("duration"),
+                error="Tập trả phí — cần mua trên Douyin" if ep.get("paid") else None,
+            ))
+        if not videos:
+            return None
+        return mix_name or "Bộ Douyin", videos
+
     def _bilibili_view(self, bvid: str) -> dict:
         """Bilibili's public view API — carries full metadata AND the ``ugc_season``
         collection (合集) the video belongs to, when it belongs to one."""
@@ -150,12 +180,14 @@ class SourceDiscovery:
             raise RuntimeError(payload.get("message") or "Bilibili metadata failed")
         return payload.get("data") or {}
 
-    def discover_collection(self, url: str, limit: int = 200) -> tuple[str, list[SourceVideo]] | None:
-        """Expand a Bilibili video URL into its full episode list, covering BOTH
-        shapes the "videopod.episodes" player shows: a 合集 (``ugc_season`` — many
-        BVs) and a multi-part video (``pages`` — one BV, many ?p=N parts). Returns
-        ``(series_title, episodes)`` or None when it's a plain single video."""
+    def discover_collection(self, url: str, limit: int = 300) -> tuple[str, list[SourceVideo]] | None:
+        """Expand a playlist URL into ``(series_title, episodes)``:
+        * Douyin 短剧/合集 (``/share/playlet/detail/<mix_id>`` or ``?object_id=``);
+        * Bilibili 合集 (``ugc_season``) or multi-part video (``pages``).
+        Returns None for a plain single video."""
         url = extract_url(url)
+        if detect_platform(url) == Platform.douyin:
+            return self._discover_douyin_mix(url, limit)
         if detect_platform(url) != Platform.bilibili or "/video/" not in urlparse(url).path:
             return None
         bvid = _extract_video_id(url)
@@ -310,6 +342,19 @@ class SourceDiscovery:
 def _short_reason(exc: Exception) -> str:
     text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
     return text[:120]
+
+
+def _extract_douyin_mix_id(url: str) -> str | None:
+    """The mix/playlet id from a Douyin 短剧 link: /share/playlet/detail/<id> or
+    ?object_id=<id>, and /collection/<id>."""
+    parsed = urlparse(url)
+    if "douyin.com" not in parsed.netloc and "iesdouyin.com" not in parsed.netloc:
+        return None
+    m = re.search(r"/(?:playlet/detail|collection|mix)/(\d{15,})", parsed.path)
+    if m:
+        return m.group(1)
+    oid = parse_qs(parsed.query).get("object_id", [None])[0]
+    return oid if oid and oid.isdigit() else None
 
 
 def _extract_sec_uid(url: str) -> str | None:

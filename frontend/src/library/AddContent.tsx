@@ -16,7 +16,8 @@ export function AddContent({ onOpenSeries }: { onOpenSeries: (seriesId: string) 
     setUrl("");
     setOpen(false);
   }
-  const isChannel = (u: string) => /\/user\//.test(u) || /space\.bilibili\.com/.test(u);
+  const isChannel = (u: string) =>
+    /\/user\//.test(u) || /space\.bilibili\.com/.test(u) || /playlet\/detail|object_id=|\/collection\//.test(u);
   // A Bilibili video link often IS a whole show (合集 collection or multi-part video
   // — the "videopod.episodes" player). Let the user pick scope explicitly.
   const isBiliVideo = (u: string) => /bilibili\.com\/video\//.test(u);
