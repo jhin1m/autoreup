@@ -24,6 +24,19 @@ def extract_url(text: str) -> str:
     return match.group(0).rstrip(".,;:!?)】》>\"'")
 
 
+def canonical_source_url(url: str) -> str:
+    """Stable form of a source URL for storing/matching. Bilibili share links carry
+    volatile tracking params (?spm_id_from…&vd_source…) — without stripping them a
+    re-scan of the same collection would never match its existing series."""
+    url = extract_url(url)
+    parsed = urlparse(url)
+    if "bilibili.com" in parsed.netloc and "/video/" in parsed.path:
+        bvid = _extract_video_id(url)
+        if bvid:
+            return f"https://www.bilibili.com/video/{bvid}"
+    return url
+
+
 def detect_platform(url: str) -> Platform:
     host = urlparse(url).netloc.lower()
     if "douyin.com" in host:
@@ -115,15 +128,77 @@ class SourceDiscovery:
         except Exception:
             return None
 
-    def _discover_bilibili_video(self, url: str) -> SourceVideo:
-        bvid = _extract_video_id(url) or url.strip()
+    def _bilibili_view(self, bvid: str) -> dict:
+        """Bilibili's public view API — carries full metadata AND the ``ugc_season``
+        collection (合集) the video belongs to, when it belongs to one."""
         api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
         req = Request(api_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"})
         with urlopen(req, timeout=20) as response:
             payload = json.loads(response.read().decode())
         if payload.get("code") != 0:
             raise RuntimeError(payload.get("message") or "Bilibili metadata failed")
-        data = payload.get("data") or {}
+        return payload.get("data") or {}
+
+    def discover_collection(self, url: str, limit: int = 200) -> tuple[str, list[SourceVideo]] | None:
+        """Expand a Bilibili video URL into its full episode list, covering BOTH
+        shapes the "videopod.episodes" player shows: a 合集 (``ugc_season`` — many
+        BVs) and a multi-part video (``pages`` — one BV, many ?p=N parts). Returns
+        ``(series_title, episodes)`` or None when it's a plain single video."""
+        url = extract_url(url)
+        if detect_platform(url) != Platform.bilibili or "/video/" not in urlparse(url).path:
+            return None
+        bvid = _extract_video_id(url)
+        if not bvid:
+            return None
+        data = self._bilibili_view(bvid)
+
+        season = data.get("ugc_season") or {}
+        episodes = [ep for sec in (season.get("sections") or []) for ep in (sec.get("episodes") or [])]
+        if episodes:
+            videos: list[SourceVideo] = []
+            for ep in episodes[:limit]:
+                arc = ep.get("arc") or {}
+                ep_bvid = ep.get("bvid")
+                if not ep_bvid:
+                    continue
+                videos.append(SourceVideo(
+                    id=self._id_for(Platform.bilibili, ep_bvid),
+                    platform=Platform.bilibili,
+                    platform_video_id=ep_bvid,
+                    source_url=f"https://www.bilibili.com/video/{ep_bvid}",
+                    title=ep.get("title") or arc.get("title") or ep_bvid,
+                    thumbnail_url=arc.get("pic"),
+                    duration=arc.get("duration"),
+                ))
+            if videos:
+                return season.get("title") or "Bộ Bilibili", videos
+
+        pages = data.get("pages") or []
+        if len(pages) > 1:
+            videos = []
+            for page in pages[:limit]:
+                num = page.get("page")
+                if not num:
+                    continue
+                part = str(page.get("part") or "").strip()
+                # uploaders often name parts "1", "2"… — normalize to a readable episode title
+                title = f"Tập {num}" if (not part or part == str(num)) else f"Tập {num}: {part}"
+                videos.append(SourceVideo(
+                    id=self._id_for(Platform.bilibili, f"{bvid}_p{num}"),
+                    platform=Platform.bilibili,
+                    platform_video_id=f"{bvid}_p{num}",  # unique per part for episode dedup
+                    source_url=f"https://www.bilibili.com/video/{bvid}?p={num}",
+                    title=title,
+                    thumbnail_url=page.get("first_frame") or data.get("pic"),
+                    duration=page.get("duration"),
+                ))
+            if videos:
+                return data.get("title") or "Bộ Bilibili", videos
+        return None
+
+    def _discover_bilibili_video(self, url: str) -> SourceVideo:
+        bvid = _extract_video_id(url) or url.strip()
+        data = self._bilibili_view(bvid)
         owner = data.get("owner") or {}
         return SourceVideo(
             id=self._id_for(Platform.bilibili, data.get("bvid") or bvid),

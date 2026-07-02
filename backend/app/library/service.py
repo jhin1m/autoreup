@@ -22,7 +22,7 @@ from backend.app.library.store import LibraryStore, _new_id
 from backend.app.services.cookie_vault import CookieVault
 from backend.app.services.job_service import JobService
 from backend.app.studio.models import Platform
-from backend.app.studio.providers import SourceDiscovery, detect_platform
+from backend.app.studio.providers import SourceDiscovery, canonical_source_url, detect_platform
 
 # Walk the whole channel when scanning (bounded by has_more/timeout in the lister),
 # not just the newest page — otherwise older episodes of a show are silently missed.
@@ -147,9 +147,17 @@ class LibraryService:
         persisted). Each group is matched to an EXISTING series of this channel (so a
         re-scan syncs instead of duplicating), with a count of how many episodes are new.
         LLM assists with naming/clustering when the heuristic is unsure."""
-        videos = self.discovery.discover(url, limit=_CHANNEL_SCAN_LIMIT)
-        groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title="", videos=videos)]
-        groups = self._refine_with_llm(groups, videos)
+        url = canonical_source_url(url)
+        # A Bilibili collection / multi-part video IS one series with an authoritative
+        # title — no clustering or LLM naming needed, just its episode list.
+        collection = self.discovery.discover_collection(url)
+        if collection:
+            title, videos = collection
+            groups = [Group(title=title, videos=videos)]
+        else:
+            videos = self.discovery.discover(url, limit=_CHANNEL_SCAN_LIMIT)
+            groups = cluster_into_series(videos) if len(videos) > 1 else [Group(title="", videos=videos)]
+            groups = self._refine_with_llm(groups, videos)
         existing = self._existing_for_channel(url)
         platform = detect_platform(url).value
         out: list[dict] = []
@@ -198,6 +206,7 @@ class LibraryService:
         that existing series; otherwise a new series is created (channel attached as a
         source). Idempotent — re-scanning a channel adds new episodes + new shows without
         duplicating. Episode payloads come from the preview, so no extra network call."""
+        url = canonical_source_url(url)
         platform = detect_platform(url)
         touched: list[str] = []
         for grp in groups:

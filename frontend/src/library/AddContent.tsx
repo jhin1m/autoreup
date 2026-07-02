@@ -17,6 +17,9 @@ export function AddContent({ onOpenSeries }: { onOpenSeries: (seriesId: string) 
     setOpen(false);
   }
   const isChannel = (u: string) => /\/user\//.test(u) || /space\.bilibili\.com/.test(u);
+  // A Bilibili video link often IS a whole show (合集 collection or multi-part video
+  // — the "videopod.episodes" player). Let the user pick scope explicitly.
+  const isBiliVideo = (u: string) => /bilibili\.com\/video\//.test(u);
 
   if (!open) {
     return (
@@ -41,11 +44,20 @@ export function AddContent({ onOpenSeries }: { onOpenSeries: (seriesId: string) 
               placeholder="Dán link KÊNH (tự tách bộ) hoặc 1 VIDEO lẻ…"
               autoFocus
             />
-            <button className="primary" disabled={!url.trim()} onClick={() => setStage(isChannel(url.trim()) ? "channel" : "single")}>
-              Tiếp
-            </button>
+            {isBiliVideo(url.trim()) && !isChannel(url.trim()) ? (
+              <>
+                <button className="primary" onClick={() => setStage("channel")}>Nhập cả bộ</button>
+                <button className="ghost" onClick={() => setStage("single")}>Chỉ video này</button>
+              </>
+            ) : (
+              <button className="primary" disabled={!url.trim()} onClick={() => setStage(isChannel(url.trim()) ? "channel" : "single")}>
+                Tiếp
+              </button>
+            )}
           </div>
-          <p className="ci-hint">Link <b>/user/…</b> = cả kênh (tách thành các bộ). Link 1 video = thêm 1 tập.</p>
+          <p className="ci-hint">
+            Link <b>/user/…</b> = cả kênh (tách thành các bộ). Link video Bilibili thuộc 合集/nhiều phần có thể nhập cả bộ. Link 1 video = thêm 1 tập.
+          </p>
         </>
       ) : null}
 
