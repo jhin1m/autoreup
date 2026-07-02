@@ -69,7 +69,7 @@ TRANSLATE_SYSTEM = (
     "3. XƯNG HÔ: dùng đúng giới tính + đại từ mỗi nhân vật theo GLOSSARY và giữ NHẤT QUÁN xuyên suốt; "
     "không tự đổi qua lại, không dùng đại từ miệt thị (ả/mụ/thị/gã/hắn/y/lão) cho nhân vật trung tính/"
     "chính diện. BỐI CẢNH người dùng ưu tiên tuyệt đối.\n"
-    "4. Bám MEMORY và đuôi thoại trước để nối mạch; không dịch lại phần đuôi.\n"
+    "4. NGỮ CẢNH TRƯỚC (nếu có) chỉ để nối mạch — KHÔNG dịch lại phần đó.\n"
     "5. NGẮT DÒNG PHỤ ĐỀ (phải khớp với cách hệ thống cắt dòng): đặt DẤU CÂU (phẩy, chấm, ?, !, :) ở "
     "các CHỖ NGẮT TỰ NHIÊN sao cho MỖI MỆNH ĐỀ nằm giữa hai dấu ≤ ~{max_caption_chars} ký tự. Hệ thống "
     "cắt dòng ĐÚNG TẠI dấu câu; không có dấu trong một đoạn dài thì nó buộc phải cắt giữa cụm (xấu). "
@@ -80,20 +80,16 @@ TRANSLATE_SYSTEM = (
     "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
     "ANCHOR_ID<TAB>TEXT\n"
     "TEXT chỉ là lời thoại tiếng Việt: TUYỆT ĐỐI KHÔNG chép lại cột ≤N ngân sách hay bất kỳ số/nhãn nào từ "
-    "input vào TEXT; không mở đầu bằng '≤123' hay dấu | / .\n"
-    "Sau bảng thoại, có thể thêm tối đa 5 dòng MEMORY<TAB>KEY<TAB>VALUE để chunk sau biết tên/diễn biến/"
-    "xưng hô đã chốt."
+    "input vào TEXT; không mở đầu bằng '≤123' hay dấu | / ."
 )
 
 TRANSLATE_USER = (
     "GLOSSARY (tên + giới tính + xưng hô đã chốt — TUÂN THỦ):\n{glossary}\n\n"
     "BỐI CẢNH/NHÂN VẬT người dùng cung cấp (ưu tiên tuyệt đối):\n{notes}\n\n"
-    "MEMORY (đã chốt ở các chunk trước):\n{memory}\n\n"
-    "ĐUÔI THOẠI TRƯỚC (nối mạch, không dịch lại):\n{prev_tail}\n\n"
+    "NGỮ CẢNH TRƯỚC — phần nguồn ngay trước chunk này (chỉ để nối mạch, KHÔNG dịch):\n{prev_source}\n\n"
     "CHUNK HIỆN TẠI — ANCHOR_ID<TAB>≤CHARS<TAB>SOURCE_ZH:\n{anchors}\n\n"
     "Cột ≤CHARS là ngân sách ký tự (đọc kịp trong thời gian nói) — DÙNG để cô đọng, KHÔNG chép vào TEXT; "
-    "mỗi dòng hiển thị nên ≤ khoảng {max_caption_chars} ký tự. Viết lời Việt cho MỌI ANCHOR_ID ở trên, rồi "
-    "(tuỳ chọn) các dòng MEMORY. Chỉ TSV."
+    "mỗi dòng hiển thị nên ≤ khoảng {max_caption_chars} ký tự. Viết lời Việt cho MỌI ANCHOR_ID ở trên. Chỉ TSV."
 )
 
 # --- Repair: shorten over-budget anchors ------------------------------------

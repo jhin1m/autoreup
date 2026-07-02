@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     # natural pause — condensing the over-dense source (22-29 ch/s) without needless
     # content loss or underfill.
     tts_voice_cps: float = 18.0
+    # MEASURED natural reading pace of the voice (ch/s, before synth_rate). Used to
+    # PREDICT from character counts alone which lines will overflow their window —
+    # so most over-long lines are shortened right after translate, by text math,
+    # instead of being discovered three synth-render-repair rounds later.
+    tts_voice_read_cps: float = 19.8
     # Each unique line costs ~6s upstream (CapCut) but the TTS server is fully
     # concurrent and caches by text — so synth throughput = workers / 6s. This is the
     # real voiceover bottleneck; raise for long videos (server handled 24 fine).

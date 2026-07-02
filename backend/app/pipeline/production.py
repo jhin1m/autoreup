@@ -244,6 +244,11 @@ class TranslateStage(PipelineStage):
             anchors, chunks, glossary, _translate_llm(settings),
             TranslateConfig(max_caption_chars=settings.subtitle_max_line_chars, voice_cps=settings.tts_voice_cps, notes=context.config.content_notes),
         )
+        # Text-level pre-repair: character counts alone PREDICT which anchors will
+        # overflow (read pace is known), so shorten them here in one concurrent
+        # rewrite wave. Before this, ~half the anchors of a long video reached the
+        # voiceover stage over budget and burned 3 synth-measure-repair rounds.
+        speech_rows, pre_repaired = _shorten_predicted_overflow(speech_rows, anchors, glossary, settings)
         context.artifacts["chunks"] = chunks
         context.artifacts["speech_rows"] = speech_rows
         path = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
@@ -251,8 +256,39 @@ class TranslateStage(PipelineStage):
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.subtitle_json, path, settings.data_dir)],
-            metrics={"chunks": len(chunks), "speech_rows": len(speech_rows)},
+            metrics={"chunks": len(chunks), "speech_rows": len(speech_rows), "pre_repaired_anchors": pre_repaired},
         )
+
+
+def _shorten_predicted_overflow(
+    speech_rows: list[SpeechRow],
+    anchors: list[Anchor],
+    glossary: list[GlossaryEntry],
+    settings: Settings,
+) -> tuple[list[SpeechRow], int]:
+    """Predict per-anchor voice duration from character counts and shorten the
+    over-budget anchors via the normal repair path (batched, concurrent)."""
+    effective_cps = settings.tts_voice_read_cps * settings.tts_synth_rate
+    by_anchor: dict[int, int] = {}
+    for row in speech_rows:
+        by_anchor[row.anchor_id] = by_anchor.get(row.anchor_id, 0) + len(row.text)
+    predicted_overflow: dict[int, tuple[float, float]] = {}
+    for anchor in anchors:
+        chars = by_anchor.get(anchor.id)
+        if not chars:
+            continue
+        window = max(0.1, anchor.end - anchor.start)
+        est_duration = chars / effective_cps
+        # same tolerance as the render loop's repair_over_ms, plus the tempo fit's
+        # ability to absorb a bit of overrun
+        if est_duration > (window * settings.tts_max_tempo) + 0.3:
+            predicted_overflow[anchor.id] = (window, est_duration)
+    if not predicted_overflow:
+        return speech_rows, 0
+    return repair(
+        speech_rows, anchors, glossary, predicted_overflow, _polish_llm(settings),
+        RepairConfig(max_caption_chars=settings.subtitle_max_line_chars),
+    )
 
 
 class QAStage(PipelineStage):
@@ -262,8 +298,8 @@ class QAStage(PipelineStage):
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
-        cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"))
-        report = qa_report(speech_rows, anchors, cues, max_display_chars=settings.display_max_chars)
+        cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"), max_chars=settings.subtitle_max_line_chars)
+        report = qa_report(speech_rows, anchors, cues, max_display_chars=settings.subtitle_max_line_chars)
 
         subtitle_json = settings.subtitles_dir / f"{context.job_id}.vi.display.json"
         subtitle_srt = settings.subtitles_dir / f"{context.job_id}.vi.display.srt"

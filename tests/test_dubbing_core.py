@@ -43,16 +43,31 @@ def test_vi_speech_weight_monotonic_and_numbers():
 
 
 def test_build_anchors_groups_segments_and_preserves_rail():
-    segments = [AsrSegment(i, i * 1.0, i * 1.0 + 0.9, f"字{i}") for i in range(10)]
-    anchors = build_anchors(segments, AnchorConfig(max_anchor_segments=3, max_anchor_duration=999, max_anchor_source_chars=999))
-    # 10 segments / 3 per anchor -> 4 anchors
+    # Continuous speech (no usable pauses): the size limit cuts at the limit position.
+    packed = [AsrSegment(i, i * 1.0, (i + 1) * 1.0, f"字{i}") for i in range(10)]
+    anchors = build_anchors(packed, AnchorConfig(max_anchor_segments=3, max_anchor_duration=999, max_anchor_source_chars=999))
     assert len(anchors) == 4
-    # source ids cover the full segment range with no gaps
     assert anchors[0].source_id_range() == (0, 2)
     assert anchors[-1].source_id_range() == (9, 9)
-    # anchor timing spans its segments
     assert anchors[0].start == 0.0
-    assert anchors[0].end == segments[2].end
+    assert anchors[0].end == packed[2].end
+    # rail preserved: every segment belongs to exactly one anchor, in order
+    covered = [i for a in anchors for i in range(a.source_id_range()[0], a.source_id_range()[1] + 1)]
+    assert covered == list(range(10))
+
+
+def test_build_anchors_cuts_at_the_widest_pause_not_the_limit():
+    # Segments 0-1 are butt-joined, then a 0.3s breath, then 2-3 butt-joined. The
+    # 3-segment limit must NOT cut 2 away from 3 mid-sentence; it backs up to the
+    # pause so each anchor is a natural speech beat (ASR has no punctuation).
+    segments = [
+        AsrSegment(0, 0.0, 1.0, "字0"),
+        AsrSegment(1, 1.0, 2.0, "字1"),
+        AsrSegment(2, 2.3, 3.3, "字2"),
+        AsrSegment(3, 3.3, 4.3, "字3"),
+    ]
+    anchors = build_anchors(segments, AnchorConfig(max_anchor_segments=3, max_anchor_duration=999, max_anchor_source_chars=999))
+    assert [a.source_id_range() for a in anchors] == [(0, 1), (2, 3)]
 
 
 def test_build_chunks_covers_every_anchor_via_flat_map():

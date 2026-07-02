@@ -9,6 +9,7 @@ other anchors are untouched.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .glossary import format_glossary
@@ -26,6 +27,25 @@ class RepairConfig:
     max_caption_chars: int = 32
     target_scale: float = 0.92  # shrink target a touch below the proportional estimate
     batch_anchors: int = 16
+    batch_workers: int = 4  # batches are independent -> call the LLM concurrently
+
+
+def _batched_rewrites(
+    batches: list[str], system: str, llm: LLMConfig, workers: int
+) -> dict[int, str]:
+    """Run one LLM call per prompt batch CONCURRENTLY and merge the rewrites.
+
+    A 30-min video's first repair round used to be ~9 serial LLM round-trips —
+    the single biggest avoidable wait in the voiceover stage."""
+    def call(user: str) -> dict[int, str]:
+        raw = complete(system, user, llm)
+        return {int(c[0]): sanitize_caption(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
+
+    rewrites: dict[int, str] = {}
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for result in pool.map(call, batches):
+            rewrites.update(result)
+    return rewrites
 
 
 @dataclass(slots=True)
@@ -100,21 +120,25 @@ def repair(
     if not targets:
         return speech_rows, 0
 
+    batches = [
+        REPAIR_USER.format(
+            glossary=format_glossary(glossary),
+            anchors=_format_repair_rows(targets[start : start + config.batch_anchors], amap, grouped),
+        )
+        for start in range(0, len(targets), config.batch_anchors)
+    ]
+    rewrites = _batched_rewrites(batches, REPAIR_SYSTEM, llm, config.batch_workers)
+
     repaired = 0
-    for start in range(0, len(targets), config.batch_anchors):
-        batch = targets[start : start + config.batch_anchors]
-        user = REPAIR_USER.format(glossary=format_glossary(glossary), anchors=_format_repair_rows(batch, amap, grouped))
-        raw = complete(REPAIR_SYSTEM, user, llm)
-        rewrites = {int(c[0]): sanitize_caption(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
-        for target in batch:
-            text = rewrites.get(target.anchor_id)
-            if not text or has_han(text):
-                continue
-            current_weight = sum(vi_speech_weight(r.text) for r in grouped[target.anchor_id])
-            if vi_speech_weight(text) >= current_weight:
-                continue  # not actually shorter -> reject
-            grouped[target.anchor_id] = _rebuild_rows(amap[target.anchor_id], text, config.max_caption_chars)
-            repaired += 1
+    for target in targets:
+        text = rewrites.get(target.anchor_id)
+        if not text or has_han(text):
+            continue
+        current_weight = sum(vi_speech_weight(r.text) for r in grouped[target.anchor_id])
+        if vi_speech_weight(text) >= current_weight:
+            continue  # not actually shorter -> reject
+        grouped[target.anchor_id] = _rebuild_rows(amap[target.anchor_id], text, config.max_caption_chars)
+        repaired += 1
 
     out: list[SpeechRow] = []
     for anchor in anchors:
@@ -157,21 +181,25 @@ def expand(
         return speech_rows, 0
     window = {aid: underfull_by_anchor[aid][0] for aid in ids}
 
+    batches = [
+        EXPAND_USER.format(
+            glossary=format_glossary(glossary),
+            anchors=_format_expand_rows(ids[start : start + config.batch_anchors], amap, grouped, window),
+        )
+        for start in range(0, len(ids), config.batch_anchors)
+    ]
+    rewrites = _batched_rewrites(batches, EXPAND_SYSTEM, llm, config.batch_workers)
+
     expanded = 0
-    for start in range(0, len(ids), config.batch_anchors):
-        batch = ids[start : start + config.batch_anchors]
-        user = EXPAND_USER.format(glossary=format_glossary(glossary), anchors=_format_expand_rows(batch, amap, grouped, window))
-        raw = complete(EXPAND_SYSTEM, user, llm)
-        rewrites = {int(c[0]): sanitize_caption(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
-        for anchor_id in batch:
-            text = rewrites.get(anchor_id)
-            if not text or has_han(text):
-                continue
-            current_weight = sum(vi_speech_weight(r.text) for r in grouped[anchor_id])
-            if vi_speech_weight(text) <= current_weight * 1.1:
-                continue  # not meaningfully longer -> keep current (line was complete)
-            grouped[anchor_id] = _rebuild_rows(amap[anchor_id], text, config.max_caption_chars)
-            expanded += 1
+    for anchor_id in ids:
+        text = rewrites.get(anchor_id)
+        if not text or has_han(text):
+            continue
+        current_weight = sum(vi_speech_weight(r.text) for r in grouped[anchor_id])
+        if vi_speech_weight(text) <= current_weight * 1.1:
+            continue  # not meaningfully longer -> keep current (line was complete)
+        grouped[anchor_id] = _rebuild_rows(amap[anchor_id], text, config.max_caption_chars)
+        expanded += 1
 
     out: list[SpeechRow] = []
     for anchor in anchors:
