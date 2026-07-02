@@ -36,6 +36,11 @@ class DouyinApiError(RuntimeError):
     pass
 
 
+class DouyinDrmError(DouyinApiError):
+    """The stream downloaded but its samples are encrypted (playlet/短剧 DRM) — the
+    web API can't yield a playable file; the app can. Not worth a browser fallback."""
+
+
 def _int_or_none(value) -> int | None:
     try:
         return int(value)

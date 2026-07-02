@@ -55,8 +55,38 @@ export function ChannelImport({ url, onDone }: { url: string; onDone: () => void
     });
   const chosenCount = groups ? groups.length - skip.size : 0;
 
-  if (scanning) return <p className="ci-hint">Đang quét kênh…</p>;
-  if (!groups || !groups.length) return <p className="muted-note">Không tách được bộ nào từ kênh này.</p>;
+  if (scanning) return <p className="ci-hint">Đang quét…</p>;
+  if (!groups || !groups.length) return <p className="muted-note">Không tách được bộ nào.</p>;
+
+  // A playlet / collection is ONE known series — skip the channel-style group
+  // review (checkboxes, clustering) and just confirm cover + name + count.
+  if (groups.length === 1) {
+    const group = groups[0];
+    const cover = thumbSrc(String((group.episodes[0] as { thumbnail_url?: string })?.thumbnail_url ?? "") || undefined);
+    return (
+      <div className="ci-solo">
+        <div className="ci-thumb lg">{cover ? <img src={cover} alt="" loading="lazy" /> : <span className="reel" aria-hidden />}</div>
+        <div className="ci-solo-body">
+          <input
+            className="ci-title-input"
+            value={titles[0] ?? ""}
+            onChange={(event) => setTitles([event.target.value])}
+          />
+          {group.title_vi ? (
+            <button type="button" className="ci-vi" onClick={() => setTitles([group.title_vi!])}>→ {group.title_vi}</button>
+          ) : null}
+          <p className="ci-hint">
+            {group.series_id
+              ? group.new_count ? `Đã có · thêm ${group.new_count} tập mới` : "Đã có · không có tập mới"
+              : `${group.total} tập`}
+          </p>
+        </div>
+        <button className="primary" disabled={importChannel.isPending} onClick={importChosen}>
+          {importChannel.isPending ? "Đang nhập…" : group.series_id ? "Đồng bộ bộ" : "Nhập bộ"}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <>

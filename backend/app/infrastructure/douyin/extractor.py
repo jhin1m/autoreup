@@ -7,6 +7,8 @@ back to the browser when the API is blocked (empty risk-control response).
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -14,7 +16,7 @@ import httpx
 from backend.app.services.cookie_vault import CookieVault
 from backend.app.studio.providers import _extract_sec_uid, _extract_video_id, extract_url
 
-from .api_client import DouyinApiClient, DouyinApiError
+from .api_client import DouyinApiClient, DouyinApiError, DouyinDrmError
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -43,6 +45,12 @@ class DouyinApiExtractor:
         stream = self._client().best_stream(aweme_id)
         dest = self.videos_dir / f"{video_id}.mp4"
         self._download(stream["url"], dest)
+        if not _is_playable(dest):
+            dest.unlink(missing_ok=True)
+            raise DouyinDrmError(
+                "Video Douyin dạng playlet/短剧 bị mã hoá — bản web không giải mã được. "
+                "Loại này chỉ xem/tải được trong app Douyin."
+            )
         return {
             "id": video_id,
             "title": stream.get("title") or video_id,
@@ -64,3 +72,15 @@ class DouyinApiExtractor:
                     out.write(chunk)
         if not dest.exists() or dest.stat().st_size < 1024:
             raise DouyinApiError("File tải về rỗng/không hợp lệ.")
+
+
+def _is_playable(path: Path) -> bool:
+    """Decode the first ~2s of video; DRM-scrambled samples spew decode errors even
+    though the header/duration probe fine. Empty stderr => a real playable file."""
+    if not shutil.which("ffmpeg"):
+        return True  # can't check; assume ok
+    p = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-t", "2", "-map", "0:v:0", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    return not p.stderr.strip()

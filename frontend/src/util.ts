@@ -57,6 +57,7 @@ export function dubErrorVi(error: string | null | undefined): string {
     return "Không tải được video (Douyin chặn hoặc hết thời gian). Thử lại sau ít phút.";
   if (/Connection refused|Errno 61/i.test(e)) return "Máy chủ dịch (LLM :8099) chưa bật.";
   if (/验证码|captcha/i.test(e)) return "Douyin yêu cầu xác minh (CAPTCHA). Cần cookie mới.";
+  if (/mã ho|playlet|短剧|DRM|mã hoá/i.test(e)) return "Playlet Douyin bị mã hoá — chỉ tải được trong app, bản web không hỗ trợ.";
   if (/ffmpeg|boxblur|libx264|videotoolbox/i.test(e)) return "Lỗi khi dựng/burn video (ffmpeg).";
   if (/asr/i.test(e)) return "Lỗi nhận dạng lời thoại. Thử dịch lại.";
   return e.length > 160 ? e.slice(0, 160) + "…" : e || "Lỗi không rõ.";

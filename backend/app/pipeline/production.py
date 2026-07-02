@@ -593,10 +593,12 @@ def _download_source(settings: Settings, url: str, job_id: str) -> dict:
         # Signed web API first (in-process, no browser); fall back to the headless
         # browser only when the API is risk-controlled (empty response).
         from backend.app.infrastructure.douyin.extractor import DouyinApiExtractor
-        from backend.app.infrastructure.douyin.api_client import DouyinApiError
+        from backend.app.infrastructure.douyin.api_client import DouyinApiError, DouyinDrmError
 
         try:
             return DouyinApiExtractor(settings.videos_dir, vault).download(url, job_id)
+        except DouyinDrmError:
+            raise  # encrypted playlet — the browser sniffs the same DRM stream, no point
         except DouyinApiError:
             from backend.app.infrastructure.browser_extractor import DouyinBrowserExtractor
 
