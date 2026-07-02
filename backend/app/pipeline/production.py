@@ -25,6 +25,7 @@ from backend.app.dubbing.chunking import ChunkConfig, build_chunks, flat_scene_m
 from backend.app.dubbing.display import build_display_cues, write_subtitles
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
 from backend.app.dubbing.llm import LLMConfig
+from backend.app.dubbing.onset import refine_segments
 from backend.app.dubbing.models import (
     ANCHOR_FIELDS,
     SEGMENT_FIELDS,
@@ -222,6 +223,13 @@ class ASRStage(PipelineStage):
         logs = _run_asr(context, output_srt)
 
         segments = segments_from_srt(output_srt)
+        # Whisper timestamps lead the real words on noisy content (music/SFX) and it
+        # hallucinates lines inside music-only passages — the dub then speaks before
+        # the on-screen character and phantom dialogue appears. Align the rail to
+        # Silero-VAD speech regions (the WhisperX-style fix) before anything trusts it.
+        total = len(segments)
+        segments, moved, dropped = refine_segments(segments, Path(context.artifacts["video"]))
+        logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {total} segments")
         anchors = build_anchors(segments, AnchorConfig())
         context.artifacts["segments"] = segments
         context.artifacts["anchors"] = anchors

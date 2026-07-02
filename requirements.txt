@@ -9,3 +9,7 @@ rapidfuzz==3.11.0
 pydantic-settings==2.7.1
 httpx==0.28.1
 anthropic==0.42.0
+# VAD rail alignment (dubbing/onset.py): silero-vad ships the ONNX model file,
+# onnxruntime runs it — torch is NOT imported at runtime.
+silero-vad==6.2.1
+onnxruntime==1.27.0
