@@ -12,6 +12,7 @@ client (an external-service adapter, like yt-dlp/ffmpeg).
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from dataclasses import asdict
@@ -70,6 +71,7 @@ class ProductionPipeline:
             settings=self.settings,
             config=config,
             artifacts={},
+            series_id=job_input.series_id,
         )
 
 
@@ -217,9 +219,25 @@ class GlossaryStage(PipelineStage):
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
-        glossary = extract_glossary(anchors, _translate_llm(settings), genre=context.config.content_genre, notes=context.config.content_notes)
+
+        # Episodes of one series share a cast: the FIRST dubbed episode's glossary
+        # becomes the series "show bible" and later episodes just load it. That keeps
+        # names/pronouns identical across episodes (each episode re-extracting risked
+        # a different Hán-Việt spelling per episode) and drops an ~12s LLM call from
+        # every episode after the first. Delete the series file to force a re-extract.
+        series_path = _series_glossary_path(settings, context.series_id)
+        reused = False
+        if series_path is not None and series_path.exists():
+            reused = True
+            rows = json.loads(series_path.read_text(encoding="utf-8"))
+            glossary = [GlossaryEntry(**row) for row in rows]
+        else:
+            glossary = extract_glossary(anchors, _translate_llm(settings), genre=context.config.content_genre, notes=context.config.content_notes)
+            rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
+            if series_path is not None and glossary:
+                write_json(series_path, rows)
+
         context.artifacts["glossary"] = glossary
-        rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
         tsv_path = settings.subtitles_dir / f"{context.job_id}.glossary.tsv"
         json_path = settings.subtitles_dir / f"{context.job_id}.glossary.json"
         write_tsv(tsv_path, [{k.upper(): v for k, v in row.items()} for row in rows], ["TERM_ZH", "TERM_VI", "KIND", "NOTE"])
@@ -227,9 +245,15 @@ class GlossaryStage(PipelineStage):
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.glossary, json_path, settings.data_dir)],
-            metrics={"terms": len(glossary), "by_kind": _count_kinds(glossary)},
+            metrics={"terms": len(glossary), "by_kind": _count_kinds(glossary), "reused_series_glossary": reused},
             logs=[format_glossary(glossary)[:2000]],
         )
+
+
+def _series_glossary_path(settings: Settings, series_id: str | None) -> Path | None:
+    if not series_id:
+        return None
+    return settings.subtitles_dir / f"series-{series_id}.glossary.json"
 
 
 class TranslateStage(PipelineStage):
@@ -507,7 +531,7 @@ def _run_asr(context: PipelineContext, output_srt: Path) -> list[str]:
         "--output", str(output_srt),
         "--language", "zh",
         "--model", str(settings.asr_model),
-        "--workers", "4",
+        "--workers", str(settings.asr_workers),
         "--max-chars", "18",
     ]
     return run_command(command, cwd=settings.root_dir)

@@ -63,6 +63,27 @@ class ProductionPipelineTest(unittest.TestCase):
             self.assertEqual(result.metrics["issues"], 0)
             self.assertTrue(Path(ctx.artifacts["subtitle_srt"]).exists())
 
+    def test_glossary_reused_from_series_file_without_llm(self):
+        import json
+
+        from backend.app.pipeline.production import GlossaryStage, _series_glossary_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _context(Path(tmp))
+            ctx.series_id = "series1"
+            series_path = _series_glossary_path(ctx.settings, "series1")
+            series_path.write_text(json.dumps([
+                {"term_zh": "罗瑞", "term_vi": "La Thụy", "kind": "name", "note": "nam"},
+            ]), encoding="utf-8")
+
+            def explode(*args, **kwargs):
+                raise AssertionError("series glossary present -> the LLM must NOT be called")
+
+            with patch("backend.app.dubbing.glossary.complete", side_effect=explode):
+                result = GlossaryStage().run(ctx)
+            self.assertTrue(result.metrics["reused_series_glossary"])
+            self.assertEqual([g.term_vi for g in ctx.artifacts["glossary"]], ["La Thụy"])
+
     def test_voiceover_skipped_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _context(Path(tmp))  # tts_enabled defaults to False

@@ -137,6 +137,7 @@ export type SeriesPage = { items: Series[]; total: number };
 
 export type ChannelGroup = {
   title: string;
+  title_vi: string | null;        // LLM-suggested Vietnamese name for the scan review
   platform: string;
   series_id: string | null;       // matched existing series, or null = new
   existing_title: string | null;

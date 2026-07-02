@@ -160,6 +160,7 @@ class LibraryService:
             new_count = len(gids - known)
             out.append({
                 "title": group.title,
+                "title_vi": None,
                 "platform": platform,
                 "series_id": match[0] if match else None,
                 "existing_title": match[1] if match else None,
@@ -167,7 +168,30 @@ class LibraryService:
                 "total": len(group.videos),
                 "episodes": [self._video_dict(v) for v in group.videos],
             })
+        self._fill_group_titles_vi(out)
         return out
+
+    def _fill_group_titles_vi(self, groups: list[dict]) -> None:
+        """Give each proposed series a Vietnamese title so the scan review is readable
+        (the cluster titles are raw Chinese). One LLM call for the whole list;
+        best-effort — on any hiccup the review simply shows the original titles."""
+        pending = [(i, g["title"]) for i, g in enumerate(groups) if g.get("title")]
+        if not pending:
+            return
+        lines = "\n".join(f"{i}\t{title}" for i, title in pending)
+        system = (
+            "Dịch tên bộ phim/series sang tiếng Việt: TỰ NHIÊN, ngắn gọn, cuốn hút; BỎ hashtag và ký hiệu "
+            'thừa. Chỉ trả JSON: [{"i": chỉ_số, "vi": "tên tiếng Việt"}]'
+        )
+        try:
+            raw = complete(system, f"Danh sách (chỉ_số<TAB>tên):\n{lines}", self._llm())
+            data = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
+        except Exception:
+            return
+        for item in data:
+            i, vi = item.get("i"), (item.get("vi") or "").strip()
+            if isinstance(i, int) and 0 <= i < len(groups) and vi:
+                groups[i]["title_vi"] = vi
 
     def import_channel(self, url: str, groups: list[dict]) -> list[str]:
         """Sync chosen groups: a group carrying ``series_id`` upserts new episodes into

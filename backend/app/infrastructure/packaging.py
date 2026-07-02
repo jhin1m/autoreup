@@ -1,6 +1,5 @@
 import shutil
 import subprocess
-import zipfile
 from pathlib import Path
 
 from backend.app.domain.artifacts import Artifact, ArtifactKind
@@ -26,7 +25,6 @@ def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packag
     softsub_path = packages_dir / f"{stem}.softsub.mp4"
     dubbed_path = packages_dir / f"{stem}.dubbed.mp4"
     hardsub_path = packages_dir / f"{stem}.hardsub.mp4"
-    zip_path = packages_dir / f"{stem}.zip"
     logs: list[str] = []
     artifacts: list[Artifact] = []
 
@@ -54,14 +52,8 @@ def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packag
     else:
         logs.append("ffmpeg not found; skipped video render")
 
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in (subtitle_json, subtitle_srt, vtt_path):
-            archive.write(path, arcname=path.name)
-        if hardsub_path.exists():
-            archive.write(hardsub_path, arcname=hardsub_path.name)
-        elif softsub_path.exists():
-            archive.write(softsub_path, arcname=softsub_path.name)
-    artifacts.append(_artifact(ArtifactKind.zip_package, zip_path, root_data_dir))
+    # No zip bundle: nothing downstream consumes it — the deliverable is the hardsub
+    # MP4 itself, and zipping duplicated ~437MB of already-compressed video per episode.
     return artifacts, logs
 
 

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     content_notes: str = ""  # default per-video context for the translator (cast/gender/register)
     asr_worker_url: str | None = None
     asr_model: str = "@cf/openai/whisper-large-v3-turbo"
+    asr_workers: int = 8  # concurrent chunk uploads to the Cloudflare worker (it parallelizes well)
     cookies_file: str | None = None
     browser_path: str | None = None  # Chrome/Edge binary for the headless Douyin extractor
     node_bin: str = "node"

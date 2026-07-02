@@ -1686,7 +1686,33 @@ input:focus-visible,
 }
 .ci-title-input:focus { border-color: var(--amber); }
 .ci-count { color: var(--amber); font-size: 11.5px; flex-shrink: 0; }
-.ci-sample { color: var(--faint); font-size: 11.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ci-thumb {
+  width: 42px;
+  height: 56px; /* portrait — Douyin covers are vertical */
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--ink-2);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.ci-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ci-thumb .reel { width: 14px; height: 14px; margin: 0; }
+.ci-names { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ci-names .ci-title-input { flex: none; width: 100%; }
+.ci-vi {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: var(--amber);
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-vi:hover { text-decoration: underline; }
 .ci-badge { font-size: 10.5px; padding: 3px 8px; border-radius: 999px; flex-shrink: 0; }
 .ci-badge.fresh { color: var(--amber); background: var(--amber-soft); }
 .ci-badge.new { color: var(--jade); background: var(--jade-soft); }

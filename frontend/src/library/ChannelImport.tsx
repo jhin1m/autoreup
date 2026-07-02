@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import * as api from "../api";
 import { useImportChannel } from "../queries";
 import { useToast } from "../toast";
+import { thumbSrc } from "../util";
 import type { ChannelGroup } from "../types";
 
 /** Channel → series. Given a channel URL, auto-cluster its videos into shows; existing
@@ -61,24 +62,39 @@ export function ChannelImport({ url, onDone }: { url: string; onDone: () => void
     <>
       <p className="ci-hint">Tìm thấy {groups.length} bộ. Bộ đã có sẽ được bổ sung tập mới; bộ mới sẽ được tạo.</p>
       <div className="ci-groups">
-        {groups.map((group, index) => (
-          <div key={index} className={`ci-group ${skip.has(index) ? "skip" : ""}`}>
-            <input type="checkbox" checked={!skip.has(index)} onChange={() => toggleSkip(index)} />
-            <input
-              className="ci-title-input"
-              value={titles[index] ?? ""}
-              onChange={(event) => setTitles((prev) => prev.map((t, i) => (i === index ? event.target.value : t)))}
-            />
-            {group.series_id ? (
-              <span className={`ci-badge ${group.new_count ? "new" : "same"}`}>
-                {group.new_count ? `đã có · +${group.new_count} tập mới` : "đã có · không mới"}
-              </span>
-            ) : (
-              <span className="ci-badge fresh">mới · {group.total} tập</span>
-            )}
-            <span className="ci-sample">{String((group.episodes[0] as { title?: string })?.title ?? "").slice(0, 28)}…</span>
-          </div>
-        ))}
+        {groups.map((group, index) => {
+          const cover = thumbSrc(String((group.episodes[0] as { thumbnail_url?: string })?.thumbnail_url ?? "") || undefined);
+          return (
+            <div key={index} className={`ci-group ${skip.has(index) ? "skip" : ""}`}>
+              <input type="checkbox" checked={!skip.has(index)} onChange={() => toggleSkip(index)} />
+              <div className="ci-thumb">{cover ? <img src={cover} alt="" loading="lazy" /> : <span className="reel" aria-hidden />}</div>
+              <div className="ci-names">
+                <input
+                  className="ci-title-input"
+                  value={titles[index] ?? ""}
+                  onChange={(event) => setTitles((prev) => prev.map((t, i) => (i === index ? event.target.value : t)))}
+                />
+                {group.title_vi ? (
+                  <button
+                    type="button"
+                    className="ci-vi"
+                    title="Bấm để dùng tên tiếng Việt này"
+                    onClick={() => setTitles((prev) => prev.map((t, i) => (i === index ? group.title_vi! : t)))}
+                  >
+                    → {group.title_vi}
+                  </button>
+                ) : null}
+              </div>
+              {group.series_id ? (
+                <span className={`ci-badge ${group.new_count ? "new" : "same"}`}>
+                  {group.new_count ? `đã có · +${group.new_count} tập mới` : "đã có · không mới"}
+                </span>
+              ) : (
+                <span className="ci-badge fresh">mới · {group.total} tập</span>
+              )}
+            </div>
+          );
+        })}
       </div>
       <button className="primary" disabled={!chosenCount || importChannel.isPending} onClick={importChosen}>
         {importChannel.isPending ? "Đang đồng bộ…" : `Đồng bộ ${chosenCount} bộ`}
