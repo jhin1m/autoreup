@@ -10,6 +10,8 @@ flagged ``needs_repair`` for the repair loop — overflow never pushes later anc
 from __future__ import annotations
 
 import hashlib
+import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -186,9 +188,14 @@ def render(
             )
             for (rp, _block), audio in zip(todo, audios):
                 rp.parent.mkdir(parents=True, exist_ok=True)
-                rp.write_bytes(audio)
-                trim_silence(rp)
-                speed_clip(rp, config.synth_rate)  # CapCut ignores its rate param; apply it here
+                # Build in a temp name, publish with an atomic rename: the raw cache is
+                # shared across concurrent jobs, and a reader must never see a clip that
+                # is half-written or not yet trimmed/sped.
+                tmp = rp.with_name(f"{rp.stem}.{os.getpid()}-{threading.get_ident()}.build{rp.suffix}")
+                tmp.write_bytes(audio)
+                trim_silence(tmp)
+                speed_clip(tmp, config.synth_rate)  # CapCut ignores its rate param; apply it here
+                tmp.replace(rp)
 
     def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path, float, float], tuple[int, float]]:
         raw_path = raw_path_for(block)
@@ -196,9 +203,11 @@ def render(
         if not (raw_path.exists() and raw_path.stat().st_size > 1024):
             if provider is None:
                 raise RuntimeError(f"native synth produced no audio for block {block.block_id}")
-            raw_path.write_bytes(provider.synthesize(block.text))
-            trim_silence(raw_path)  # drop the TTS head/tail silence so speech lands at placement
-            speed_clip(raw_path, config.synth_rate)  # CapCut ignores its rate param; apply it here
+            tmp = raw_path.with_name(f"{raw_path.stem}.{os.getpid()}-{threading.get_ident()}.build{raw_path.suffix}")
+            tmp.write_bytes(provider.synthesize(block.text))
+            trim_silence(tmp)  # drop the TTS head/tail silence so speech lands at placement
+            speed_clip(tmp, config.synth_rate)  # CapCut ignores its rate param; apply it here
+            tmp.replace(raw_path)
 
         target = block.duration + config.voice_lead
         # Cache the tempo-fitted clip too, keyed by (raw clip, target window, tempo
@@ -209,9 +218,13 @@ def render(
             f"{raw_path.stem}|{round(target, 3)}|{config.min_tempo}|{config.max_tempo}|{config.fixed_tempo}".encode()
         ).hexdigest()[:24]
         aligned = cache_dir / "aligned" / f"{aligned_key}.m4a"
+        playback: float | None = None
         if aligned.exists() and aligned.stat().st_size > 1024:
-            playback = probe_duration(aligned)
-        else:
+            try:
+                playback = probe_duration(aligned)
+            except RuntimeError:
+                aligned.unlink(missing_ok=True)  # stale corrupt entry -> rebuild below
+        if playback is None:
             timing = align_audio(
                 raw_path, aligned, target, min_tempo=config.min_tempo, max_tempo=config.max_tempo, fixed_tempo=config.fixed_tempo
             )

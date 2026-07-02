@@ -7,8 +7,10 @@ clip to a target window, render silence, and concat-assemble a timed track.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 
@@ -81,13 +83,20 @@ def align_audio(
         tempo = clamp(raw_duration / max(0.001, target_duration), min_tempo, max_tempo)
     playback_duration = raw_duration / tempo
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic publish: this output is a SHARED cache entry and concurrent jobs read it.
+    # MP4 writes its moov atom last, so a reader catching a direct write mid-encode
+    # sees a corrupt file ("moov atom not found"). Encode to a WRITER-UNIQUE temp name
+    # and rename — readers only ever see complete files, and two jobs rendering the
+    # same entry at once each build their own temp (last rename wins, both valid).
+    part = output_path.with_name(f"{output_path.stem}.{os.getpid()}-{threading.get_ident()}.part{output_path.suffix}")
     run_command([
         "ffmpeg", "-y", "-v", "error",
         "-i", str(raw_path),
         "-filter:a", f"aresample=44100,{atempo_chain(tempo)}",
         "-ac", "2", "-c:a", "aac", "-b:a", "192k",
-        str(output_path),
+        str(part),
     ])
+    part.replace(output_path)
     return {
         "raw_duration": round(raw_duration, 3),
         "target_duration": round(target_duration, 3),
