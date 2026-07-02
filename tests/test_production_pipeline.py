@@ -84,6 +84,40 @@ class ProductionPipelineTest(unittest.TestCase):
             self.assertTrue(result.metrics["reused_series_glossary"])
             self.assertEqual([g.term_vi for g in ctx.artifacts["glossary"]], ["La Thụy"])
 
+    def test_stages_hydrate_from_disk_for_resume(self):
+        import json
+
+        from backend.app.dubbing.models import ANCHOR_FIELDS, SEGMENT_FIELDS, SPEECH_FIELDS, AsrSegment, SpeechRow
+        from backend.app.dubbing.tsv_io import write_tsv
+        from backend.app.pipeline.production import ASRStage, DownloadStage, GlossaryStage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _context(Path(tmp))
+            settings = ctx.settings
+
+            # nothing on disk yet -> every stage refuses to hydrate
+            self.assertFalse(DownloadStage().hydrate(ctx))
+            self.assertFalse(ASRStage().hydrate(ctx))
+            self.assertFalse(TranslateStage().hydrate(ctx))
+
+            (settings.videos_dir / "job.mp4").write_bytes(b"x" * 10)
+            segments = [AsrSegment(0, 0.0, 1.0, "字"), AsrSegment(1, 1.0, 2.0, "字")]
+            write_tsv(settings.subtitles_dir / "job.segments.tsv", [s.to_row() for s in segments], SEGMENT_FIELDS)
+            anchors = ctx.artifacts["anchors"]
+            write_tsv(settings.subtitles_dir / "job.anchors.tsv", [a.to_row() for a in anchors], ANCHOR_FIELDS)
+            (settings.subtitles_dir / "job.glossary.json").write_text(json.dumps([
+                {"term_zh": "罗", "term_vi": "La", "kind": "name", "note": ""},
+            ]), encoding="utf-8")
+            rows = [SpeechRow(0, 0, 0.0, 2.0, "0-1", "Lời thoại")]
+            write_tsv(settings.subtitles_dir / "job.speech.tsv", [r.to_row() for r in rows], SPEECH_FIELDS)
+
+            self.assertTrue(DownloadStage().hydrate(ctx))
+            self.assertTrue(ASRStage().hydrate(ctx))
+            self.assertTrue(GlossaryStage().hydrate(ctx))
+            self.assertTrue(TranslateStage().hydrate(ctx))
+            self.assertEqual([r.text for r in ctx.artifacts["speech_rows"]], ["Lời thoại"])
+            self.assertEqual(len(ctx.artifacts["segments"]), 2)
+
     def test_voiceover_skipped_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _context(Path(tmp))  # tts_enabled defaults to False

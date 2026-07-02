@@ -33,7 +33,19 @@ class JobService:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._queued: set[str] = set()  # job_ids waiting or in flight, for de-dup
         self._workers_started = False
+        # Per-job mutex: the download prefetcher and the pipeline worker may touch the
+        # same job; the lock serializes them so the manifest is never written by two
+        # threads and the worker simply waits out an in-flight prefetch.
+        self._job_locks: dict[str, threading.Lock] = {}
+        # Downloads are network-bound and shouldn't wait for a pipeline slot: while all
+        # workers are busy dubbing, queued jobs prefetch their video here. Kept small so
+        # Douyin doesn't see a burst of parallel scrapes (CAPTCHA risk).
+        self._download_slots = threading.Semaphore(2)
         self._reconcile_orphans()
+
+    def _job_lock(self, job_id: str) -> threading.Lock:
+        with self._lock:
+            return self._job_locks.setdefault(job_id, threading.Lock())
 
     def _reconcile_orphans(self) -> None:
         """A fresh process has no worker threads for jobs a previous run left mid-flight,
@@ -92,13 +104,54 @@ class JobService:
         return manifest
 
     def start_background(self, job_id: str) -> None:
-        """Enqueue a job to run on the worker pool (FIFO, bounded concurrency)."""
+        """Enqueue a job to run on the worker pool (FIFO, bounded concurrency).
+
+        The download starts IMMEDIATELY on the prefetch pool — a queued job no longer
+        sits idle waiting for a pipeline slot while the network does nothing."""
         with self._lock:
             if job_id in self._queued:
                 return
             self._queued.add(job_id)
             self._ensure_workers()
         self._queue.put(job_id)
+        threading.Thread(target=self._prefetch_download, args=(job_id,), name=f"prefetch-{job_id}", daemon=True).start()
+
+    def _prefetch_download(self, job_id: str) -> None:
+        """Run just the download stage for a still-queued job. Best-effort: any failure
+        leaves the job untouched and the worker downloads as usual. When the worker gets
+        to the job first (or is about to), the job lock + state check make this a no-op."""
+        with self._download_slots:
+            lock = self._job_lock(job_id)
+            if not lock.acquire(blocking=False):
+                return  # worker already owns the job
+            try:
+                manifest = self.get(job_id)
+                if manifest.state != JobState.queued or manifest.stages:
+                    return
+                with self._lock:
+                    if job_id in self._cancel_requested:
+                        return
+                context = self.pipeline.create_context(job_id, manifest.input, manifest.config)
+                stage = self.pipeline.stages[0]
+                record = StageRecord(name=stage.name, status=StageStatus.running, started_at=datetime.now(timezone.utc))
+                result = stage.run(context)
+                record.status = StageStatus.succeeded
+                record.ended_at = datetime.now(timezone.utc)
+                record.artifacts = result.artifacts
+                record.metrics = result.metrics
+                record.logs = result.logs[-200:]
+                manifest = self.get(job_id)  # re-read: keep any concurrent edits
+                if manifest.state != JobState.queued or manifest.stages:
+                    return
+                manifest.stages.append(record)
+                manifest.artifacts.extend(result.artifacts)
+                manifest.metrics[result.name] = result.metrics
+                manifest.touch()
+                self.save(manifest)
+            except Exception:
+                pass  # the worker will download normally
+            finally:
+                lock.release()
 
     def _ensure_workers(self) -> None:
         """Lazily spin up the worker pool on first use. Caller holds ``self._lock``."""
@@ -123,16 +176,37 @@ class JobService:
                 self._queue.task_done()
 
     def run(self, job_id: str) -> None:
+        with self._job_lock(job_id):
+            self._run_locked(job_id)
+
+    def _run_locked(self, job_id: str) -> None:
         manifest = self.get(job_id)
         context = self.pipeline.create_context(job_id, manifest.input, manifest.config)
         if self._take_cancel(job_id):
             return self._mark_canceled(manifest)
+
+        # RESUME: keep the leading run of stages that already succeeded (previous
+        # attempt or the download prefetcher) and whose outputs still hydrate from
+        # disk. A failed translate no longer re-downloads the video — the pipeline
+        # restarts at the broken stage.
+        prior = {record.name: record for record in manifest.stages if record.status == StageStatus.succeeded}
+        kept: list[StageRecord] = []
+        for stage in self.pipeline.stages:
+            record = prior.get(stage.name)
+            if record is None or not stage.hydrate(context):
+                break
+            kept.append(record)
+        manifest.stages = kept
+        manifest.artifacts = [artifact for record in kept for artifact in record.artifacts]
+        manifest.metrics = {str(record.name): record.metrics for record in kept}
+        manifest.error = None
         manifest.state = JobState.running
         manifest.touch()
         self.save(manifest)
+        remaining = self.pipeline.stages[len(kept):]
 
         try:
-            for stage in self.pipeline.stages:
+            for stage in remaining:
                 # Cooperative cancellation: stop at the stage boundary. A stage
                 # already in flight (ffmpeg/LLM) finishes first, then we bail.
                 if self._take_cancel(job_id):

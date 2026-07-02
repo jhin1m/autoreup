@@ -18,6 +18,13 @@ class PipelineStage:
     def run(self, context: "PipelineContext") -> StageResult:
         raise NotImplementedError
 
+    def hydrate(self, context: "PipelineContext") -> bool:
+        """Reload this stage's outputs from disk into ``context.artifacts`` WITHOUT
+        re-running it. Returns False when the artifacts are missing/unreadable — the
+        stage (and everything after it) must then run for real. This is what lets a
+        failed job RESUME at the broken stage instead of re-downloading everything."""
+        return False
+
 
 @dataclass
 class PipelineContext:

@@ -108,16 +108,26 @@ def translate_chunk(
     llm: LLMConfig,
     config: TranslateConfig,
 ) -> dict[int, str]:
-    valid_ids = {a.id for a in chunk_anchors}
-    user = TRANSLATE_USER.format(
-        glossary=format_glossary(glossary),
-        notes=config.notes or "(không có)",
-        prev_source=prev_source or "(đầu video)",
-        anchors=_format_anchor_rows(chunk_anchors, config.voice_cps, config.min_budget_chars),
-        max_caption_chars=config.max_caption_chars,
-    )
-    raw = complete(TRANSLATE_SYSTEM.format(max_caption_chars=config.max_caption_chars), user, llm)
-    texts = _parse_chunk_output(raw, valid_ids)
+    def attempt(anchors: list[Anchor]) -> dict[int, str]:
+        user = TRANSLATE_USER.format(
+            glossary=format_glossary(glossary),
+            notes=config.notes or "(không có)",
+            prev_source=prev_source or "(đầu video)",
+            anchors=_format_anchor_rows(anchors, config.voice_cps, config.min_budget_chars),
+            max_caption_chars=config.max_caption_chars,
+        )
+        raw = complete(TRANSLATE_SYSTEM.format(max_caption_chars=config.max_caption_chars), user, llm)
+        return _parse_chunk_output(raw, {a.id for a in anchors})
+
+    texts = attempt(chunk_anchors)
+    # Content-level retry: the model sometimes skips an anchor or leaves Han
+    # characters in one line. That is a per-line flake, not a chunk problem — re-ask
+    # for JUST the bad anchors once instead of failing the whole job
+    # ("anchor 15 translation still contains Han characters").
+    bad = [a for a in chunk_anchors if not texts.get(a.id) or has_han(texts[a.id])]
+    if bad:
+        retried = attempt(bad)
+        texts.update({aid: t for aid, t in retried.items() if t and not has_han(t)})
     _validate(texts, chunk_anchors)
     return texts
 

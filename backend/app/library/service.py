@@ -275,23 +275,42 @@ class LibraryService:
             ep.dub_stage_index = len(m.stages)
 
     def translate(self, series_id: str, episode_ids: list[str]) -> list[str]:
-        """Dub each episode (one job). Re-translating an episode replaces its previous
-        dub job + files. Returns the created job ids."""
+        """Dub each episode (one job). A FAILED job is resumed in place — the pipeline
+        restarts at the broken stage and reuses the video/ASR/translation already on
+        disk (re-downloading everything on every retry wasted minutes per episode).
+        Only a previously SUCCEEDED dub is replaced from scratch. Returns the job ids."""
         job_ids: list[str] = []
         for episode_id in episode_ids:
             ep = self.store.get_episode(episode_id)
             if not ep or ep.series_id != series_id:
                 continue
-            if ep.dub_job_id:
-                try:
-                    self.jobs.delete(ep.dub_job_id)
-                except Exception:
-                    pass
-            manifest = self.jobs.create(JobInput(url=ep.source_url, series_id=series_id, source_video_id=ep.id))
-            self.jobs.start_background(manifest.job_id)
-            self.store.set_episode_dub(ep.id, manifest.job_id, DubState.translating)
-            job_ids.append(manifest.job_id)
+            job_id = self._resumable_job_id(ep)
+            if job_id is None:
+                if ep.dub_job_id:
+                    try:
+                        self.jobs.delete(ep.dub_job_id)
+                    except Exception:
+                        pass
+                job_id = self.jobs.create(JobInput(url=ep.source_url, series_id=series_id, source_video_id=ep.id)).job_id
+            self.jobs.start_background(job_id)
+            self.store.set_episode_dub(ep.id, job_id, DubState.translating)
+            job_ids.append(job_id)
         return job_ids
+
+    def _resumable_job_id(self, ep) -> str | None:
+        """The episode's existing job id when it can simply be re-run (failed/canceled
+        attempt for the SAME video), else None to start a fresh job."""
+        if not ep.dub_job_id:
+            return None
+        try:
+            manifest = self.jobs.get(ep.dub_job_id)
+        except Exception:
+            return None
+        if manifest.state not in (JobState.failed, JobState.canceled):
+            return None
+        if manifest.input.source_video_id and manifest.input.source_video_id != ep.id:
+            return None
+        return manifest.job_id
 
     def delete_episode_dub(self, episode_id: str) -> bool:
         """Drop an episode's dub (job + files) and reset it to not-translated."""

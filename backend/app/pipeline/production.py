@@ -30,6 +30,7 @@ from backend.app.dubbing.models import (
     SEGMENT_FIELDS,
     SPEECH_FIELDS,
     Anchor,
+    AsrSegment,
     GlossaryEntry,
     SpeechRow,
 )
@@ -38,7 +39,7 @@ from backend.app.dubbing.rail import AnchorConfig, build_anchors, segments_from_
 from backend.app.dubbing.render import RenderConfig, assemble_voice, render
 from backend.app.dubbing.repair import RepairConfig, expand, repair
 from backend.app.dubbing.translate import TranslateConfig, translate
-from backend.app.dubbing.tsv_io import write_json, write_tsv
+from backend.app.dubbing.tsv_io import read_tsv, write_json, write_tsv
 from backend.app.infrastructure.downloader import YtDlpDownloader
 from backend.app.services.audio import plan_placements
 from backend.app.infrastructure.packaging import package_outputs
@@ -164,6 +165,13 @@ def _build_capcut_client(settings: Settings):
 class DownloadStage(PipelineStage):
     name = StageName.download
 
+    def hydrate(self, context: PipelineContext) -> bool:
+        video = context.settings.videos_dir / f"{context.job_id}.mp4"
+        if not (video.exists() and video.stat().st_size > 0):
+            return False
+        context.artifacts["video"] = video
+        return True
+
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
         result = _download_source(settings, context.input_url, context.job_id)
@@ -188,6 +196,23 @@ class DownloadStage(PipelineStage):
 
 class ASRStage(PipelineStage):
     name = StageName.asr
+
+    def hydrate(self, context: PipelineContext) -> bool:
+        settings: Settings = context.settings
+        segments_tsv = settings.subtitles_dir / f"{context.job_id}.segments.tsv"
+        anchors_tsv = settings.subtitles_dir / f"{context.job_id}.anchors.tsv"
+        if not (segments_tsv.exists() and anchors_tsv.exists()):
+            return False
+        try:
+            segments = [AsrSegment.from_row(r) for r in read_tsv(segments_tsv)]
+            anchors = [Anchor.from_row(r) for r in read_tsv(anchors_tsv)]
+        except (ValueError, KeyError):
+            return False
+        if not segments or not anchors:
+            return False
+        context.artifacts["segments"] = segments
+        context.artifacts["anchors"] = anchors
+        return True
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
@@ -215,6 +240,17 @@ class ASRStage(PipelineStage):
 
 class GlossaryStage(PipelineStage):
     name = StageName.glossary
+
+    def hydrate(self, context: PipelineContext) -> bool:
+        json_path = context.settings.subtitles_dir / f"{context.job_id}.glossary.json"
+        if not json_path.exists():
+            return False
+        try:
+            rows = json.loads(json_path.read_text(encoding="utf-8"))
+            context.artifacts["glossary"] = [GlossaryEntry(**row) for row in rows]
+        except (json.JSONDecodeError, TypeError, OSError):
+            return False
+        return True  # an empty glossary is a valid extraction result
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
@@ -258,6 +294,19 @@ def _series_glossary_path(settings: Settings, series_id: str | None) -> Path | N
 
 class TranslateStage(PipelineStage):
     name = StageName.translate
+
+    def hydrate(self, context: PipelineContext) -> bool:
+        path = context.settings.subtitles_dir / f"{context.job_id}.speech.tsv"
+        if not path.exists():
+            return False
+        try:
+            rows = [SpeechRow.from_row(r) for r in read_tsv(path)]
+        except (ValueError, KeyError):
+            return False
+        if not rows:
+            return False
+        context.artifacts["speech_rows"] = rows
+        return True
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
@@ -318,6 +367,21 @@ def _shorten_predicted_overflow(
 class QAStage(PipelineStage):
     name = StageName.qa
 
+    def hydrate(self, context: PipelineContext) -> bool:
+        settings: Settings = context.settings
+        subtitle_json = settings.subtitles_dir / f"{context.job_id}.vi.display.json"
+        subtitle_srt = settings.subtitles_dir / f"{context.job_id}.vi.display.srt"
+        if not (subtitle_json.exists() and subtitle_srt.exists()):
+            return False
+        try:
+            cues = json.loads(subtitle_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+        context.artifacts["display_cues"] = cues
+        context.artifacts["subtitle_json"] = subtitle_json
+        context.artifacts["subtitle_srt"] = subtitle_srt
+        return True
+
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
@@ -349,6 +413,18 @@ class QAStage(PipelineStage):
 
 class VoiceoverStage(PipelineStage):
     name = StageName.voiceover
+
+    def hydrate(self, context: PipelineContext) -> bool:
+        settings: Settings = context.settings
+        if not settings.tts_enabled:
+            return True  # stage would have been a no-op anyway
+        voice = settings.tts_dir / f"{context.job_id}.voice.m4a"
+        if not (voice.exists() and voice.stat().st_size > 0):
+            return False
+        # The subtitle files on disk were rewritten from the voice timing when this
+        # stage succeeded, so PackageStage only needs the track + those paths.
+        context.artifacts["voice_track"] = voice
+        return True
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
