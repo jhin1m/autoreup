@@ -149,16 +149,22 @@ const DETAIL_RE = /\/aweme\/v1\/web\/aweme\/detail\//;
 const wantId = (url.match(/video\/(\d+)/) || [])[1] || null;
 
 function pickBestGear(bitRate) {
+  // Same resolution, different codecs: H.265 carries ~1.7x the quality per bit of
+  // H.264, and Douyin's H.265 gear often LOOKS better than the higher-numbered
+  // H.264 one (measured: h264 981kbps vs h265 767kbps ≈ 1.3Mbps h264-equivalent).
+  // Compare by codec-adjusted effective bitrate, not the raw number.
   let best = null;
   for (const g of bitRate || []) {
     const pa = g.play_addr || g.playAddr || {};
     const urls = pa.url_list || pa.urlList || [];
     if (!urls.length) continue;
     const w = pa.width || 0, h = pa.height || 0, br = g.bit_rate || g.bitRate || 0;
-    if (DEBUG) console.error(`gear: ${w}x${h} @${br} ${g.gear_name || g.gearName || ""} ${g.format || ""} hdr=${g.is_h265 ?? g.isH265 ?? "?"}`);
+    const h265 = (g.is_h265 ?? g.isH265 ?? 0) === 1;
+    const eff = br * (h265 ? 1.7 : 1.0);
+    if (DEBUG) console.error(`gear: ${w}x${h} @${br} eff=${Math.round(eff)} ${g.gear_name || g.gearName || ""} ${g.format || ""} h265=${h265 ? 1 : 0}`);
     const area = w * h, barea = best ? best.w * best.h : -1;
-    if (!best || area > barea || (area === barea && br > best.br)) {
-      best = { w, h, br, gear: g.gear_name || g.gearName || "", url: urls[0] };
+    if (!best || area > barea || (area === barea && eff > best.eff)) {
+      best = { w, h, br, eff, gear: g.gear_name || g.gearName || "", url: urls[0] };
     }
   }
   return best;
