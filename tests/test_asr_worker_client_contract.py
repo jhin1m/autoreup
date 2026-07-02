@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -24,15 +25,18 @@ class ASRWorkerClientContractTest(unittest.TestCase):
             payloads.append(json.loads(request.data.decode()))
             return FakeResponse()
 
-        with patch.object(asr_worker_client, "urlopen", fake_urlopen):
-            asr_worker_client.call_worker(
-                "http://worker",
-                Path("data/subtitles/e07f29ec62bc.asr.zh.srt"),
-                offset=12.0,
-                length=30.0,
-                language="zh",
-                model="@cf/openai/whisper",
-            )
+        with tempfile.NamedTemporaryFile(suffix=".m4a") as audio:
+            audio.write(b"fake-audio-bytes")
+            audio.flush()
+            with patch.object(asr_worker_client, "urlopen", fake_urlopen):
+                asr_worker_client.call_worker(
+                    "http://worker",
+                    Path(audio.name),
+                    offset=12.0,
+                    length=30.0,
+                    language="zh",
+                    model="@cf/openai/whisper",
+                )
 
         self.assertEqual(payloads[0]["model"], "@cf/openai/whisper")
 

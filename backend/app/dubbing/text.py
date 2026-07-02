@@ -36,25 +36,31 @@ def has_han(text: object) -> bool:
 # the subtitle, so every translated line is run through sanitize_caption.
 _LEAD_TIME_RE = re.compile(r"^\s*\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:≤\s*\d+)?\s*")
 _LEAD_CPS_RE = re.compile(r"^\s*≤\s*\d+\s*")
+_LEAD_SECONDS_RE = re.compile(r"^\s*≈\s*\d+(?:\.\d+)?\s*s\s+")
 _LEAD_JUNK_RE = re.compile(r"^[\s|/·•▪◦>»]+")
 _SEP_RE = re.compile(r"\s[|/]\s")                     # spaced pipe/slash used as a separator
 _MULTI_COMMA_RE = re.compile(r"\s*[,，](?:\s*[,，])+")  # ",," / ", ," / "，，" -> ", "
 _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?…])")
-_EMPTY_QUOTES_RE = re.compile(r"[\"“”]{2,}")           # "", “”, """ -> gone
-_TRAIL_JUNK_RE = re.compile(r"[\s,;:|/·–—]+$")         # trailing bare separators (keep . ! ? … and quotes)
+# All double quotes go. On this narrated-story content the model wraps every dialogue
+# turn in "..." no matter what the prompt says; after rows get merged/re-split across
+# passes the pairs land broken (`" "`, orphan opens). A one-line dub subtitle never
+# needs quotation marks, so removing the whole character class is the reliable fix.
+_QUOTES_RE = re.compile(r"[\"“”„‟«»]")
+_TRAIL_JUNK_RE = re.compile(r"[\s,;:|/·–—]+$")         # trailing bare separators (keep . ! ? …)
 
 
 def sanitize_caption(text: object) -> str:
     """Strip leaked input columns / stray separators / doubled punctuation the LLM adds,
     so neither the TTS nor the subtitle carries junk like '8.03-14.39 ≤114 ...', '| ...',
-    '..., / ...', ',,' or '""'."""
+    '..., / ...', ',,' — and no quotation marks at all."""
     t = clean(text)
     t = _LEAD_TIME_RE.sub("", t)
     t = _LEAD_CPS_RE.sub("", t)
+    t = _LEAD_SECONDS_RE.sub("", t)
     t = _LEAD_JUNK_RE.sub("", t)
     t = _SEP_RE.sub(" ", t)
     t = t.replace("|", " ")           # any remaining stray pipe (never valid in captions)
-    t = _EMPTY_QUOTES_RE.sub("", t)
+    t = _QUOTES_RE.sub(" ", t)
     t = _MULTI_COMMA_RE.sub(", ", t)
     t = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", t)
     t = _TRAIL_JUNK_RE.sub("", t)

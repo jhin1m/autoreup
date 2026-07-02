@@ -2,7 +2,7 @@
 
 Stage order::
 
-    download -> asr -> glossary -> translate -> edit -> qa -> voiceover -> package
+    download -> asr -> glossary -> translate -> qa -> voiceover -> package
 
 Each stage calls :mod:`backend.app.dubbing` functions and passes typed objects
 through ``context.artifacts``. TSV/JSON files are written only as inspectable
@@ -22,7 +22,6 @@ from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
 from backend.app.dubbing.chunking import ChunkConfig, build_chunks, flat_scene_map
 from backend.app.dubbing.display import build_display_cues, write_subtitles
-from backend.app.dubbing.editor import EditorConfig, edit_speech
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
 from backend.app.dubbing.llm import LLMConfig
 from backend.app.dubbing.models import (
@@ -56,7 +55,6 @@ class ProductionPipeline:
             ASRStage(),
             GlossaryStage(),
             TranslateStage(),
-            EditStage(),
             QAStage(),
             VoiceoverStage(),
             PackageStage(),
@@ -254,28 +252,6 @@ class TranslateStage(PipelineStage):
             name=self.name,
             artifacts=[_artifact(ArtifactKind.subtitle_json, path, settings.data_dir)],
             metrics={"chunks": len(chunks), "speech_rows": len(speech_rows)},
-        )
-
-
-class EditStage(PipelineStage):
-    name = StageName.edit
-
-    def run(self, context: PipelineContext) -> StageResult:
-        settings: Settings = context.settings
-        anchors: list[Anchor] = context.artifacts["anchors"]
-        glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
-        speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
-        edited, patched = edit_speech(
-            speech_rows, anchors, glossary, _polish_llm(settings),
-            EditorConfig(max_caption_chars=settings.subtitle_max_line_chars),
-        )
-        context.artifacts["speech_rows"] = edited
-        path = settings.subtitles_dir / f"{context.job_id}.speech.edited.tsv"
-        write_tsv(path, [r.to_row() for r in edited], SPEECH_FIELDS)
-        return StageResult(
-            name=self.name,
-            artifacts=[_artifact(ArtifactKind.subtitle_json, path, settings.data_dir)],
-            metrics={"patched_anchors": patched, "speech_rows": len(edited)},
         )
 
 

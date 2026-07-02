@@ -58,7 +58,7 @@ export function dubErrorVi(error: string | null | undefined): string {
   if (/Connection refused|Errno 61/i.test(e)) return "Máy chủ dịch (LLM :8099) chưa bật.";
   if (/验证码|captcha/i.test(e)) return "Douyin yêu cầu xác minh (CAPTCHA). Cần cookie mới.";
   if (/ffmpeg|boxblur|libx264|videotoolbox/i.test(e)) return "Lỗi khi dựng/burn video (ffmpeg).";
-  if (/ASR worker|asr/i.test(e)) return "Lỗi nhận dạng lời (ASR worker).";
+  if (/asr/i.test(e)) return "Lỗi nhận dạng lời thoại. Thử dịch lại.";
   return e.length > 160 ? e.slice(0, 160) + "…" : e || "Lỗi không rõ.";
 }
 

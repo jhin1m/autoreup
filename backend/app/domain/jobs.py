@@ -27,6 +27,8 @@ class StageName(StrEnum):
     asr = "asr"
     glossary = "glossary"
     translate = "translate"
+    # Retired: the LLM editor pass rewrote ~half the anchors and each rewrite was a
+    # fresh artifact source. Kept only so manifests of old jobs still parse.
     edit = "edit"
     qa = "qa"
     voiceover = "voiceover"
@@ -53,7 +55,7 @@ class PipelineConfig(BaseModel):
     min_gap: float = 0.03
     snap_gap: float = 0.12
     tail_out: float = 0.28
-    stages: list[StageName] = Field(default_factory=lambda: [stage for stage in StageName])
+    stages: list[StageName] = Field(default_factory=lambda: [stage for stage in StageName if stage is not StageName.edit])
 
 
 class StageRecord(BaseModel):

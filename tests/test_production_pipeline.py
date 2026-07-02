@@ -14,7 +14,6 @@ from backend.app.domain.jobs import PipelineConfig, StageName
 from backend.app.dubbing.models import Anchor, SpeechRow
 from backend.app.pipeline.contracts import PipelineContext
 from backend.app.pipeline.production import (
-    EditStage,
     ProductionPipeline,
     QAStage,
     TranslateStage,
@@ -44,7 +43,7 @@ class ProductionPipelineTest(unittest.TestCase):
             [s.name for s in pipeline.stages],
             [
                 StageName.download, StageName.asr, StageName.glossary, StageName.translate,
-                StageName.edit, StageName.qa, StageName.voiceover, StageName.package,
+                StageName.qa, StageName.voiceover, StageName.package,
             ],
         )
 
@@ -63,15 +62,6 @@ class ProductionPipelineTest(unittest.TestCase):
             result = QAStage().run(ctx)
             self.assertEqual(result.metrics["issues"], 0)
             self.assertTrue(Path(ctx.artifacts["subtitle_srt"]).exists())
-
-    def test_edit_stage_is_gated(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = _context(Path(tmp))
-            ctx.artifacts["speech_rows"] = [SpeechRow(0, 0, 0.0, 2.0, "0-1", "Lời gốc")]
-            with patch("backend.app.dubbing.editor.complete", return_value="PATCH\t0\tLời mới"):
-                result = EditStage().run(ctx)
-            # patch without a finding is ignored
-            self.assertEqual(result.metrics["patched_anchors"], 0)
 
     def test_voiceover_skipped_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:

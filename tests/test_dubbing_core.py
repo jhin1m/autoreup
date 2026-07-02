@@ -79,16 +79,22 @@ def test_speech_row_roundtrip():
 def test_display_cues_split_at_clauses_and_follow_segments():
     from backend.app.dubbing.display import build_display_cues
 
-    # Anchor spans 2 segments with a gap between them. The Vietnamese text splits
-    # at its comma into two clauses; the second clause should be timed near the
-    # second segment (14s), not the middle of the anchor window — and words must
-    # not be broken across cues.
+    # Anchor spans 2 segments with a gap between them. A short line stays WHOLE
+    # (one readable cue, no needless flicker); two sentences split at the sentence
+    # end and the second is timed near the second segment (14s), not the middle of
+    # the anchor window — and words are never broken across cues.
     segments = [AsrSegment(0, 10.0, 11.0, "甲甲甲"), AsrSegment(1, 14.0, 15.0, "乙乙乙")]
     anchor = Anchor(0, 10.0, 15.0, "0-1", "甲甲甲乙乙乙")
-    rows = [SpeechRow(0, 0, 10.0, 15.0, "0-1", "phần một ba, phần hai bốn")]
-    cues = build_display_cues(rows, 0.4, [anchor], segments)
+
+    short = [SpeechRow(0, 0, 10.0, 15.0, "0-1", "phần một ba, phần hai bốn")]
+    cues = build_display_cues(short, 0.4, [anchor], segments)
+    assert [c["translated"] for c in cues] == ["phần một ba, phần hai bốn"]
+
+    # sentence 2 sits past the halfway char mark, so its content belongs to segment 2
+    two_sentences = [SpeechRow(0, 0, 10.0, 15.0, "0-1", "Câu đầu tiên nói khá là dài dòng nhé. Câu sau.")]
+    cues = build_display_cues(two_sentences, 0.4, [anchor], segments)
     assert len(cues) == 2
-    assert cues[0]["translated"] == "phần một ba,"
-    assert cues[1]["translated"] == "phần hai bốn"
+    assert cues[0]["translated"] == "Câu đầu tiên nói khá là dài dòng nhé."
+    assert cues[1]["translated"] == "Câu sau."
     assert cues[1]["start"] >= 13.0
     assert cues[0]["end"] <= cues[1]["start"] + 1e-6

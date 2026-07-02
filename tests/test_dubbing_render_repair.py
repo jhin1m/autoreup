@@ -1,22 +1,25 @@
 import backend.app.dubbing.repair as repair_mod
+from backend.app.dubbing.display import build_timed_units
 from backend.app.dubbing.llm import LLMConfig
 from backend.app.dubbing.models import Anchor, SpeechRow
-from backend.app.dubbing.render import RenderConfig, _blocks_by_anchor
+from backend.app.dubbing.render import RenderConfig, _blocks_from_units
 from backend.app.dubbing.repair import RepairConfig, compute_targets, repair
 
 LLM = LLMConfig()
 
 
-def test_blocks_by_anchor_merges_cues_and_strips_turn_markers():
+def test_blocks_from_units_merge_rows_and_strip_turn_markers():
     anchors = [Anchor(0, 0.0, 3.0, "0-1", "源"), Anchor(1, 3.0, 6.0, "2-3", "源2")]
     rows = [
         SpeechRow(0, 0, 0.0, 3.0, "0-1", "Câu một ⟂ Câu hai"),
         SpeechRow(1, 0, 0.0, 3.0, "0-1", "Câu ba"),
         SpeechRow(2, 1, 3.0, 6.0, "2-3", "Anchor sau"),
     ]
-    blocks = _blocks_by_anchor(rows, anchors, text_mode="continuous")
+    units = build_timed_units(rows, 0.4, anchors)
+    blocks = _blocks_from_units(units, text_mode="continuous")
+    # rows without sentence punctuation merge into one unit per anchor;
+    # block_id keeps the anchor id so timings aggregate for the repair loop
     assert [b.block_id for b in blocks] == ["0", "1"]
-    # cues of anchor 0 merge into one block, turn marker stripped
     assert "⟂" not in blocks[0].text
     assert "Câu một" in blocks[0].text and "Câu ba" in blocks[0].text
     assert blocks[0].start == 0.0 and blocks[0].end == 3.0

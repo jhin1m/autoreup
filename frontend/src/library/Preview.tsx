@@ -3,7 +3,7 @@ import * as api from "../api";
 import type { Episode, JobManifest } from "../types";
 import { STAGE_VI, dubErrorVi, latestArtifact } from "../util";
 
-const STAGE_ORDER = ["download", "asr", "glossary", "translate", "edit", "qa", "voiceover", "package"];
+const STAGE_ORDER = ["download", "asr", "glossary", "translate", "qa", "voiceover", "package"];
 
 /** Pipeline checklist so a translating/failed episode shows how far it got and where. */
 function StageProgress({ ep }: { ep: Episode }) {

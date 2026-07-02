@@ -13,7 +13,6 @@ timing isn't available.
 
 from __future__ import annotations
 
-import math
 import re
 from pathlib import Path
 
@@ -21,10 +20,6 @@ from backend.app.services.subtitle_formats import write_srt, write_vtt
 from .models import Anchor, AsrSegment, SpeechRow
 from .text import sanitize_caption, strip_explicit_turn_markers
 from .tsv_io import write_json
-
-_MIN_CUE_CHARS = 6
-_DISPLAY_MIN_DUR = 0.9  # pro: a line should stay on screen long enough to read (~5/6s..1s)
-_CLAUSE_SPLIT_RE = re.compile(r"(?<=[,.!?;…，。！？；])\s+")
 # A sentence end is the closing punctuation PLUS any closing quotes/brackets hugging
 # it, then whitespace. The quotes stay with the sentence they close (dialogue). The
 # old `(?<=[.!?…])\s+` required the space to sit right after the punctuation, so a
@@ -41,40 +36,6 @@ def _split_sentences(text: str) -> list[str]:
     return parts or [text]
 
 
-def _wrap_long(clause: str, max_chars: int) -> list[str]:
-    if len(clause) <= max_chars:
-        return [clause]
-    words = clause.split(" ")
-    out: list[str] = []
-    current = ""
-    for word in words:
-        if current and len(current) + 1 + len(word) > max_chars:
-            out.append(current)
-            current = word
-        else:
-            current = f"{current} {word}".strip()
-    if current:
-        out.append(current)
-    return out
-
-
-def _split_clauses(text: str, max_chars: int) -> list[str]:
-    raw = [part.strip() for part in _CLAUSE_SPLIT_RE.split(text) if part.strip()] or [text]
-    expanded: list[str] = []
-    for part in raw:
-        expanded.extend(_wrap_long(part, max_chars))
-    merged: list[str] = []
-    for part in expanded:
-        if merged and len(merged[-1]) < _MIN_CUE_CHARS:
-            merged[-1] = f"{merged[-1]} {part}".strip()
-        else:
-            merged.append(part)
-    return merged
-
-
-_CLAUSE_END_RE = re.compile(r"[,.!?;:…，。！？；：]$")
-
-
 # Vietnamese connector/function words: a line may break BEFORE one of these (it
 # starts a new phrase) — that keeps two-syllable words ("chuẩn bị", "linh tuyền",
 # "quan sát") intact instead of splitting them across lines (a subtitle antipattern).
@@ -86,7 +47,7 @@ _BREAK_BEFORE = {
 }
 
 
-def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
+def _chunk_line(text: str, max_chars: int) -> list[str]:
     """Pro single-line chunking. MIRRORS the rule the translator prompt is told (rule 5
     in TRANSLATE_SYSTEM, same ``max_caption_chars``): a sentence/clause that fits one
     line is kept WHOLE; a longer one breaks at PUNCTUATION first (clause marks), then at
@@ -109,9 +70,20 @@ def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
     def is_connector_break(i: int) -> bool:
         return i > 0 and words[i].lower().strip(",.;:!?…\"”") in _BREAK_BEFORE
 
+    # A capitalized word AFTER a lowercase one starts a proper-name run ("…phủ nhận
+    # giới thiệu | Lâm Quốc Đống…") — breaking there is safe, whereas the plain
+    # word-break fallback can land INSIDE a two-syllable word ("giới | thiệu"). The
+    # previous-word check keeps the break at the START of the run, never inside a
+    # multi-word name ("Triệu | Dũng").
+    def is_capital_break(i: int) -> bool:
+        head = words[i].lstrip("\"“”'([")
+        prev = words[i - 1].lstrip("\"“”'([") if i > 0 else ""
+        return i > 0 and head[:1].isupper() and not prev[:1].isupper()
+
     hard_max = max_chars + 14  # a line may run over this far to reach a safe break
     clause_breaks = [i for i in range(1, len(words)) if is_clause_break(i)]
     conn_breaks = [i for i in range(1, len(words)) if is_connector_break(i)]
+    cap_breaks = [i for i in range(1, len(words)) if is_capital_break(i)]
 
     def width(a: int, b: int) -> int:
         return len(" ".join(words[a:b]))
@@ -124,12 +96,15 @@ def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
         else:
             clause_fits = [i for i in clause_breaks if i > start and width(start, i) <= max_chars]
             conn_fits = [i for i in conn_breaks if i > start and width(start, i) <= max_chars]
+            cap_fits = [i for i in cap_breaks if i > start and width(start, i) <= max_chars]
             if clause_fits:
                 end = max(clause_fits)                         # prefer a punctuation break
             elif conn_fits:
                 end = max(conn_fits)                           # else a connector boundary
+            elif cap_fits:
+                end = max(cap_fits)                            # else before a proper name
             else:
-                over = [i for i in (clause_breaks + conn_breaks) if i > start and width(start, i) <= hard_max]
+                over = [i for i in (clause_breaks + conn_breaks + cap_breaks) if i > start and width(start, i) <= hard_max]
                 if over:
                     end = min(over)                            # overflow to nearest safe break
                 else:
@@ -139,13 +114,13 @@ def _chunk_line(text: str, min_chars: int, max_chars: int) -> list[str]:
         chunks.append(" ".join(words[start:end]))
         start = end
 
-    # orphan guard: a tiny head/tail particle ("Phải", a lone "à") merges into its
+    # orphan guard: a stubby head/tail ("Doanh số", a lone "không?") merges into its
     # neighbour even if the line then runs a little long — one slightly-wide line
-    # beats a 1-word orphan flashing on screen.
-    if len(chunks) >= 2 and len(chunks[0]) <= 6 and len(chunks[0]) + 1 + len(chunks[1]) <= max_chars + 8:
+    # beats a fragment flashing on screen for a fraction of a second.
+    if len(chunks) >= 2 and len(chunks[0]) <= 14 and len(chunks[0]) + 1 + len(chunks[1]) <= max_chars + 8:
         chunks[1] = f"{chunks[0]} {chunks[1]}"
         chunks.pop(0)
-    if len(chunks) >= 2 and len(chunks[-1]) <= 6 and len(chunks[-2]) + 1 + len(chunks[-1]) <= max_chars + 8:
+    if len(chunks) >= 2 and len(chunks[-1]) <= 14 and len(chunks[-2]) + 1 + len(chunks[-1]) <= max_chars + 8:
         chunks[-2] = f"{chunks[-2]} {chunks[-1]}"
         chunks.pop()
     return chunks or [text]
@@ -269,12 +244,7 @@ def build_display_cues(
     for unit in build_timed_units(speech_rows, min_duration, anchors, segments):
         base, top = voice_windows.get(round(unit["start"], 3), (unit["start"], unit["end"]))
         span = max(min_duration, top - base)
-        # Duration-aware single-line chunking: size each line so it holds for at least
-        # _DISPLAY_MIN_DUR at this sentence's speaking rate (chars/sec), capped at the
-        # readable line width — so chunks never flash by too fast to read.
-        cps = len(unit["text"]) / span
-        min_chars = max(_MIN_CUE_CHARS, int(_DISPLAY_MIN_DUR * cps))
-        lines = _chunk_line(unit["text"], min_chars, max_chars)
+        lines = _chunk_line(unit["text"], max_chars)
         total_chars = sum(max(1, len(line)) for line in lines)
         cursor = 0
         for index, line in enumerate(lines):

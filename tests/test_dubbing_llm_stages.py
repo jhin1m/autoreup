@@ -1,7 +1,5 @@
-import backend.app.dubbing.editor as editor_mod
 import backend.app.dubbing.glossary as glossary_mod
 import backend.app.dubbing.translate as translate_mod
-from backend.app.dubbing.editor import EditorConfig, edit_speech
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
 from backend.app.dubbing.llm import LLMConfig, parse_tsv_rows
 from backend.app.dubbing.models import Anchor, GlossaryEntry, SpeechRow
@@ -72,30 +70,3 @@ def test_translate_raises_on_han_leak(monkeypatch):
         assert False, "expected TranslateError"
     except translate_mod.TranslateError:
         pass
-
-
-def test_editor_severity_gate_and_apply(monkeypatch):
-    anchor = Anchor(0, 0.0, 3.0, "0-1", "源文本")
-    rows = [SpeechRow(0, 0, 0.0, 3.0, "0-1", "Lời cũ sai nghĩa")]
-
-    # patch WITHOUT a matching finding -> ignored
-    monkeypatch.setattr(editor_mod, "complete", lambda s, u, c: "PATCH\t0\tLời mới đúng")
-    out, patched = edit_speech(rows, [anchor], [], LLM, EditorConfig(max_rounds=1))
-    assert patched == 0
-    assert out[0].text == "Lời cũ sai nghĩa"
-
-    # finding ERROR + patch -> applied
-    monkeypatch.setattr(editor_mod, "complete", lambda s, u, c: "FINDING\t0\tERROR\tsource\tsai nghĩa\nPATCH\t0\tLời mới đúng")
-    out, patched = edit_speech(rows, [anchor], [], LLM, EditorConfig(max_rounds=1))
-    assert patched == 1
-    assert out[0].text == "Lời mới đúng"
-
-
-def test_editor_antiCollapse_rejects_multisegment_merge(monkeypatch):
-    # anchor spans 6 source segments, currently 4 cues; a 1-cue patch should be rejected
-    anchor = Anchor(0, 0.0, 6.0, "0-5", "源")
-    rows = [SpeechRow(i, 0, 0.0, 6.0, "0-5", f"cue {i}") for i in range(4)]
-    monkeypatch.setattr(editor_mod, "complete", lambda s, u, c: "FINDING\t0\tERROR\tx\ty\nPATCH\t0\tMột câu gộp hết")
-    out, patched = edit_speech(rows, [anchor], [], LLM, EditorConfig(max_rounds=1))
-    assert patched == 0
-    assert len(out) == 4

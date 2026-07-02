@@ -15,7 +15,7 @@ from .glossary import format_glossary
 from .llm import LLMConfig, complete, parse_tsv_rows
 from .models import Anchor, GlossaryEntry, SpeechRow
 from .prompts import EXPAND_SYSTEM, EXPAND_USER, REPAIR_SYSTEM, REPAIR_USER
-from .text import clean, has_han, split_text_for_explicit_turns
+from .text import has_han, sanitize_caption, split_text_for_explicit_turns
 from .weights import vi_speech_weight
 
 _MIN_TARGET_CHARS = 12
@@ -64,7 +64,9 @@ def _format_repair_rows(targets: list[RepairTarget], amap: dict[int, Anchor], gr
     for target in targets:
         anchor = amap[target.anchor_id]
         current = " ⟂ ".join(r.text for r in grouped[target.anchor_id])
-        lines.append(f"{target.anchor_id}\t{target.target_chars}\t{anchor.source_zh}\t{current}")
+        # ≤N (same shape as the translate input) so an echoed budget is caught by
+        # sanitize_caption — a bare number leaked into a caption verbatim before.
+        lines.append(f"{target.anchor_id}\t≤{target.target_chars}\t{anchor.source_zh}\t{current}")
     return "\n".join(lines)
 
 
@@ -103,7 +105,7 @@ def repair(
         batch = targets[start : start + config.batch_anchors]
         user = REPAIR_USER.format(glossary=format_glossary(glossary), anchors=_format_repair_rows(batch, amap, grouped))
         raw = complete(REPAIR_SYSTEM, user, llm)
-        rewrites = {int(c[0]): clean(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
+        rewrites = {int(c[0]): sanitize_caption(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
         for target in batch:
             text = rewrites.get(target.anchor_id)
             if not text or has_han(text):
@@ -126,7 +128,8 @@ def _format_expand_rows(anchor_ids: list[int], amap: dict[int, Anchor], grouped:
     lines = []
     for anchor_id in anchor_ids:
         current = " ⟂ ".join(r.text for r in grouped[anchor_id])
-        lines.append(f"{anchor_id}\t{window[anchor_id]:.1f}\t{amap[anchor_id].source_zh}\t{current}")
+        # ≈Ns so an echoed window duration is caught by sanitize_caption.
+        lines.append(f"{anchor_id}\t≈{window[anchor_id]:.1f}s\t{amap[anchor_id].source_zh}\t{current}")
     return "\n".join(lines)
 
 
@@ -159,7 +162,7 @@ def expand(
         batch = ids[start : start + config.batch_anchors]
         user = EXPAND_USER.format(glossary=format_glossary(glossary), anchors=_format_expand_rows(batch, amap, grouped, window))
         raw = complete(EXPAND_SYSTEM, user, llm)
-        rewrites = {int(c[0]): clean(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
+        rewrites = {int(c[0]): sanitize_caption(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
         for anchor_id in batch:
             text = rewrites.get(anchor_id)
             if not text or has_han(text):

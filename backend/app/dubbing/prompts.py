@@ -7,7 +7,9 @@ One coherent design, not per-genre tables:
   * TRANSLATE turns Chinese anchors into natural, meaning-based Vietnamese condensed
     to each line's speaking-time budget, using the glossary's cast for consistent
     pronouns.
-  * EDITOR / REPAIR / EXPAND are the QA + fit passes.
+  * REPAIR / EXPAND fit the voice to its window, driven by MEASURED render timings
+    only — no blanket editor pass (rewriting half the anchors bred more artifacts
+    than it fixed).
 
 Genre and per-video notes are optional hints. Use ``str.format`` with the documented
 fields; the TSV output schemas are parsed downstream and must not change.
@@ -94,31 +96,6 @@ TRANSLATE_USER = (
     "(tuỳ chọn) các dòng MEMORY. Chỉ TSV."
 )
 
-# --- Editor: gated QA over the translated rows ------------------------------
-
-EDITOR_SYSTEM = (
-    "Bạn là biên tập kiểm định bản lồng tiếng Việt. Với mỗi anchor bạn thấy SOURCE_ZH và lời Việt hiện "
-    "tại. Chỉ báo LỖI THỰC SỰ (có bằng chứng):\n"
-    "- sai nghĩa hoặc mất fact then chốt (số liệu, tên, phủ định, nhân quả);\n"
-    "- sai tên/thuật ngữ so với glossary;\n"
-    "- sai XƯNG HÔ/SẮC THÁI: đại từ miệt thị (ả/mụ/thị/gã/hắn/y/lão) gán cho nhân vật trung tính-chính "
-    "diện, sai giới tính so với glossary, hoặc xưng hô đổi qua lại không nhất quán;\n"
-    "- còn Hán tự; lời cụt, khó đọc, không tự nhiên.\n"
-    "Output DUY NHẤT là TSV, không markdown, mỗi dòng một trong hai dạng:\n"
-    "FINDING<TAB>ANCHOR_ID<TAB>SEVERITY<TAB>EVIDENCE<TAB>ISSUE\n"
-    "PATCH<TAB>ANCHOR_ID<TAB>TEXT\n"
-    "SEVERITY ∈ {BLOCKER, ERROR, WARN}. Chỉ đưa PATCH cho anchor vừa có FINDING mức BLOCKER hoặc ERROR; "
-    "WARN chỉ ghi nhận. PATCH sửa gọn, giữ ⟂ nếu cần tách lượt thoại, không thêm Hán tự, tuân thủ glossary. "
-    "Giữ DẤU CÂU ở chỗ ngắt tự nhiên (mỗi mệnh đề giữa hai dấu đủ ngắn để hiển thị một dòng); không để mệnh "
-    "đề dài liền mạch không dấu; không cắt đôi từ hai âm tiết."
-)
-
-EDITOR_USER = (
-    "GLOSSARY:\n{glossary}\n\n"
-    "CÁC ANCHOR CẦN RÀ SOÁT:\n{anchors}\n\n"
-    "Trả về FINDING/PATCH theo schema. Nếu không có lỗi, trả về dòng trống."
-)
-
 # --- Repair: shorten over-budget anchors ------------------------------------
 
 REPAIR_SYSTEM = (
@@ -133,7 +110,8 @@ REPAIR_SYSTEM = (
 
 REPAIR_USER = (
     "GLOSSARY:\n{glossary}\n\n"
-    "CÁC ANCHOR QUÁ DÀI (ANCHOR_ID<TAB>TARGET_CHARS<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{anchors}\n\n"
+    "CÁC ANCHOR QUÁ DÀI (ANCHOR_ID<TAB>≤CHARS<TAB>SOURCE_ZH<TAB>CURRENT_VI — cột ≤CHARS là ngân sách, "
+    "KHÔNG chép vào TEXT):\n{anchors}\n\n"
     "Viết lại ngắn hơn cho mọi ANCHOR_ID. Chỉ TSV."
 )
 
@@ -152,6 +130,7 @@ EXPAND_SYSTEM = (
 
 EXPAND_USER = (
     "GLOSSARY:\n{glossary}\n\n"
-    "CÁC ANCHOR ĐỌC QUÁ NGẮN (ANCHOR_ID<TAB>GIÂY_GỐC<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{anchors}\n\n"
+    "CÁC ANCHOR ĐỌC QUÁ NGẮN (ANCHOR_ID<TAB>≈GIÂY_GỐC<TAB>SOURCE_ZH<TAB>CURRENT_VI — cột ≈GIÂY_GỐC là "
+    "thời lượng, KHÔNG chép vào TEXT):\n{anchors}\n\n"
     "Trả về lời Việt đầy đủ (hoặc giữ nguyên) cho mọi ANCHOR_ID. Chỉ TSV."
 )

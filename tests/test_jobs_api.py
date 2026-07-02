@@ -37,7 +37,10 @@ class JobsAPITest(unittest.TestCase):
 
         self.assertEqual(created.status_code, 202, created.text)
         job = created.json()["job"]
-        self.assertEqual(job["input"], {"url": "https://example.com/video"})
+        self.assertEqual(
+            job["input"],
+            {"url": "https://example.com/video", "notes": "", "series_id": None, "source_video_id": None},
+        )
         self.assertIn(job["state"], {"queued", "running", "failed"})
         self.assertEqual(
             job["config"]["stages"],
@@ -46,7 +49,6 @@ class JobsAPITest(unittest.TestCase):
                 "asr",
                 "glossary",
                 "translate",
-                "edit",
                 "qa",
                 "voiceover",
                 "package",
