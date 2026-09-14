@@ -47,7 +47,7 @@ from backend.app.infrastructure.packaging import package_outputs
 from backend.app.infrastructure.process import run_command
 from backend.app.pipeline.contracts import PipelineContext, PipelineStage, StageResult
 
-_VOICEOVER_REPAIR_ROUNDS = 3
+_VOICEOVER_REPAIR_ROUNDS = 1
 
 
 class ProductionPipeline:
@@ -385,7 +385,7 @@ def _shorten_predicted_overflow(
         return speech_rows, 0
     return repair(
         speech_rows, anchors, glossary, predicted_overflow, _polish_agent(settings),
-        RepairConfig(max_caption_chars=settings.subtitle_max_line_chars),
+        RepairConfig(),
     )
 
 
@@ -475,6 +475,7 @@ class VoiceoverStage(PipelineStage):
             min_run_fill=settings.tts_min_run_fill,
             min_trailing=settings.tts_min_trailing,
             crossfade=settings.tts_crossfade,
+            repair_over_ms=settings.tts_repair_over_ms,
             min_duration=settings.min_duration,
             workers=settings.tts_workers,
             batch_size=settings.capcut_batch_size,
@@ -488,7 +489,7 @@ class VoiceoverStage(PipelineStage):
 
         result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments, synth_client=synth_client)
         logs = [f"render round 0: {result.summary}"]
-        repair_cfg = RepairConfig(max_caption_chars=settings.subtitle_max_line_chars)
+        repair_cfg = RepairConfig()
         rounds = 0
         while rounds < _VOICEOVER_REPAIR_ROUNDS:
             # Overflow: voice overruns the window -> shorten. Underfull: voice far

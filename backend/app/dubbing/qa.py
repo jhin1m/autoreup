@@ -8,6 +8,7 @@ caller fails the job if ``issues`` is non-zero.
 
 from __future__ import annotations
 
+from .display import LINE_SLACK
 from .models import Anchor, SpeechRow
 from .text import has_han, strip_explicit_turn_markers
 
@@ -36,7 +37,10 @@ def qa_report(
     if empty:
         issues.append(f"empty_text:{empty[:10]}")
 
-    over_len = [c.get("anchor_id") for c in display_cues if len(c.get("text", "")) > max_display_chars]
+    # The reflow may exceed the target by LINE_SLACK to avoid a bad break (see
+    # display._chunk_line); the gate uses the same allowance so it only catches
+    # real reflow breakage, not the designed overflow.
+    over_len = [c.get("anchor_id") for c in display_cues if len(c.get("text", "")) > max_display_chars + LINE_SLACK]
     overlong = [aid for aid in over_len if aid is not None]
 
     overlaps = 0

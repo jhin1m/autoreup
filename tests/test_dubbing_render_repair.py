@@ -65,7 +65,7 @@ def test_repair_rejects_han(monkeypatch):
 def test_render_config_defaults():
     cfg = RenderConfig(provider_url="http://x")
     assert cfg.speaker == "BV421_vivn_streaming"
-    assert cfg.repair_over_ms == 300
+    assert cfg.repair_over_ms == 1500  # only clearly-over units; timeline absorbs the rest
 
 
 def test_expand_completes_underfull_keeps_complete(monkeypatch):

@@ -96,11 +96,21 @@ queued → running → succeeded | failed | canceled
 ## 7. Quality gates (mặc định)
 
 - `max_chars 60`, `max_cps 32.0`, `target_cps 22.0`, `min_duration 0.45s`, `max_duration 4.8s`.
-- Display: **1 dòng**, `display_max_chars 32`, line width pro 40 ký tự, caption lead 0.12s trước voice.
+- Display: **1 dòng**, reflow width 40 ký tự; cue được phép vượt tối đa `LINE_SLACK = 8` ký tự để tránh ngắt xấu — **QA gate dùng đúng ngưỡng này** (reflow và gate cùng một nguồn).
 - Không ký tự Hán trong output Việt.
 - Không missing/duplicate source cue coverage; không overlap; gap sau snap ≤ 0.12s.
 
 ## 8. TTS contract
+
+Voice tuning (BV421 'Nguồn nhỏ ngọt ngào', đã A/B chọn):
+- text mode **`expressive`**: giữ sắc thái dấu câu (`,` = lấy hơi, `.` = xuống giọng, `…` = ngắt kịch tính, `! ?` = lên giọng) — gom mọi dấu thành một dấu phẩy nghe máy móc;
+- `tts_synth_rate 1.0` — không time-stretch post-synth (artifact atempo đọc như robot); độ dài do text quyết;
+- trim silence: keep 0.08s, ngưỡng -50dB (cắt sát làm cụt hơi = "khựng");
+- mastering: compressor chậm (ratio 1.6, attack 20ms, release 240ms, makeup 1.2), presence 3.2k +1.2, air 10k +1.0, lowpass 15k;
+- mix với âm gốc: bed **0.55**, **sidechain duck 6:1** (attack 25ms/release 420ms), **carve 2.5kHz −3dB** — nhạc/SFX nở lại khi ngừng thoại, tiếng gốc chỉ bị hạ lúc có thoại;
+- timeline pause floors theo dấu câu: `…` 0.5s, `.`/`!`/`?` 0.35s, `,`/`;`/`:` 0.12s; pause nguồn giữ 70% (≤0.6s).
+
+
 
 - Giọng cố định `BV421_vivn_streaming`; text mode `continuous`; speed/pitch/volume = 10 (neutral).
 - Budget **12 chars/sec** (đo từ voice thật, không đoán); raw median ~14.16 cps.

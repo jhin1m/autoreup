@@ -43,7 +43,7 @@ class RenderConfig:
     text_mode: str = "natural"
     timeout: float = 30.0
     attempts: int = 3
-    repair_over_ms: int = 300
+    repair_over_ms: int = 1500  # only clearly-over units; the timeline absorbs the rest
     batch_size: int = 8
     batch_concurrency: int = 8
     synth_rate: float = 1.0

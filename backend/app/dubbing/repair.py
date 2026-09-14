@@ -18,7 +18,7 @@ from backend.app.agents import AgentConfig, complete
 from .tsv_io import parse_tsv_rows
 from .models import Anchor, GlossaryEntry, SpeechRow
 from .prompts import EXPAND_SYSTEM, EXPAND_USER, REPAIR_SYSTEM, REPAIR_USER
-from .text import has_han, sanitize_caption, split_text_for_explicit_turns
+from .text import has_han, sanitize_caption, split_text_for_explicit_turns_only
 from .weights import vi_speech_weight
 
 _MIN_TARGET_CHARS = 12
@@ -26,7 +26,6 @@ _MIN_TARGET_CHARS = 12
 
 @dataclass(slots=True)
 class RepairConfig:
-    max_caption_chars: int = 32
     target_scale: float = 0.92  # shrink target a touch below the proportional estimate
     batch_anchors: int = 16
     batch_workers: int = 4  # batches are independent -> call the LLM concurrently
@@ -92,8 +91,10 @@ def _format_repair_rows(targets: list[RepairTarget], amap: dict[int, Anchor], gr
     return "\n".join(lines)
 
 
-def _rebuild_rows(anchor: Anchor, text: str, max_caption_chars: int) -> list[SpeechRow]:
-    parts = split_text_for_explicit_turns(text, max_caption_chars) or [text]
+def _rebuild_rows(anchor: Anchor, text: str) -> list[SpeechRow]:
+    # One row per unit (split only on explicit turns): caption sizing belongs to
+    # the display reflow. TTS rejoins the rows per unit, so audio is unaffected.
+    parts = split_text_for_explicit_turns_only(text) or [text]
     return [
         SpeechRow(
             sub_id=0,
@@ -139,7 +140,7 @@ def repair(
         current_weight = sum(vi_speech_weight(r.text) for r in grouped[target.anchor_id])
         if vi_speech_weight(text) >= current_weight:
             continue  # not actually shorter -> reject
-        grouped[target.anchor_id] = _rebuild_rows(amap[target.anchor_id], text, config.max_caption_chars)
+        grouped[target.anchor_id] = _rebuild_rows(amap[target.anchor_id], text)
         repaired += 1
 
     out: list[SpeechRow] = []
@@ -200,7 +201,7 @@ def expand(
         current_weight = sum(vi_speech_weight(r.text) for r in grouped[anchor_id])
         if vi_speech_weight(text) <= current_weight * 1.1:
             continue  # not meaningfully longer -> keep current (line was complete)
-        grouped[anchor_id] = _rebuild_rows(amap[anchor_id], text, config.max_caption_chars)
+        grouped[anchor_id] = _rebuild_rows(amap[anchor_id], text)
         expanded += 1
 
     out: list[SpeechRow] = []

@@ -133,6 +133,7 @@ class Settings(BaseSettings):
     # concurrent and caches by text — so synth throughput = workers / 6s. This is the
     # real voiceover bottleneck; raise for long videos (server handled 24 fine).
     tts_workers: int = 16
+    tts_repair_over_ms: int = 1500
     tts_post_tempo: float = 1.12
     # Read at (near-)natural pace so the dub is intelligible: never slow below 1.0
     # (no dragging) and only a hair of speed-up (1.08) for slightly-long lines.
@@ -155,12 +156,10 @@ class Settings(BaseSettings):
     # window, the leftover silence made the dub feel choppy/slow ("chậm chậm"). Any gap
     # smaller than this butt-joins to the previous line so speech flows continuously; only
     # real on-screen pauses (>= this) keep their absolute onset for picture sync.
-    tts_glue_gap: float = 0.22  # (unused by v3 render; kept for the assembly crossfade math)
     # A glued clip may start at most this far BEFORE its source onset. Condensed
     # lines in a long continuous run used to drag every following line earlier
     # (dub spoke ~1s before the on-screen speaker); this caps that drift while
     # keeping the butt-joined flow.
-    tts_max_lead: float = 0.3  # (unused by v3 render)
     tts_crossfade: float = 0.06
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True

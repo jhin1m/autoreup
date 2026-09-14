@@ -20,6 +20,10 @@ from backend.app.services.subtitle_formats import write_srt, write_vtt
 from .models import Anchor, AsrSegment, SpeechRow
 from .text import sanitize_caption, strip_explicit_turn_markers
 from .tsv_io import write_json
+
+# A display cue may exceed its target width this far to reach a safe break (never
+# splitting a two-syllable word). QA gates at the same allowance.
+LINE_SLACK = 8
 # A sentence end is the closing punctuation PLUS any closing quotes/brackets hugging
 # it, then whitespace. The quotes stay with the sentence they close (dialogue). The
 # old `(?<=[.!?…])\s+` required the space to sit right after the punctuation, so a
@@ -80,7 +84,7 @@ def _chunk_line(text: str, max_chars: int) -> list[str]:
         prev = words[i - 1].lstrip("\"“”'([") if i > 0 else ""
         return i > 0 and head[:1].isupper() and not prev[:1].isupper()
 
-    hard_max = max_chars + 14  # a line may run over this far to reach a safe break
+    hard_max = max_chars + LINE_SLACK  # over this far only to reach a safe break
     clause_breaks = [i for i in range(1, len(words)) if is_clause_break(i)]
     conn_breaks = [i for i in range(1, len(words)) if is_connector_break(i)]
     cap_breaks = [i for i in range(1, len(words)) if is_capital_break(i)]
