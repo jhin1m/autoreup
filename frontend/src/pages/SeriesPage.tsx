@@ -45,6 +45,7 @@ export function SeriesPage() {
   const createExport = useCreateExport(id);
   const deleteSeries = useDeleteSeries();
   const dubbed = episodes.filter((e) => e.dub_state === "dubbed" && e.dub_job_id);
+  const translating = episodes.filter((e) => e.dub_state === "translating");
 
   if (!series) {
     return (
@@ -84,6 +85,12 @@ export function SeriesPage() {
           Xóa series
         </button>
       </div>
+
+      <p className="sr-only" role="status" aria-live="polite">
+        {translating.length
+          ? `Đang dịch ${translating.length} tập · ${translating[0] ? dubProgressLabel(translating[0]) ?? "" : ""}`
+          : ""}
+      </p>
 
       <SourceBar series={series} scanning={scan.isPending} onScan={async () => {
         try {

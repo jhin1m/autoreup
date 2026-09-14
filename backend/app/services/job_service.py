@@ -17,6 +17,18 @@ class JobNotFoundError(KeyError):
     pass
 
 
+def drop_missing_artifacts(manifest: JobManifest, data_dir: Path) -> JobManifest:
+    """Terminal manifests can reference files that were replaced or cleaned up later
+    (e.g. a stale hardsub render). Never advertise artifacts the API cannot serve —
+    the UI picks the newest artifact of a kind and would otherwise play a dead URL."""
+    if manifest.state in {JobState.running, JobState.queued}:
+        return manifest
+    kept = [artifact for artifact in manifest.artifacts if (data_dir / artifact.path).exists()]
+    if len(kept) != len(manifest.artifacts):
+        manifest.artifacts = kept
+    return manifest
+
+
 class JobBusyError(RuntimeError):
     """Raised when an operation (e.g. delete) needs the job to be stopped first."""
 
@@ -295,7 +307,8 @@ class JobService:
         path = self.manifest_path(job_id)
         if not path.exists():
             raise JobNotFoundError(job_id)
-        return JobManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        manifest = JobManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        return drop_missing_artifacts(manifest, self.settings.data_dir)
 
     def save(self, manifest: JobManifest) -> None:
         with self._lock:
