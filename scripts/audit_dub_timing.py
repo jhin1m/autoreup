@@ -164,8 +164,13 @@ def audit_job(job: str) -> dict:
     for r in speech:
         per_anchor.setdefault(r["ANCHOR_ID"], []).append(r["TEXT"])
     mid = sum(1 for r in speech if r["TEXT"] and not r["TEXT"].rstrip().endswith((".", "!", "?", "…", ":", '"')))
-    qa_path = DATA / "subtitles" / f"{job}.qa.json"
-    overlong = json.loads(qa_path.read_text()).get("overlong_display_cues") if qa_path.exists() else None
+    overlong = None
+    manifest_path = DATA / "jobs" / f"{job}" / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        for stage in manifest.get("stages", []):
+            if stage.get("name") == "qa":
+                overlong = (stage.get("metrics") or {}).get("overlong_display_cues")
     glossary_path = DATA / "subtitles" / f"{job}.glossary.json"
     variants = 0
     if glossary_path.exists():
