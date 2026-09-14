@@ -34,7 +34,9 @@ class TimelineConfig:
     tempo_ceiling: float = 1.18   # fastest run-level tempo (fit by speeding up)
     max_lead: float = 0.8         # voice may run this far ahead of the picture
     breath_min: float = 0.06
-    breath_max: float = 0.25
+    breath_max: float = 0.6       # a real source pause, kept (rhythm!)
+    pause_keep: float = 0.7       # keep this share of the source pause
+    contiguous_gap: float = 0.15  # below this the speaker never stopped: glue
     min_run_fill: float = 0.95    # below this the run is flagged for expand
     min_trailing: float = 1.5     # ...or when the run ends this early (absolute)
 
@@ -92,19 +94,23 @@ def plan_run(run: Run, units: list[Unit], durations: dict[int, float], config: T
         tempo = max(config.tempo_floor, voice_total / span)
     fitted_total = voice_total / tempo
 
-    # Chain mode inside the run: units are placed back-to-back with a distributed
-    # breath. Per-unit source starts are NOT used as anchors — only the run boundary
-    # is anchored to the picture (verified: re-anchoring each unit is what turned
-    # the dub's underfill into 16% audible silence between sentences).
-    slack = max(0.0, span - fitted_total)
-    gaps = max(1, len(ordered) - 1)
-    breath = min(config.breath_max, max(config.breath_min, slack / gaps)) if slack > 0 else 0.0
+    # Rhythm preservation: each inter-unit breath is derived from the SOURCE pause
+    # (the original pacing is the emotion — wiping pauses out made the dub read
+    # rushed even at the same total duration). Only genuinely contiguous speech is
+    # glued with the minimum breath; everything else keeps most of its pause.
+    def breath_for(index: int) -> float:
+        if index == 0:
+            return 0.0
+        source_gap = max(0.0, ordered[index].start - ordered[index - 1].end)
+        if source_gap < config.contiguous_gap:
+            return config.breath_min
+        return min(config.breath_max, max(config.breath_min, source_gap * config.pause_keep))
 
     placements: list[Placement] = []
     cursor = run.start
     for index, unit in enumerate(ordered):
         duration = durations.get(unit.id, 0.0) / tempo
-        breath_before = breath if index > 0 else 0.0
+        breath_before = breath_for(index)
         place = cursor + breath_before
         placements.append(
             Placement(

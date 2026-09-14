@@ -12,13 +12,23 @@ def test_build_runs_splits_only_on_real_pauses():
     assert [(r.start, r.end, len(r.unit_ids)) for r in runs] == [(0.0, 4.0, 2), (4.9, 6.0, 1), (8.0, 9.0, 1)]
 
 
+def test_source_pause_is_kept_as_rhythm():
+    # a 0.6s source pause between two units must survive as a real breath
+    units = _units([(0.0, 2.0), (2.6, 4.6)])
+    plan = plan_run(build_runs(units)[0], units, {0: 1.8, 1: 1.8}, TimelineConfig())
+    assert 0.35 <= plan.placements[1].breath_before <= 0.45
+
+
 def test_short_dub_fills_with_breaths_within_lead_budget():
     # span 10s, voice 8s (0.8x) -> tempo floor 0.92 cannot fill; breaths spend the rest
     units = _units([(0.0, 5.0), (5.0, 10.0)])
     plan = plan_run(build_runs(units)[0], units, {0: 4.0, 1: 4.0}, TimelineConfig())
     assert plan.tempo == 0.92
     assert plan.fill_ratio > 0.85
-    assert plan.trailing_silence <= 1.2
+    # contiguous speech gets only the minimum breath; the remaining slack is
+    # trailing (before the next real pause) and flagged for the fit loop
+    assert plan.trailing_silence <= 1.5
+    assert plan.needs_expand is True
     assert all(p.early_lead <= TimelineConfig().max_lead + 1e-6 for p in plan.placements)
     assert 0.06 <= plan.placements[1].breath_before <= 0.25
 
