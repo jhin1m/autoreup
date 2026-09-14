@@ -38,7 +38,6 @@ class AsrSegment:
 @dataclass(slots=True)
 class Anchor:
     """A timing window over a contiguous range of ASR segments."""
-
     id: int
     start: float
     end: float
@@ -101,6 +100,34 @@ class Scene:
             "PACING": self.pacing,
             "HANDOFF": self.handoff,
         }
+
+
+@dataclass(slots=True)
+class Unit:
+    """A semantic translation unit (sentence/paragraph) built from the ASR rail.
+
+    ``segment_ids`` keeps the inclusive ``lo-hi`` range over AsrSegment ids so the
+    unit's timing is inherited from the rail — units are a translation concept,
+    never a timing source of their own."""
+
+    id: int
+    segment_ids: str
+    start: float
+    end: float
+    source_zh: str
+    flags: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class Run:
+    """A stretch of continuous speech: consecutive units whose internal gap is
+    below the run gap (default 0.8s). Runs are the only places the voice timeline
+    anchors to the picture."""
+
+    id: int
+    unit_ids: list[int]
+    start: float
+    end: float
 
 
 @dataclass(slots=True)
