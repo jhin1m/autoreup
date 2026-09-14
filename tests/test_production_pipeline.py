@@ -55,7 +55,9 @@ class ProductionPipelineTest(unittest.TestCase):
             def fake_complete(system, user, config):
                 return "\n".join(f"{a.id}\tLời thoại {a.id}" for a in anchors if str(a.id) in user)
 
-            with patch("backend.app.dubbing.translate.complete", side_effect=fake_complete):
+            with patch("backend.app.dubbing.translate.complete", side_effect=fake_complete), patch(
+                "backend.app.dubbing.edit.complete", side_effect=lambda system, user, config: ""
+            ):
                 TranslateStage().run(ctx)
             self.assertEqual({r.anchor_id for r in ctx.artifacts["speech_rows"]}, {0, 1})
 

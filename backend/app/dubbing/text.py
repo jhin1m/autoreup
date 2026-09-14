@@ -107,6 +107,15 @@ def split_text_for_tts(text: str, max_chars: int) -> list[str]:
     return out
 
 
+def split_text_for_explicit_turns_only(text: str) -> list[str]:
+    """Break ONLY on explicit-turn markers — no length split. Units go to the
+    translator whole; caption line splitting belongs to the reflow stage."""
+    text = clean(text)
+    if not text:
+        return []
+    return [part for part in (clean(part) for part in EXPLICIT_TURN_BREAK_RE.split(text)) if part]
+
+
 def split_text_for_explicit_turns(text: str, max_chars: int) -> list[str]:
     """Break on explicit-turn markers first, then length-split each group."""
     text = clean(text)

@@ -21,7 +21,8 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
-from backend.app.dubbing.chunking import ChunkConfig, build_chunks, flat_scene_map
+from backend.app.dubbing.normalize import normalize_segments
+from backend.app.dubbing.units import build_units
 from backend.app.dubbing.display import build_display_cues, write_subtitles
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
 from backend.app.agents import AgentConfig
@@ -36,7 +37,7 @@ from backend.app.dubbing.models import (
     SpeechRow,
 )
 from backend.app.dubbing.qa import qa_report
-from backend.app.dubbing.rail import AnchorConfig, build_anchors, segments_from_srt
+from backend.app.dubbing.rail import segments_from_srt
 from backend.app.dubbing.render import RenderConfig, assemble_voice, render
 from backend.app.dubbing.repair import RepairConfig, expand, repair
 from backend.app.dubbing.translate import TranslateConfig, translate
@@ -244,7 +245,10 @@ class ASRStage(PipelineStage):
         total = len(segments)
         segments, moved, dropped = refine_segments(segments, Path(context.artifacts["video"]))
         logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {total} segments")
-        anchors = build_anchors(segments, AnchorConfig())
+        segments, normalize_metrics = normalize_segments(segments, _translate_agent(settings))
+        logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
+        units = build_units(segments)
+        anchors = [Anchor(id=u.id, start=u.start, end=u.end, source_ids=u.segment_ids, source_zh=u.source_zh) for u in units]
         context.artifacts["segments"] = segments
         context.artifacts["anchors"] = anchors
 
@@ -255,7 +259,7 @@ class ASRStage(PipelineStage):
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.source_json, anchors_tsv, settings.data_dir)],
-            metrics={"segments": len(segments), "anchors": len(anchors)},
+            metrics={"segments": len(segments), "units": len(anchors), **normalize_metrics},
             logs=logs,
         )
 
@@ -334,24 +338,22 @@ class TranslateStage(PipelineStage):
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
-        chunks = build_chunks(anchors, flat_scene_map(anchors), ChunkConfig())
         speech_rows = translate(
-            anchors, chunks, glossary, _translate_agent(settings),
-            TranslateConfig(max_caption_chars=settings.subtitle_max_line_chars, voice_cps=settings.tts_voice_cps, notes=context.config.content_notes),
+            anchors, glossary, _translate_agent(settings),
+            TranslateConfig(notes=context.config.content_notes),
         )
         # Text-level pre-repair: character counts alone PREDICT which anchors will
         # overflow (read pace is known), so shorten them here in one concurrent
         # rewrite wave. Before this, ~half the anchors of a long video reached the
         # voiceover stage over budget and burned 3 synth-measure-repair rounds.
         speech_rows, pre_repaired = _shorten_predicted_overflow(speech_rows, anchors, glossary, settings)
-        context.artifacts["chunks"] = chunks
         context.artifacts["speech_rows"] = speech_rows
         path = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
         write_tsv(path, [r.to_row() for r in speech_rows], SPEECH_FIELDS)
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.subtitle_json, path, settings.data_dir)],
-            metrics={"chunks": len(chunks), "speech_rows": len(speech_rows), "pre_repaired_anchors": pre_repaired},
+            metrics={"speech_rows": len(speech_rows), "pre_repaired_anchors": pre_repaired},
         )
 
 

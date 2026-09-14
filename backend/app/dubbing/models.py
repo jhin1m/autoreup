@@ -9,10 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 def _fmt(seconds: float) -> str:
     return f"{float(seconds):.3f}"
-
 
 @dataclass(slots=True)
 class AsrSegment:
@@ -33,7 +31,6 @@ class AsrSegment:
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "AsrSegment":
         return cls(int(row["id"]), float(row["start"]), float(row["end"]), str(row.get("text", "")))
-
 
 @dataclass(slots=True)
 class Anchor:
@@ -73,35 +70,6 @@ class Anchor:
             str(row.get("SOURCE_ZH", "")),
         )
 
-
-@dataclass(slots=True)
-class Scene:
-    """A narrative span emitted by the (optional) scene pass or flat fallback."""
-
-    scene_id: str
-    start_anchor: int
-    end_anchor: int
-    label: str = "Scene"
-    tone: str = ""
-    summary: str = ""
-    must_keep: str = ""
-    pacing: str = ""
-    handoff: str = ""
-
-    def to_row(self) -> dict[str, str]:
-        return {
-            "SCENE_ID": self.scene_id,
-            "START_ANCHOR": str(self.start_anchor),
-            "END_ANCHOR": str(self.end_anchor),
-            "LABEL": self.label,
-            "TONE": self.tone,
-            "SUMMARY": self.summary,
-            "MUST_KEEP": self.must_keep,
-            "PACING": self.pacing,
-            "HANDOFF": self.handoff,
-        }
-
-
 @dataclass(slots=True)
 class Unit:
     """A semantic translation unit (sentence/paragraph) built from the ASR rail.
@@ -117,7 +85,6 @@ class Unit:
     source_zh: str
     flags: list[str] = field(default_factory=list)
 
-
 @dataclass(slots=True)
 class Run:
     """A stretch of continuous speech: consecutive units whose internal gap is
@@ -128,36 +95,6 @@ class Run:
     unit_ids: list[int]
     start: float
     end: float
-
-
-@dataclass(slots=True)
-class Chunk:
-    """A duration-bounded group of scenes fed to the translator as one unit."""
-
-    id: int
-    start_anchor: int
-    end_anchor: int
-    start: float
-    end: float
-    scene_ids: list[str] = field(default_factory=list)
-    labels: list[str] = field(default_factory=list)
-
-    @property
-    def duration(self) -> float:
-        return max(0.0, self.end - self.start)
-
-    def to_row(self) -> dict[str, str]:
-        return {
-            "CHUNK_ID": str(self.id),
-            "START_ANCHOR": str(self.start_anchor),
-            "END_ANCHOR": str(self.end_anchor),
-            "START": _fmt(self.start),
-            "END": _fmt(self.end),
-            "DURATION_S": f"{self.duration:.3f}",
-            "SCENE_IDS": ",".join(self.scene_ids),
-            "LABELS": " | ".join(self.labels),
-        }
-
 
 @dataclass(slots=True)
 class SpeechRow:
@@ -195,14 +132,12 @@ class SpeechRow:
             str(row.get("TEXT", "")),
         )
 
-
 @dataclass(slots=True)
 class GlossaryEntry:
     term_zh: str
     term_vi: str
     kind: str = ""  # name | term | place | rank | ...
     note: str = ""
-
 
 ANCHOR_FIELDS = ["ID", "START", "END", "SOURCE_IDS", "SOURCE_ZH"]
 SEGMENT_FIELDS = ["id", "start", "end", "text"]

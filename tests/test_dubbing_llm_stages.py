@@ -1,12 +1,12 @@
+import backend.app.dubbing.edit as edit_mod
 import backend.app.dubbing.glossary as glossary_mod
 import backend.app.dubbing.translate as translate_mod
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
 from backend.app.agents import AgentConfig
 from backend.app.dubbing.tsv_io import parse_tsv_rows
 from backend.app.dubbing.models import Anchor, GlossaryEntry, SpeechRow
-from backend.app.dubbing.rail import AnchorConfig, build_anchors
+from backend.app.dubbing.units import UnitConfig, build_units
 from backend.app.dubbing.models import AsrSegment
-from backend.app.dubbing.chunking import ChunkConfig, build_chunks, flat_scene_map
 from backend.app.dubbing.translate import TranslateConfig, translate
 
 LLM = AgentConfig()
@@ -33,14 +33,14 @@ def test_extract_glossary_parses_and_dedupes(monkeypatch):
 
 
 def _anchors():
+    # 6 micro-segments -> 3 semantic units (2 segments each) via the v3 builder
     segs = [AsrSegment(i, i * 1.0, i * 1.0 + 0.9, f"字{i}") for i in range(6)]
-    return build_anchors(segs, AnchorConfig(max_anchor_segments=2, max_anchor_duration=999, max_anchor_source_chars=999))
+    units = build_units(segs, UnitConfig(max_chars=4, min_chars=1))
+    return [Anchor(id=u.id, start=u.start, end=u.end, source_ids=u.segment_ids, source_zh=u.source_zh) for u in units]
 
 
-def test_translate_covers_all_anchors_and_splits(monkeypatch):
-    anchors = _anchors()  # 3 anchors
-    scenes = flat_scene_map(anchors, ChunkConfig(flat_scene_anchors=2))
-    chunks = build_chunks(anchors, scenes, ChunkConfig(target_duration=2, min_duration=1, max_duration=4))
+def test_translate_covers_all_units_and_splits(monkeypatch):
+    anchors = _anchors()  # 3 units
 
     def fake(system, user, config):
         # one line per anchor id present in the prompt; anchor 1 has an explicit turn
@@ -53,7 +53,8 @@ def test_translate_covers_all_anchors_and_splits(monkeypatch):
         return "\n".join(lines)
 
     monkeypatch.setattr(translate_mod, "complete", fake)
-    rows = translate(anchors, chunks, [], LLM, TranslateConfig(max_caption_chars=40))
+    monkeypatch.setattr(edit_mod, "complete", fake)
+    rows = translate(anchors, [], LLM, TranslateConfig())
     covered = {r.anchor_id for r in rows}
     assert covered == {a.id for a in anchors}
     # explicit turn split produced two cues for anchor 1
@@ -64,10 +65,10 @@ def test_translate_covers_all_anchors_and_splits(monkeypatch):
 
 def test_translate_raises_on_han_leak(monkeypatch):
     anchors = _anchors()
-    chunks = build_chunks(anchors, flat_scene_map(anchors), ChunkConfig(max_duration=999))
     monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "\n".join(f"{a.id}\t还有中文" for a in anchors))
+    monkeypatch.setattr(edit_mod, "complete", lambda s, u, c: "")
     try:
-        translate(anchors, chunks, [], LLM)
+        translate(anchors, [], LLM)
         assert False, "expected TranslateError"
     except translate_mod.TranslateError:
         pass

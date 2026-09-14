@@ -1,29 +1,34 @@
-"""Chunk translation: Chinese anchors -> Vietnamese speech rows.
+"""L4 — unit translation (v3): sentences in, sentences out.
 
-Chunks are independent and translated CONCURRENTLY: consistency across a long
-video comes from the glossary (names, gender, fixed pronouns) plus a slice of
-the previous chunk's SOURCE text for local continuity — not from a rolling
-translated-state chain, which forced chunks to run one-by-one and made a long
-video's translate time scale linearly. The model emits ``ANCHOR_ID<TAB>TEXT``
-rows; we validate (no Han, anchors in range, full coverage) and split each
-anchor's text into cue-sized SpeechRows.
+Design (evidence-driven, see docs/TRANSLATE-V3.md):
+
+* units are semantic (built by ``units.build_units`` from the ASR rail) — NOT timing
+  anchors and NOT caption rows;
+* no character budget in the prompt: wording quality comes first, timing is handled
+  later by the deterministic timeline (run-level tempo + breath);
+* batches run sequentially with rolling context (previous source + previous
+  Vietnamese) so pronouns and tone carry across the video;
+* after each batch a single gated EDIT pass makes the prose engaging; the words then
+  freeze — reflow/render never rewrite them again;
+* rows are split ONLY on explicit-turn markers (``⟂``); caption splitting belongs to
+  the display stage.
 """
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from .chunking import anchors_for_chunk
-from .glossary import format_glossary
 from backend.app.agents import AgentConfig, complete
 
-from .tsv_io import parse_tsv_rows
-from .models import Anchor, Chunk, GlossaryEntry, SpeechRow
+from .edit import EditConfig, edit_texts
+from .glossary import format_glossary
+from .models import Anchor, GlossaryEntry, SpeechRow
 from .prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
-from .text import has_han, sanitize_caption, split_text_for_explicit_turns
+from .text import has_han, sanitize_caption, split_text_for_explicit_turns_only
+from .tsv_io import parse_tsv_rows
 
-_CONTEXT_SOURCE_CHARS = 160
+_CONTEXT_SOURCE_CHARS = 200
+_CONTEXT_VI_CHARS = 240
 
 
 class TranslateError(RuntimeError):
@@ -32,70 +37,81 @@ class TranslateError(RuntimeError):
 
 @dataclass(slots=True)
 class TranslateConfig:
-    max_caption_chars: int = 32
-    voice_cps: float = 13.0   # per-anchor char budget = duration * voice_cps (natural read pace)
-    min_budget_chars: int = 12
     notes: str = ""           # per-video context (cast/gender/register) injected into the prompt
-    chunk_workers: int = 3    # concurrent chunk translations (bounded: the LLM proxy throttles)
+    batch_units: int = 20     # units per translation call
+    edit: bool = True         # one gated creative pass per batch (L4.5)
 
 
-def _budget_chars(anchor: Anchor, voice_cps: float, floor: int) -> int:
-    return max(floor, int(round((anchor.end - anchor.start) * voice_cps)))
-
-
-def _format_anchor_rows(anchors: list[Anchor], voice_cps: float, floor: int) -> str:
-    # Each row carries an explicit character budget = how much Vietnamese fits in the
-    # time this line is spoken. The model must condense to it (meaning over verbatim).
-    # No raw start-end timestamp column: the prompt never uses it, and having it inline
-    # made the model occasionally echo "8.03-14.39 ≤114 ..." into the translated TEXT.
-    return "\n".join(
-        f"{a.id}\t≤{_budget_chars(a, voice_cps, floor)}\t{a.source_zh}"
-        for a in anchors
-    )
-
-
-def _parse_chunk_output(raw: str, valid_ids: set[int]) -> dict[int, str]:
+def _parse_output(raw: str, valid_ids: set[int]) -> dict[int, str]:
     texts: dict[int, str] = {}
     for cells in parse_tsv_rows(raw, expected_cols=2):
-        head = cells[0].strip()
-        if head.upper() == "MEMORY":
-            continue  # tolerated legacy row shape; state is no longer threaded
         try:
-            anchor_id = int(head)
+            unit_id = int(cells[0].strip())
         except ValueError:
             continue
-        if anchor_id not in valid_ids:
+        if unit_id not in valid_ids:
             continue
         text = sanitize_caption(cells[1])
         if text:
-            texts[anchor_id] = text
+            texts[unit_id] = text
     return texts
 
 
-def _validate(texts: dict[int, str], anchors: list[Anchor]) -> None:
-    for anchor in anchors:
-        text = texts.get(anchor.id)
+def _validate(texts: dict[int, str], units: list[Anchor]) -> None:
+    for unit in units:
+        text = texts.get(unit.id)
         if not text:
-            raise TranslateError(f"anchor {anchor.id} has no translation")
+            raise TranslateError(f"unit {unit.id} has no translation")
         if has_han(text):
-            raise TranslateError(f"anchor {anchor.id} translation still contains Han characters")
+            raise TranslateError(f"unit {unit.id} translation still contains Han characters")
 
 
-def _speech_rows_from_texts(
-    texts: dict[int, str], anchors: list[Anchor], max_caption_chars: int, start_sub_id: int
-) -> list[SpeechRow]:
+def translate_batch(
+    units: list[Anchor],
+    glossary: list[GlossaryEntry],
+    prev_source: str,
+    prev_vi: str,
+    llm: AgentConfig,
+    config: TranslateConfig,
+) -> dict[int, str]:
+    def attempt(batch: list[Anchor]) -> dict[int, str]:
+        user = TRANSLATE_USER.format(
+            glossary=format_glossary(glossary),
+            notes=config.notes or "(không có)",
+            prev_source=prev_source or "(đầu video)",
+            prev_vi=prev_vi or "(chưa có)",
+            units="\n".join(f"{a.id}\t{a.source_zh}" for a in batch),
+        )
+        raw = complete(TRANSLATE_SYSTEM, user, llm)
+        return _parse_output(raw, {a.id for a in batch})
+
+    texts = attempt(units)
+    # per-line flake retry (skipped line / Han leak), not a whole-batch failure
+    bad = [a for a in units if not texts.get(a.id) or has_han(texts[a.id])]
+    if bad:
+        retried = attempt(bad)
+        texts.update({uid: t for uid, t in retried.items() if t and not has_han(t)})
+    _validate(texts, units)
+
+    if config.edit:
+        texts, _accepted = edit_texts(texts, units, glossary, llm)
+        _validate(texts, units)
+    return texts
+
+
+def _rows_from_texts(texts: dict[int, str], units: list[Anchor], start_sub_id: int) -> list[SpeechRow]:
     rows: list[SpeechRow] = []
     sub_id = start_sub_id
-    for anchor in anchors:
-        parts = split_text_for_explicit_turns(texts[anchor.id], max_caption_chars) or [texts[anchor.id]]
+    for unit in units:
+        parts = split_text_for_explicit_turns_only(texts[unit.id]) or [texts[unit.id]]
         for part in parts:
             rows.append(
                 SpeechRow(
                     sub_id=sub_id,
-                    anchor_id=anchor.id,
-                    anchor_start=anchor.start,
-                    anchor_end=anchor.end,
-                    source_ids=anchor.source_ids,
+                    anchor_id=unit.id,
+                    anchor_start=unit.start,
+                    anchor_end=unit.end,
+                    source_ids=unit.source_ids,
                     text=part,
                 )
             )
@@ -103,63 +119,24 @@ def _speech_rows_from_texts(
     return rows
 
 
-def translate_chunk(
-    chunk_anchors: list[Anchor],
-    glossary: list[GlossaryEntry],
-    prev_source: str,
-    llm: AgentConfig,
-    config: TranslateConfig,
-) -> dict[int, str]:
-    def attempt(anchors: list[Anchor]) -> dict[int, str]:
-        user = TRANSLATE_USER.format(
-            glossary=format_glossary(glossary),
-            notes=config.notes or "(không có)",
-            prev_source=prev_source or "(đầu video)",
-            anchors=_format_anchor_rows(anchors, config.voice_cps, config.min_budget_chars),
-            max_caption_chars=config.max_caption_chars,
-        )
-        raw = complete(TRANSLATE_SYSTEM.format(max_caption_chars=config.max_caption_chars), user, llm)
-        return _parse_chunk_output(raw, {a.id for a in anchors})
-
-    texts = attempt(chunk_anchors)
-    # Content-level retry: the model sometimes skips an anchor or leaves Han
-    # characters in one line. That is a per-line flake, not a chunk problem — re-ask
-    # for JUST the bad anchors once instead of failing the whole job
-    # ("anchor 15 translation still contains Han characters").
-    bad = [a for a in chunk_anchors if not texts.get(a.id) or has_han(texts[a.id])]
-    if bad:
-        retried = attempt(bad)
-        texts.update({aid: t for aid, t in retried.items() if t and not has_han(t)})
-    _validate(texts, chunk_anchors)
-    return texts
-
-
 def translate(
-    anchors: list[Anchor],
-    chunks: list[Chunk],
+    units: list[Anchor],
     glossary: list[GlossaryEntry],
     llm: AgentConfig,
     config: TranslateConfig | None = None,
 ) -> list[SpeechRow]:
     config = config or TranslateConfig()
-    chunk_anchor_lists = [anchors_for_chunk(chunk, anchors) for chunk in chunks]
-    jobs = [(i, ca) for i, ca in enumerate(chunk_anchor_lists) if ca]
-    if not jobs:
+    if not units:
         return []
 
-    def prev_source_for(index: int) -> str:
-        if index == 0:
-            return ""
-        prev = chunk_anchor_lists[index - 1]
-        return "".join(a.source_zh for a in prev)[-_CONTEXT_SOURCE_CHARS:]
+    texts: dict[int, str] = {}
+    prev_source = ""
+    prev_vi = ""
+    for start in range(0, len(units), max(1, config.batch_units)):
+        batch = units[start : start + config.batch_units]
+        batch_texts = translate_batch(batch, glossary, prev_source, prev_vi, llm, config)
+        texts.update(batch_texts)
+        prev_source = "".join(a.source_zh for a in batch)[-_CONTEXT_SOURCE_CHARS:]
+        prev_vi = " ".join(batch_texts[a.id] for a in batch if batch_texts.get(a.id))[-_CONTEXT_VI_CHARS:]
 
-    with ThreadPoolExecutor(max_workers=max(1, config.chunk_workers)) as pool:
-        texts_per_chunk = list(pool.map(
-            lambda job: translate_chunk(job[1], glossary, prev_source_for(job[0]), llm, config),
-            jobs,
-        ))
-
-    rows: list[SpeechRow] = []
-    for (_, chunk_anchors), texts in zip(jobs, texts_per_chunk):
-        rows.extend(_speech_rows_from_texts(texts, chunk_anchors, config.max_caption_chars, start_sub_id=len(rows)))
-    return rows
+    return _rows_from_texts(texts, units, start_sub_id=0)

@@ -26,15 +26,20 @@ Local personal studio: **video Trung → video Việt hoá**.
 ## 3. Pipeline (in-process, FastAPI)
 
 ```text
-download → asr → glossary → translate → qa → voiceover (optional) → package
+download → asr ─┬ normalize ASR noise (rule + gated agent pass)
+               └ build semantic units (L2)
+         → glossary → translate (1 batch/call, rolling context)
+                    → edit (1 gated creative pass per batch)
+         → qa → voiceover (optional) → package
 ```
 
 | Stage | Input | Output | Sở hữu | Fail mode |
 | --- | --- | --- | --- | --- |
 | download | url | video.mp4 + meta | yt-dlp adapter (Douyin: CDP extractor) | network/cookie |
-| asr | video | asr_segments + anchors | Cloudflare ASR worker | thiếu worker URL |
+| asr | video | asr_segments → units (sentence-level) | ASR worker + normalize + units builder | thiếu worker URL |
 | glossary | source_zh | glossary + style notes | agent 1 pass data-driven | rỗng → fallback |
-| translate | chunks + glossary + memory | speech rows + memory | agent stateful, bounded | validation lỗi → fail rõ |
+| translate | units + glossary + rolling context | speech rows (1/dòng lượt) | agent (no char budget) | validation lỗi → fail rõ |
+| edit | draft VI + source + glossary | edited VI (fact-gated, max 1 pass) | agent | patch vi phạm → giữ draft |
 | qa | speech + rail | qa_report | code thuần | gate không đạt → fail |
 | voiceover | speech + anchors | voice.m4a + render_manifest | scheduler + TTS + ffmpeg | overflow → repair loop ≤3 vòng |
 | package | video + speech + voice | softsub/dubbed mp4, srt/vtt/json, zip | ffmpeg | — |
@@ -43,15 +48,15 @@ Ghi chú: stage `edit` đã **retired** (LLM editor pass rewrite ~nửa anchors,
 
 ## 4. Data contract (`backend/app/dubbing/`)
 
-Artifact trung tâm là `speech`. `anchors` là rail thời gian + source.
+Artifact trung tâm là `speech`. `unit` là đơn vị dịch (tên artifact cũ `anchors.tsv` giữ nguyên nhưng nội dung là unit).
 
 ```text
 asr_segments : (id, start, end, text_zh)                        # micro-beat rail CỨNG
-anchors      : (id, start, end, source_ids[], source_zh)        # khung thời gian
-chunks       : (id, start_anchor, end_anchor, start, end, scene_ids[], labels[])
-speech       : (sub_id, anchor_id, start, end, source_ids[], text_vi)   # ARTIFACT TRUNG TÂM
-glossary     : (term_zh, term_vi, kind, note)                   # data-driven mỗi video
-render_manifest : per-anchor tts_duration, anchor_duration, overflow, needs_repair
+unit         : (id, segment_ids, start, end, source_zh, flags)  # câu/đoạn nghĩa — đơn vị dịch
+run          : (id, unit_ids, start, end)                       # đoạn thoại liên tục (gap < 0.8s)
+speech       : (sub_id, unit_id, start, end, source_ids, text_vi)  # 1 dòng / lượt thoại
+glossary     : (term_zh, term_vi, kind, note + evidence)        # data-driven mỗi video
+render_manifest : per-run fill/overflow, per-unit tts_duration
 ```
 
 - `⟂` = marker tách explicit-turn, truyền giữa translate/repair và splitter.

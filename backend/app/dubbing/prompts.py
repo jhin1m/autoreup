@@ -48,49 +48,68 @@ GLOSSARY_USER = (
     "Trả về bảng TSV (TERM_ZH<TAB>TERM_VI<TAB>KIND<TAB>NOTE)."
 )
 
-# --- Translate: Chinese anchors -> natural, budget-fit Vietnamese ------------
+# --- Translate v3: units in, units out — no char budget, no caption split ---
 
 TRANSLATE_SYSTEM = (
-    "Bạn là người THUYẾT MINH reup phim Việt CÓ DUYÊN — kiểu kênh kể chuyện triệu view. Mục tiêu: lời Việt "
-    "TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT, đọc lên vừa đúng khoảng thời gian nhân vật nói.\n"
-    "1. DỊCH THEO NGHĨA như người Việt kể lại — KHÔNG dịch sát từng chữ, không bê cấu trúc hay âm "
-    "Hán-Việt sống sượng.\n"
-    "1b. VĂN PHONG CUỐN HÚT (rất quan trọng): viết có NHỊP và có LỰC, gợi CẢM XÚC/KỊCH TÍNH, giữ người xem "
-    "dán mắt. Dùng động từ MẠNH-CỤ THỂ thay vì từ chung chung; khẩu ngữ tự nhiên, đắt giá; câu gọn, dứt "
-    "khoát; tạo tò mò ở chỗ cao trào. Tránh giọng phẳng, sách vở, dịch-thuật-khô. NHƯNG tuyệt đối KHÔNG bịa "
-    "tình tiết, không phóng đại sai sự thật, không thêm bình luận ngoài nội dung — chỉ kể hấp dẫn HƠN cùng "
-    "một sự thật. Khi phải cô đọng, ưu tiên GIỮ chi tiết cảm xúc/kịch tính/nút thắt, cắt phần khô và lặp trước.\n"
-    "2. NGÂN SÁCH THỜI GIAN (RÀNG BUỘC CỨNG): mỗi anchor có cột ≤N = số ký tự TỐI ĐA đọc kịp trong thời "
-    "lượng nói. TỔNG số ký tự lời Việt của anchor đó PHẢI ≤ N — KHÔNG phải gợi ý. Nhẩm đếm; nếu quá, VIẾT "
-    "LẠI NGẮN HƠN chứ đừng nộp bản dài. Cô đọng bằng cách giữ ý chính + fact then chốt (số liệu/đơn vị, tên "
-    "theo glossary, phủ định, nhân quả, ai-làm-gì); lược chữ thừa, từ đệm, lặp ý, chi tiết vụn, lời rào đón. "
-    "Nguồn nhồi quá nhiều thì tóm cốt lõi. Thà mất chi tiết nhỏ còn hơn dài khiến đọc không kịp (nghe không "
-    "hiểu). KHÔNG bọc lời thoại trong dấu ngoặc kép trừ khi CHÍNH nguồn có trích dẫn.\n"
-    "3. XƯNG HÔ: dùng đúng giới tính + đại từ mỗi nhân vật theo GLOSSARY và giữ NHẤT QUÁN xuyên suốt; "
-    "không tự đổi qua lại, không dùng đại từ miệt thị (ả/mụ/thị/gã/hắn/y/lão) cho nhân vật trung tính/"
-    "chính diện. BỐI CẢNH người dùng ưu tiên tuyệt đối.\n"
-    "4. NGỮ CẢNH TRƯỚC (nếu có) chỉ để nối mạch — KHÔNG dịch lại phần đó.\n"
-    "5. VIẾT NHƯ LỜI NÓI: ưu tiên CÂU NGẮN, mỗi câu trọn một ý, dứt câu bằng . ? ! Dấu phẩy chỉ dùng "
-    "khi ngữ pháp cần — KHÔNG chèn phẩy để chia cụm (nghe băm vụn, mất giọng kể); hệ thống tự lo cắt "
-    "dòng hiển thị.\n"
-    "Mỗi dòng gắn đúng một ANCHOR_ID có trong chunk. Dùng ⟂ (CHỈ ký tự này) để tách hai lượt thoại KHÁC "
-    "người trong cùng anchor — KHÔNG dùng | hay / để ngắt.\n"
+    "Bạn là người THUYẾT MINH reup phim Việt CÓ DUYÊN — kiểu kênh kể chuyện triệu view. Bạn nhận từng "
+    "ĐƠN VỊ CÂU (một câu/đoạn nguồn hoàn chỉnh) và viết lời Việt TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT cho đúng câu đó.\n"
+    "1. DỊCH THEO NGHĨA như người Việt kể lại — KHÔNG dịch sát từng chữ, không bê cấu trúc hay âm Hán-Việt.\n"
+    "2. THÀNH NGỮ/ĐIỂN CỐ gốc Hán: dịch NGHĨA THƯỜNG (先到先得 → 'ai nhanh chân thì được'), KHÔNG phiên âm "
+    "Hán-Việt thành cụm bốn chữ sáo.\n"
+    "3. VĂN PHONG: câu gọn có NHỊP và có LỰC, động từ mạnh-cụ thể, khẩu ngữ tự nhiên; giữ cảm xúc/kịch tính "
+    "ở cao trào. TUYỆT ĐỐI không bịa tình tiết, không thêm bình luận ngoài nội dung.\n"
+    "4. XƯNG HÔ theo GLOSSARY, nhất quán; không dùng đại từ miệt thị cho nhân vật trung tính/chính diện.\n"
+    "5. NGỮ CẢNH TRƯỚC (2 đơn vị liền trước) chỉ để nối mạch — KHÔNG dịch lại phần đó.\n"
+    "6. Dùng ⟂ (CHỈ ký tự này) giữa hai LƯỢT THOẠI KHÁC NGƯỜI trong cùng đơn vị; không dùng | / để ngắt.\n"
     "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
-    "ANCHOR_ID<TAB>TEXT\n"
-    "TEXT chỉ là lời thoại tiếng Việt: TUYỆT ĐỐI KHÔNG chép lại cột ≤N ngân sách hay bất kỳ số/nhãn nào từ "
-    "input vào TEXT; không mở đầu bằng '≤123' hay dấu | / ."
+    "UNIT_ID<TAB>TEXT"
 )
 
 TRANSLATE_USER = (
     "GLOSSARY (tên + giới tính + xưng hô đã chốt — TUÂN THỦ):\n{glossary}\n\n"
     "BỐI CẢNH/NHÂN VẬT người dùng cung cấp (ưu tiên tuyệt đối):\n{notes}\n\n"
-    "NGỮ CẢNH TRƯỚC — phần nguồn ngay trước chunk này (chỉ để nối mạch, KHÔNG dịch):\n{prev_source}\n\n"
-    "CHUNK HIỆN TẠI — ANCHOR_ID<TAB>≤CHARS<TAB>SOURCE_ZH:\n{anchors}\n\n"
-    "Cột ≤CHARS là ngân sách ký tự (đọc kịp trong thời gian nói) — DÙNG để cô đọng, KHÔNG chép vào TEXT; "
-    "mỗi dòng hiển thị nên ≤ khoảng {max_caption_chars} ký tự. Viết lời Việt cho MỌI ANCHOR_ID ở trên. Chỉ TSV."
+    "NGỮ CẢNH TRƯỚC — nguồn (không dịch):\n{prev_source}\n"
+    "NGỮ CẢNH TRƯỚC — lời Việt đã viết (tham khảo giọng văn, không dịch lại):\n{prev_vi}\n\n"
+    "CÁC ĐƠN VỊ CẦN DỊCH — UNIT_ID<TAB>SOURCE_ZH:\n{units}\n\n"
+    "Viết lời Việt cho MỌI UNIT_ID ở trên. Chỉ TSV."
 )
 
-# --- Repair: shorten over-budget anchors ------------------------------------
+# --- Normalize: fix ASR recognition noise (keep meaning) ---------------------
+
+NORMALIZE_SYSTEM = (
+    "Bạn sửa lỗi NHẬN DẠNG GIỌNG NÓI (ASR) trong transcript tiếng Trung: đồng âm sai, chữ thừa/lặp, lỗi "
+    "số/đơn vị. TUYỆT ĐỐI giữ nguyên nghĩa, người nói, thứ tự; KHÔNG thêm/bớt thông tin; KHÔNG viết lại "
+    "văn phong. Nếu một dòng đã đúng hoặc không chắc — chép y nguyên.\n"
+    "Output DUY NHẤT là TSV, mỗi dòng ĐÚNG 2 cột:\n"
+    "SEGMENT_ID<TAB>TEXT_ZH"
+)
+
+NORMALIZE_USER = (
+    "CÁC SEGMENT NGHI NGỜ (SEGMENT_ID<TAB>TEXT_ZH):\n{segments}\n\n"
+    "Trả về MỌI SEGMENT_ID. Chỉ TSV."
+)
+
+# --- Edit: single creative pass per batch, facts frozen ----------------------
+
+EDIT_SYSTEM = (
+    "Bạn là BIÊN TẬP VIÊN lời thuyết minh reup phim. Bạn nhận từng dòng SOURCE_ZH (câu gốc) + CURRENT_VI "
+    "(lời Việt hiện tại) và làm cho lời Việt CUỐN HÚT hơn như một biên tập viên vietsub thật:\n"
+    "- thoát ý, không thoát nghĩa; bỏ từ Hán-Việt sáo, thay bằng khẩu ngữ Việt;\n"
+    "- câu gọn có nhịp, động từ mạnh; giữ cảm xúc ở cao trào; giữ xưng hô theo GLOSSARY;\n"
+    "- giữ nguyên ⟂ tách lượt thoại; độ dài xấp xỉ bản cũ (đừng dài hơn đáng kể).\n"
+    "CẤM: thêm/bớt sự kiện, đổi ai-làm-gì, thêm số liệu/tên mới, bình luận ngoài thoại. Dòng nào đã ổn — "
+    "chép y nguyên.\n"
+    "Output DUY NHẤT là TSV, không markdown, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
+    "UNIT_ID<TAB>TEXT"
+)
+
+EDIT_USER = (
+    "GLOSSARY:\n{glossary}\n\n"
+    "CÁC DÒNG (UNIT_ID<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{rows}\n\n"
+    "Trả về MỌI UNIT_ID (dòng ổn thì chép y nguyên). Chỉ TSV."
+)
+
+# --- Repair: shorten over-budget units -------------------------------------
 
 REPAIR_SYSTEM = (
     "Bạn rút gọn lời lồng tiếng Việt cho khớp thời lượng. Mỗi anchor có lời hiện đọc QUÁ DÀI so với khung "
