@@ -55,7 +55,10 @@ export function dubErrorVi(error: string | null | undefined): string {
   const e = error ?? "";
   if (/timed out|timeout/i.test(e) && /douyin_extract|download/i.test(e))
     return "Không tải được video (Douyin chặn hoặc hết thời gian). Thử lại sau ít phút.";
-  if (/Connection refused|Errno 61/i.test(e)) return "Máy chủ dịch (LLM :8099) chưa bật.";
+  if (/not recognized as a known model|invalid model selection/i.test(e))
+    return "Model slug không hợp lệ — kiểm tra AUTOREUP_TRANSLATE_MODEL / POLISH_MODEL (xem `agy models`).";
+  if (/agent call failed|agent binary|agent command|agent exited|no result envelope/i.test(e))
+    return "Agent CLI lỗi — kiểm tra agy đã đăng nhập và AUTOREUP_AGENT_* (binary/timeout).";
   if (/验证码|captcha/i.test(e)) return "Douyin yêu cầu xác minh (CAPTCHA). Cần cookie mới.";
   if (/mã ho|playlet|短剧|DRM|mã hoá/i.test(e)) return "Playlet Douyin bị mã hoá — chỉ tải được trong app, bản web không hỗ trợ.";
   if (/ffmpeg|boxblur|libx264|videotoolbox/i.test(e)) return "Lỗi khi dựng/burn video (ffmpeg).";

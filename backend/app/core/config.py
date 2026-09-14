@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     agent_home: str | None = None  # HOME override for the child process (account isolation)
     # provider=command: template with {prompt}, e.g. "acpx claude exec --format quiet {prompt}"
     agent_command: str = ""
-    agent_effort: str = "low"  # low | medium | high (agy)
+    agent_effort: str = ""  # low | medium | high — only when the model supports --effort
     agent_timeout: float = 300.0
     agent_retries: int = 3
     translate_model: str = "gemini-3.8-flash-low"

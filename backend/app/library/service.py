@@ -502,7 +502,7 @@ class LibraryService:
             raw = complete(system, user, self._agent())
             data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
         except Exception as exc:
-            raise LibraryError("Không tạo được gợi ý (máy chủ LLM lỗi)") from exc
+            raise LibraryError("Không tạo được gợi ý (agent CLI lỗi)") from exc
         tags = data.get("hashtags") or []
         return {
             "title": (data.get("title") or "").strip(),

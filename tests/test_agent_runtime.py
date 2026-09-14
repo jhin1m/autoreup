@@ -24,6 +24,12 @@ def test_build_agy_argv_carries_model_effort_and_timeout():
     assert argv[argv.index("--effort") + 1] == "low"
 
 
+def test_build_agy_argv_omits_effort_when_unset():
+    argv = build_agy_argv("hi", AgentConfig(bin="agy", model="gemini-3.8-flash-low"))
+    assert "--effort" not in argv
+    assert "--model" in argv
+
+
 def test_parse_agy_output_reads_last_envelope_and_reports_errors():
     ok = json.dumps({"status": "SUCCESS", "response": "xin chào"})
     assert parse_agy_output(f"scanner chatter\n{ok}") == "xin chào"
