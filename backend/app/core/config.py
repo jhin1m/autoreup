@@ -136,9 +136,14 @@ class Settings(BaseSettings):
     # (no dragging) and only a hair of speed-up (1.08) for slightly-long lines.
     # Density is fixed at the source — the translator condenses to tts_voice_cps and
     # the repair loop shortens whatever still overruns — NOT by speeding the voice.
-    tts_min_tempo: float = 1.0
-    tts_max_tempo: float = 1.08
-    tts_fixed_tempo: float | None = None
+    # L6 timeline: run-based placement (docs/TRANSLATE-V3.md)
+    tts_run_gap: float = 0.8          # source gap below this = same speech run
+    tts_tempo_floor: float = 0.92     # run-level slow-down floor (fill by slowing)
+    tts_tempo_ceiling: float = 1.18   # run-level speed-up ceiling
+    tts_breath_min: float = 0.06      # distributed sentence breath
+    tts_breath_max: float = 0.25
+    tts_min_run_fill: float = 0.95    # below this a run is flagged for expand
+    tts_min_trailing: float = 1.5     # ...or when it ends this early (seconds)
     # Voice is the master clock and stays neo'd at each anchor's onset so it matches
     # the picture ("khớp ảnh") AND the subtitle (which is derived from the voice
     # window). glue_gap=0 disables the earlier-shifting glue — it traded picture/sub
@@ -147,12 +152,12 @@ class Settings(BaseSettings):
     # window, the leftover silence made the dub feel choppy/slow ("chậm chậm"). Any gap
     # smaller than this butt-joins to the previous line so speech flows continuously; only
     # real on-screen pauses (>= this) keep their absolute onset for picture sync.
-    tts_glue_gap: float = 0.22
+    tts_glue_gap: float = 0.22  # (unused by v3 render; kept for the assembly crossfade math)
     # A glued clip may start at most this far BEFORE its source onset. Condensed
     # lines in a long continuous run used to drag every following line earlier
     # (dub spoke ~1s before the on-screen speaker); this caps that drift while
     # keeping the butt-joined flow.
-    tts_max_lead: float = 0.3
+    tts_max_lead: float = 0.3  # (unused by v3 render)
     tts_crossfade: float = 0.06
     tts_assembly_mode: str = "sequential"
     tts_group_blocks: bool = True

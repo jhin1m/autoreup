@@ -179,67 +179,27 @@ def render_silence(path: Path, duration: float) -> None:
     ])
 
 
-def plan_placements(
-    segments: list[tuple[float, Path, float, float]], glue_gap: float, crossfade: float, max_lead: float = 0.3
-) -> tuple[list[tuple[float, Path, float, bool]], float]:
-    """Resolve each clip's slot on the output timeline + how it joins the previous.
-
-    ``segments`` is ``(anchor_start, clip_path, playback_duration, anchor_end)`` in
-    play order. Returns ``(placements, track_end)`` where each placement is
-    ``(place_start, path, duration, glued_head)``:
-
-    * Real pause — ``next.start - this.end >= glue_gap``: the clip keeps its absolute
-      onset, so the voice stays locked to the picture ("khớp ảnh") and the space
-      before it is a genuine on-screen beat.
-    * Contiguous — gap ``< glue_gap``: no real pause on screen, so the clip butt-joins
-      right after the previous voice (overlapping by ``crossfade``); the artificial
-      underfill silence is dropped so prosody flows with no stop-start "khựng".
-
-    ``max_lead`` bounds how far a glued clip may run AHEAD of its source time: over a
-    long continuous run, condensed (shorter) lines pulled every following line earlier
-    and the accumulated drift had the dub speaking a full second before the on-screen
-    speaker. A clip never starts more than ``max_lead`` before its source onset — the
-    leftover space is a short natural breath, not a stall.
-    """
-    placements: list[tuple[float, Path, float, bool]] = []
-    cursor = 0.0
-    prev_end: float | None = None
-    for start, path, duration, end in segments:
-        if prev_end is None:
-            place, glued = start, False
-        elif start - prev_end < glue_gap:
-            place, glued = max(0.0, cursor - crossfade, start - max_lead), True
-        else:
-            place, glued = max(start, cursor), False
-        placements.append((place, path, duration, glued))
-        cursor = place + duration
-        prev_end = end
-    return placements, cursor
-
-
 def assemble_track(
-    segments: list[tuple[float, Path, float, float]],
+    placements: list[tuple[float, Path, float, bool]],
     output_path: Path,
-    work_dir: Path,
     total_duration: float | None = None,
-    glue_gap: float = 0.30,
     crossfade: float = 0.06,
-    max_lead: float = 0.3,
 ) -> None:
-    """Place tempo-fitted clips on a timeline and smooth the joins.
+    """Render the planned placements into one track.
 
+    ``placements`` are ``(place_start, clip_path, duration, glued)`` — the timeline
+    stage owns the planning (run-level tempo, breaths, run-boundary anchoring).
     One ffmpeg filtergraph: fade each clip's edges (equal-power ``qsin`` where it
     overlaps a glued neighbour, a short declick otherwise), delay it into its slot,
     then ``amix``. amix sums, so the matched crossfades stay at unity while gaps
-    between real beats stay silent. Overflow stays local — a long clip never pushes a
-    later real-beat onset earlier, only consumes its own trailing silence.
+    between runs stay silent.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if not segments:
+    if not placements:
         render_silence(output_path, max(0.1, total_duration or 0.1))
         return
 
-    placements, cursor = plan_placements(segments, glue_gap, crossfade, max_lead)
+    cursor = max((place + duration for place, _path, duration, _glued in placements), default=0.0)
     track_end = max(cursor, total_duration or 0.0)
 
     declick = 0.008

@@ -48,8 +48,22 @@ def load(job: str) -> tuple[list[Unit], dict[int, float]]:
 
 
 def old_metrics(units: list[Unit], durations: dict[int, float]) -> dict:
+    """Frozen copy of the legacy per-anchor planner (deleted from the app) — kept
+    here so the simulation can compare old vs new placement on real data."""
     segments = [(u.start, Path("x"), durations.get(u.id, 0.0), u.end) for u in units if u.id in durations]
-    placements, _ = plan_placements(segments, OLD_GLUE_GAP, CROSSFADE, OLD_MAX_LEAD)
+    placements = []
+    cursor = 0.0
+    prev_end: float | None = None
+    for start, path, duration, end in segments:
+        if prev_end is None:
+            place, glued = start, False
+        elif start - prev_end < OLD_GLUE_GAP:
+            place, glued = max(0.0, cursor - CROSSFADE, start - OLD_MAX_LEAD), True
+        else:
+            place, glued = max(start, cursor), False
+        placements.append((place, path, duration, glued))
+        cursor = place + duration
+        prev_end = end
     choppy_s = choppy_n = audible_n = 0.0
     for i in range(1, len(placements)):
         prev_place, _, prev_dur, _ = placements[i - 1]

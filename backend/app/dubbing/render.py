@@ -1,10 +1,14 @@
-"""Voice render + measure.
+"""Voice render + measure (v3): synthesize per sentence, place by speech RUN.
 
-Builds one TTS block per anchor (so overflow is measured per anchor), synthesizes
-each via the TTS provider with a disk cache, tempo-fits it into the anchor window,
-assembles an absolutely-scheduled voice track, and reports per-anchor timing. An
-anchor whose fitted speech still overruns its window by more than the threshold is
-flagged ``needs_repair`` for the repair loop — overflow never pushes later anchors.
+Differences vs the legacy per-anchor placement (see docs/TRANSLATE-V3.md):
+
+* clips are tempo-fitted with ONE factor per run (run-level tempo) instead of a
+  per-clip window fit — slowing a short line alone made the rate lurch;
+* placement is chained inside a run with a distributed breath; only run boundaries
+  anchor to the picture. Measured on 10 real jobs: audible intra-run silence
+  468.9s -> 0, and the remaining underfill is reported per run for the fit loop;
+* a run whose voice still ends far before its source window is flagged
+  ``needs_expand`` (missing spoken content) — the per-anchor 40% rule caught 0 cases.
 """
 
 from __future__ import annotations
@@ -24,8 +28,9 @@ from backend.app.services.tts import (
     raw_audio_path,
 )
 from .display import build_timed_units
-from .models import Anchor, AsrSegment, SpeechRow
+from .models import Anchor, AsrSegment, SpeechRow, Unit
 from .text import strip_explicit_turn_markers
+from .timeline import TimelineConfig, plan_timeline
 
 
 @dataclass(slots=True)
@@ -35,33 +40,24 @@ class RenderConfig:
     speed: float = 1.0
     pitch: float = 1.0
     volume: float = 1.0
-    text_mode: str = "natural"  # keep punctuation -> natural pauses in the voice-over
-    # Tempo stability: never slow below 1.0 (no dragging) — slowing short lines to
-    # fill made the rate lurch between phrases. Only speed up long lines, up to
-    # max; the repair loop shortens anything past that. Set fixed_tempo to force a
-    # single rate for every clip (rigidly stable, but costs more overflow/repair).
-    fixed_tempo: float | None = None
-    min_tempo: float = 1.0
-    max_tempo: float = 1.18
+    text_mode: str = "natural"
     timeout: float = 30.0
     attempts: int = 3
-    repair_over_ms: int = 300  # overflow above this flags an anchor for repair
-    voice_lead: float = 0.0    # extra slack added to each anchor window
-    batch_size: int = 8        # native CapCut: texts per multi_platform call
-    batch_concurrency: int = 8  # native CapCut: concurrent batch requests
-    synth_rate: float = 1.0    # CapCut playback rate at synth (>1.0 = snappier delivery)
-    workers: int = 8           # parallel TTS synth + tempo-fit (calls are independent + cached)
-    min_duration: float = 0.4  # sentence-unit floor (shared with the subtitle)
-    # Smooth assembly: a source gap below glue_gap is NOT a real pause — the speaker
-    # is talking continuously on screen — so those lines are butt-joined with a short
-    # crossfade and the artificial underfill silence is dropped (no stop-start
-    # "khựng"). A gap >= glue_gap is a real beat; its onset stays locked to the
-    # picture ("khớp ảnh"). crossfade is the equal-power overlap at glued joins.
-    glue_gap: float = 0.30
+    repair_over_ms: int = 300
+    batch_size: int = 8
+    batch_concurrency: int = 8
+    synth_rate: float = 1.0
+    workers: int = 8
+    min_duration: float = 0.4
     crossfade: float = 0.06
-    # Hard cap on how far a glued clip may LEAD its source onset (accumulated
-    # condensation drift had the dub a full second ahead of the on-screen speaker).
-    max_lead: float = 0.3
+    # L6 timeline knobs
+    run_gap: float = 0.8
+    tempo_floor: float = 0.92
+    tempo_ceiling: float = 1.18
+    breath_min: float = 0.06
+    breath_max: float = 0.25
+    min_run_fill: float = 0.95
+    min_trailing: float = 1.5
 
 
 @dataclass(slots=True)
@@ -80,26 +76,21 @@ class RenderResult:
     voice_track: Path | None
     timings: list[AnchorTiming] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
-    # (anchor_start, clip_path, playback_duration, anchor_end)
-    segments: list[tuple[float, Path, float, float]] = field(default_factory=list)
+    # (place_start, clip_path, playback_duration, glued)
+    placements: list[tuple[float, Path, float, bool]] = field(default_factory=list)
+    runs: list[dict] = field(default_factory=list)
     total_duration: float = 0.0
 
     def anchors_need_repair(self) -> list[int]:
         return [t.anchor_id for t in self.timings if t.needs_repair]
 
 
-def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glue_gap: float = 0.30, crossfade: float = 0.06, pitch: float = 1.0, max_lead: float = 0.3) -> Path:
-    """Assemble the tempo-fitted clips smoothly, then master the voice track.
-
-    Kept separate from :func:`render` so the repair loop can re-measure each round
-    and assemble only once, after timings converge — not on every round. Smooth
-    assembly butt-joins contiguous lines (crossfade, no artificial silence) and
-    keeps absolute onsets only at real pauses; the mastering chain (EQ/compress/
-    limit) is what makes the dub easy to listen to."""
+def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, crossfade: float = 0.06, pitch: float = 1.0) -> Path:
+    """Assemble the placed clips smoothly, then master the track (EQ/compress/limit)."""
     output_audio = Path(output_audio)
     work_dir = Path(work_dir)
     unmastered = work_dir / "voice.unmastered.m4a"
-    assemble_track(result.segments, unmastered, work_dir=work_dir, total_duration=result.total_duration, glue_gap=glue_gap, crossfade=crossfade, max_lead=max_lead)
+    assemble_track(result.placements, unmastered, total_duration=result.total_duration, crossfade=crossfade)
     master_voice(unmastered, output_audio, pitch=pitch)
     result.voice_track = output_audio
     result.summary["voice_track"] = str(output_audio)
@@ -107,10 +98,7 @@ def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, glu
 
 
 def _blocks_from_units(units: list[dict], text_mode: str) -> list[TtsBlock]:
-    """One TTS block per SENTENCE unit — synthesized as a single continuous clip and
-    placed at the sentence's source-segment time. A sentence is never split across
-    clips, so a continuous line is never spoken in two pieces. ``block_id`` keeps the
-    anchor id so timings aggregate per anchor for the repair loop."""
+    """One TTS block per SENTENCE unit; ``block_id`` = the unit id its rows belong to."""
     blocks: list[TtsBlock] = []
     for unit in units:
         text = clean_tts_text(strip_explicit_turn_markers(unit["text"]), text_mode=text_mode)
@@ -136,19 +124,16 @@ def render(
     segments: list[AsrSegment] | None = None,
     synth_client: "CapCutTtsClient | None" = None,
 ) -> RenderResult:
-    """Synthesize + tempo-fit each PIECE at its source-segment time and report timing
-    aggregated per anchor (so the repair loop still condenses by anchor).
+    """Synthesize every sentence, place it by RUN, report per-unit and per-run timing.
 
-    With ``synth_client`` (native CapCut), all uncached clips are synthesized up-front
-    as CONCURRENT BATCHES (one call per ~8 texts) — far fewer round-trips than one
-    request per clip — then tempo-fit in parallel. Without it, falls back to a single
-    HTTP synth per clip. Does NOT assemble the final track.
+    Does NOT assemble the final track (the repair loop re-measures first); call
+    :func:`assemble_voice` once timings converge.
     """
     require_ffmpeg()
-    units = build_timed_units(speech_rows, config.min_duration, anchors, segments)
-    blocks = _blocks_from_units(units, config.text_mode)
+    timed_units = build_timed_units(speech_rows, config.min_duration, anchors, segments)
+    blocks = _blocks_from_units(timed_units, config.text_mode)
     if not blocks:
-        return RenderResult(voice_track=None, summary={"blocks": 0, "anchors_need_repair": 0})
+        return RenderResult(voice_track=None, summary={"blocks": 0, "units_need_repair": 0, "runs_need_expand": 0})
 
     provider = None
     if synth_client is None:
@@ -165,15 +150,11 @@ def render(
     work_dir = Path(work_dir)
 
     def raw_path_for(block: TtsBlock) -> Path:
-        # synth_rate is part of the cache key so changing the speaking rate
-        # re-synthesizes rather than reusing the old-rate clip.
         return raw_audio_path(
             cache_dir, config.provider_url, config.speaker, block,
             speed=config.synth_rate, pitch=config.pitch, volume=config.volume, text_mode=config.text_mode,
         )
 
-    # Native fast path: batch-synthesize every clip not already cached, in concurrent
-    # batches, then trim — so a repair round only re-synthesizes the few changed lines.
     if synth_client is not None:
         from backend.app.services.capcut_tts import synthesize_many
         from backend.app.services.tts import to_provider_scale
@@ -191,16 +172,13 @@ def render(
             )
             for (rp, _block), audio in zip(todo, audios):
                 rp.parent.mkdir(parents=True, exist_ok=True)
-                # Build in a temp name, publish with an atomic rename: the raw cache is
-                # shared across concurrent jobs, and a reader must never see a clip that
-                # is half-written or not yet trimmed/sped.
                 tmp = rp.with_name(f"{rp.stem}.{os.getpid()}-{threading.get_ident()}.build{rp.suffix}")
                 tmp.write_bytes(audio)
                 trim_silence(tmp)
-                speed_clip(tmp, config.synth_rate)  # CapCut ignores its rate param; apply it here
+                speed_clip(tmp, config.synth_rate)
                 tmp.replace(rp)
 
-    def render_block(index: int, block: TtsBlock) -> tuple[tuple[float, Path, float, float], tuple[int, float]]:
+    def ensure_raw(block: TtsBlock) -> Path:
         raw_path = raw_path_for(block)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         if not (raw_path.exists() and raw_path.stat().st_size > 1024):
@@ -208,46 +186,66 @@ def render(
                 raise RuntimeError(f"native synth produced no audio for block {block.block_id}")
             tmp = raw_path.with_name(f"{raw_path.stem}.{os.getpid()}-{threading.get_ident()}.build{raw_path.suffix}")
             tmp.write_bytes(provider.synthesize(block.text))
-            trim_silence(tmp)  # drop the TTS head/tail silence so speech lands at placement
-            speed_clip(tmp, config.synth_rate)  # CapCut ignores its rate param; apply it here
+            trim_silence(tmp)
+            speed_clip(tmp, config.synth_rate)
             tmp.replace(raw_path)
+        return raw_path
 
-        target = block.duration + config.voice_lead
-        # Cache the tempo-fitted clip too, keyed by (raw clip, target window, tempo
-        # params). A repair round only changes a few sentences; every UNCHANGED block
-        # then hits this cache and skips the expensive ffmpeg align entirely — the
-        # repair loop stops re-rendering the whole video each round.
-        aligned_key = hashlib.sha256(
-            f"{raw_path.stem}|{round(target, 3)}|{config.min_tempo}|{config.max_tempo}|{config.fixed_tempo}".encode()
-        ).hexdigest()[:24]
+    # 1) raw synth (parallel) and raw durations
+    with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
+        raw_paths = list(pool.map(ensure_raw, blocks))
+        raw_durations = list(pool.map(probe_duration, raw_paths))
+
+    # 2) run-based plan: one tempo per run, chained breaths, run-boundary anchoring
+    timeline_config = TimelineConfig(
+        run_gap=config.run_gap,
+        tempo_floor=config.tempo_floor,
+        tempo_ceiling=config.tempo_ceiling,
+        breath_min=config.breath_min,
+        breath_max=config.breath_max,
+        min_run_fill=config.min_run_fill,
+        min_trailing=config.min_trailing,
+    )
+    pseudo_units = [
+        Unit(id=index, segment_ids="", start=block.start, end=block.end, source_zh="")
+        for index, block in enumerate(blocks)
+    ]
+    plans = plan_timeline(pseudo_units, {index: duration for index, duration in enumerate(raw_durations)}, timeline_config)
+    by_unit: dict[int, tuple[float, float, bool]] = {}
+    for plan in plans:
+        for placement in plan.placements:
+            by_unit[placement.unit_id] = (placement.place_start, placement.tempo, placement.breath_before > 0)
+
+    # 3) tempo-fit each clip with its run's factor (cached per clip+tempo)
+    def fit_block(index: int) -> tuple[int, float, Path, float, bool]:
+        block = blocks[index]
+        raw_path = raw_paths[index]
+        place, tempo, glued = by_unit.get(index, (block.start, 1.0, False))
+        aligned_key = hashlib.sha256(f"{raw_path.stem}|{round(tempo, 4)}|{config.synth_rate}".encode()).hexdigest()[:24]
         aligned = cache_dir / "aligned" / f"{aligned_key}.m4a"
         playback: float | None = None
         if aligned.exists() and aligned.stat().st_size > 1024:
             try:
                 playback = probe_duration(aligned)
             except RuntimeError:
-                aligned.unlink(missing_ok=True)  # stale corrupt entry -> rebuild below
+                aligned.unlink(missing_ok=True)
         if playback is None:
-            timing = align_audio(
-                raw_path, aligned, target, min_tempo=config.min_tempo, max_tempo=config.max_tempo, fixed_tempo=config.fixed_tempo
-            )
+            timing = align_audio(raw_path, aligned, raw_durations[index] / tempo, min_tempo=1.0, max_tempo=1.0, fixed_tempo=tempo)
             playback = float(timing["playback_duration"])
-        return (block.start, aligned, playback, block.end), (int(block.block_id), playback)
+        return (index, place, aligned, playback, glued)
 
-    # TTS synth + tempo-fit are independent per piece (and disk-cached), so run them
-    # in parallel; results are reassembled in piece order.
     with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
-        rendered = list(pool.map(lambda pair: render_block(*pair), enumerate(blocks)))
-    segments_out = [seg for seg, _ in rendered]
+        fitted = list(pool.map(fit_block, range(len(blocks))))
 
-    # Aggregate piece playbacks per anchor and compare to the anchor's source window:
-    # if the anchor's total speech overruns its window, the repair loop condenses it.
-    anchor_window = {a.id: (a.start, a.end) for a in anchors}
+    # 4) per-unit timing vs source window (overflow drives the repair loop)
+    placements = [(place, path, playback, glued) for _index, place, path, playback, glued in fitted]
     played: dict[int, float] = {}
-    for _seg, (anchor_id, playback) in rendered:
+    for index, _place, _path, playback, _glued in fitted:
+        anchor_id = int(blocks[index].block_id)
         played[anchor_id] = played.get(anchor_id, 0.0) + playback
 
     timings: list[AnchorTiming] = []
+    anchor_window = {a.id: (a.start, a.end) for a in anchors}
     for anchor_id, total_play in played.items():
         a0, a1 = anchor_window.get(anchor_id, (0.0, total_play))
         target = max(0.1, a1 - a0)
@@ -262,15 +260,27 @@ def render(
             needs_repair=overflow_ms > config.repair_over_ms,
         ))
 
+    runs = [
+        {
+            "run_id": plan.run_id,
+            "start": plan.start,
+            "end": plan.end,
+            "fill_ratio": plan.fill_ratio,
+            "needs_expand": plan.needs_expand,
+            "unit_ids": [p.unit_id for p in plan.placements],
+        }
+        for plan in plans
+    ]
     total_duration = max((b.end for b in blocks), default=0.1)
-    need_repair = [t for t in timings if t.needs_repair]
     summary = {
         "blocks": len(blocks),
-        "anchors": len(timings),
-        "anchors_need_repair": len(need_repair),
+        "units": len(timings),
+        "units_need_repair": sum(1 for t in timings if t.needs_repair),
         "max_overflow_ms": max((t.overflow_ms for t in timings), default=0),
-        "overflow_pushes_next_voice": False,  # absolute scheduling guarantees this
+        "runs": len(runs),
+        "runs_need_expand": sum(1 for r in runs if r["needs_expand"]),
+        "overflow_pushes_next_voice": False,
         "voice_track": None,
         "total_duration": round(total_duration, 3),
     }
-    return RenderResult(voice_track=None, timings=timings, summary=summary, segments=segments_out, total_duration=total_duration)
+    return RenderResult(voice_track=None, timings=timings, summary=summary, placements=placements, runs=runs, total_duration=total_duration)

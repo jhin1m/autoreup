@@ -43,7 +43,6 @@ from backend.app.dubbing.repair import RepairConfig, expand, repair
 from backend.app.dubbing.translate import TranslateConfig, translate
 from backend.app.dubbing.tsv_io import read_tsv, write_json, write_tsv
 from backend.app.infrastructure.downloader import YtDlpDownloader
-from backend.app.services.audio import plan_placements
 from backend.app.infrastructure.packaging import package_outputs
 from backend.app.infrastructure.process import run_command
 from backend.app.pipeline.contracts import PipelineContext, PipelineStage, StageResult
@@ -378,7 +377,7 @@ def _shorten_predicted_overflow(
         est_duration = chars / effective_cps
         # same tolerance as the render loop's repair_over_ms, plus the tempo fit's
         # ability to absorb a bit of overrun
-        if est_duration > (window * settings.tts_max_tempo) + 0.3:
+        if est_duration > (window * settings.tts_tempo_ceiling) + 0.3:
             predicted_overflow[anchor.id] = (window, est_duration)
     if not predicted_overflow:
         return speech_rows, 0
@@ -465,11 +464,13 @@ class VoiceoverStage(PipelineStage):
             provider_url="capcut-native" if synth_client is not None else settings.tts_server_url,
             speaker=settings.tts_voice,
             text_mode=settings.tts_text_mode,
-            min_tempo=settings.tts_min_tempo,
-            max_tempo=settings.tts_max_tempo,
-            fixed_tempo=settings.tts_fixed_tempo,
-            glue_gap=settings.tts_glue_gap,
-            max_lead=settings.tts_max_lead,
+            run_gap=settings.tts_run_gap,
+            tempo_floor=settings.tts_tempo_floor,
+            tempo_ceiling=settings.tts_tempo_ceiling,
+            breath_min=settings.tts_breath_min,
+            breath_max=settings.tts_breath_max,
+            min_run_fill=settings.tts_min_run_fill,
+            min_trailing=settings.tts_min_trailing,
             crossfade=settings.tts_crossfade,
             min_duration=settings.min_duration,
             workers=settings.tts_workers,
@@ -493,11 +494,15 @@ class VoiceoverStage(PipelineStage):
             # Only restore lines that are clearly gutted (voice fills <40% of the
             # window) — leftover window at natural pace is an intended pause, not a
             # dropped idea, so we must not re-inflate it back into a rushed line.
-            underfull = {
-                t.anchor_id: (t.target_duration, t.tts_duration)
-                for t in result.timings
-                if t.target_duration >= 2.5 and t.tts_duration < t.target_duration * 0.4
-            }
+            block_anchor = {index: int(b.block_id) for index, b in enumerate([])}  # v3: unit ids come from runs
+            underfull = {}
+            for run in result.runs:
+                if not run.get("needs_expand"):
+                    continue
+                for unit_id in run["unit_ids"]:
+                    timing = next((t for t in result.timings if t.anchor_id == unit_id), None)
+                    if timing is not None:
+                        underfull[unit_id] = (timing.target_duration, timing.tts_duration)
             if not overflow and not underfull:
                 break
             changed = 0
@@ -516,12 +521,12 @@ class VoiceoverStage(PipelineStage):
             logs.append(f"render round {rounds}: {result.summary}")
 
         # Assemble the final track once, after timings have converged.
-        assemble_voice(result, output_audio, work_dir, glue_gap=render_config.glue_gap, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift, max_lead=render_config.max_lead)
+        assemble_voice(result, output_audio, work_dir, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)
         context.artifacts["speech_rows"] = speech_rows
         # Voice and subtitle are built from the SAME sentence units. Time each
         # sentence's caption within the REAL synthesized clip span (placement + voice
         # duration), so the caption matches the dub's actual timing — from the TTS.
-        placements, _track_end = plan_placements(result.segments, render_config.glue_gap, render_config.crossfade, render_config.max_lead)
+        placements = result.placements
         voice_windows = {
             round(seg_start, 3): (place, place + dur)
             for (seg_start, _clip, _play, _end), (place, _p, dur, _g) in zip(result.segments, placements)
