@@ -1,14 +1,15 @@
 import backend.app.dubbing.glossary as glossary_mod
 import backend.app.dubbing.translate as translate_mod
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
-from backend.app.dubbing.llm import LLMConfig, parse_tsv_rows
+from backend.app.agents import AgentConfig
+from backend.app.dubbing.tsv_io import parse_tsv_rows
 from backend.app.dubbing.models import Anchor, GlossaryEntry, SpeechRow
 from backend.app.dubbing.rail import AnchorConfig, build_anchors
 from backend.app.dubbing.models import AsrSegment
 from backend.app.dubbing.chunking import ChunkConfig, build_chunks, flat_scene_map
 from backend.app.dubbing.translate import TranslateConfig, translate
 
-LLM = LLMConfig()
+LLM = AgentConfig()
 
 
 def test_parse_tsv_rows_strips_fences_and_short_rows():

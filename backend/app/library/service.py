@@ -14,7 +14,7 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
 from backend.app.domain.jobs import JobInput, JobState, StageStatus
-from backend.app.dubbing.llm import LLMConfig, complete
+from backend.app.agents import AgentConfig, complete
 from backend.app.library.db import LibraryDB
 from backend.app.library.grouping import Group, cluster_into_series, episode_number, show_tags
 from backend.app.library.models import DubState, Episode, Export, ExportState, Series
@@ -192,7 +192,7 @@ class LibraryService:
             'thừa. Chỉ trả JSON: [{"i": chỉ_số, "vi": "tên tiếng Việt"}]'
         )
         try:
-            raw = complete(system, f"Danh sách (chỉ_số<TAB>tên):\n{lines}", self._llm())
+            raw = complete(system, f"Danh sách (chỉ_số<TAB>tên):\n{lines}", self._agent())
             data = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
         except Exception:
             return
@@ -464,7 +464,7 @@ class LibraryService:
             '[{"i": chỉ_số, "vi": "tiêu đề tiếng Việt"}]'
         )
         try:
-            raw = complete(system, f"Danh sách (chỉ_số<TAB>tiêu_đề):\n{lines}", self._llm())
+            raw = complete(system, f"Danh sách (chỉ_số<TAB>tiêu_đề):\n{lines}", self._agent())
             data = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
         except Exception:
             return 0
@@ -499,7 +499,7 @@ class LibraryService:
         )
         user = f"Tên bộ: {series.title}\nCác tập trong video (theo thứ tự):\n{listing}"
         try:
-            raw = complete(system, user, self._llm())
+            raw = complete(system, user, self._agent())
             data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
         except Exception as exc:
             raise LibraryError("Không tạo được gợi ý (máy chủ LLM lỗi)") from exc
@@ -511,9 +511,18 @@ class LibraryService:
         }
 
     # ----- LLM-assisted naming / clustering -------------------------------
-    def _llm(self) -> LLMConfig:
-        return LLMConfig(provider=self.settings.llm_provider, base_url=self.settings.llm_base_url,
-                         model=self.settings.translate_model, stream=False)
+    def _agent(self) -> AgentConfig:
+        settings = self.settings
+        return AgentConfig(
+            provider=settings.agent_provider,
+            bin=settings.agent_bin,
+            home=settings.agent_home,
+            command=settings.agent_command,
+            model=settings.translate_model,
+            effort=settings.agent_effort,
+            timeout=settings.agent_timeout,
+            retries=settings.agent_retries,
+        )
 
     def _refine_with_llm(self, groups: list[Group], videos: list) -> list[Group]:
         """Use the LLM only when the heuristic is unsure: many titles lack a "第X集"
@@ -544,7 +553,7 @@ class LibraryService:
             "gọn theo nội dung/tag. Chỉ trả JSON: "
             '[{"name":"...","episodes":[chỉ_số_theo_thứ_tự_tập]}]'
         )
-        raw = complete(system, f"Danh sách (chỉ_số<TAB>tiêu_đề):\n{lines}", self._llm())
+        raw = complete(system, f"Danh sách (chỉ_số<TAB>tiêu_đề):\n{lines}", self._agent())
         data = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
         groups: list[Group] = []
         for grp in data:
@@ -563,7 +572,7 @@ class LibraryService:
             "Nếu tiêu đề chỉ là số tập, không có nội dung gì — trả về đúng chuỗi KHONG. "
             "Chỉ trả về tên, không giải thích."
         )
-        name = complete(system, titles, self._llm()).strip().splitlines()[0].strip()
+        name = complete(system, titles, self._agent()).strip().splitlines()[0].strip()
         if not name or name.upper() in {"KHONG", "KHÔNG"}:
             return None
         return name[:60]

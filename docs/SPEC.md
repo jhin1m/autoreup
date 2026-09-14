@@ -19,7 +19,7 @@ Local personal studio: **video Trung → video Việt hoá**.
 
 1. **ASR micro-segment là rail cứng** — không bao giờ gộp làm mất ranh giới thoại; anchor chỉ là khung thời gian.
 2. **Một nguồn Việt cho một semantic span**: `SOURCE_ZH + context/glossary + timing → master_vi`; `master_vi → display 1-line` và `master_vi → TTS`. Không dịch subtitle và narration riêng.
-3. **Code sở hữu**: segmentation, timing, QA, scheduling, packaging. **LLM chỉ viết/sửa text bounded** (TSV `ID<TAB>TEXT`), không tự chọn segmentation.
+3. **Code sở hữu**: segmentation, timing, QA, scheduling, packaging. **Agent (CLI headless) chỉ viết/sửa text bounded** (TSV `ID<TAB>TEXT`), không tự chọn segmentation.
 4. **Overflow là lỗi cục bộ trong 1 anchor** (absolute scheduler) — không đẩy lệch anchor sau.
 5. **Stage idempotent theo job dir**; job resume được từ manifest.
 
@@ -33,8 +33,8 @@ download → asr → glossary → translate → qa → voiceover (optional) → 
 | --- | --- | --- | --- | --- |
 | download | url | video.mp4 + meta | yt-dlp adapter (Douyin: CDP extractor) | network/cookie |
 | asr | video | asr_segments + anchors | Cloudflare ASR worker | thiếu worker URL |
-| glossary | source_zh | glossary + style notes | LLM 1 pass data-driven | rỗng → fallback |
-| translate | chunks + glossary + memory | speech rows + memory | LLM stateful, bounded | validation lỗi → fail rõ |
+| glossary | source_zh | glossary + style notes | agent 1 pass data-driven | rỗng → fallback |
+| translate | chunks + glossary + memory | speech rows + memory | agent stateful, bounded | validation lỗi → fail rõ |
 | qa | speech + rail | qa_report | code thuần | gate không đạt → fail |
 | voiceover | speech + anchors | voice.m4a + render_manifest | scheduler + TTS + ffmpeg | overflow → repair loop ≤3 vòng |
 | package | video + speech + voice | softsub/dubbed mp4, srt/vtt/json, zip | ffmpeg | — |
@@ -103,18 +103,16 @@ queued → running → succeeded | failed | canceled
 - Overflow → repair `master_vi` các ID lỗi → resynthesize **chỉ các ID đó**; tối đa 3 vòng.
 - Package dubbed: giữ audio gốc làm bed, duck dưới voice Việt (sidechain) — **không mute** mặc định.
 
-## 9. LLM protocol
+## 9. Agent runtime (headless CLI — không gọi LLM API)
 
-Một protocol nội bộ, adapter dịch ra wire format:
+Mọi bước text (glossary, translate, repair, naming) chạy qua **CLI agent headless**, không API key:
 
-| Format | Wire |
-| --- | --- |
-| `responses` (default) | OpenAI-compatible `/v1/responses`, `reasoning.effort=none` |
-| `chat_completions` | OpenAI-compatible `/v1/chat/completions` |
-| `anthropic_messages` | Anthropic/DeepSeek Messages |
-| `gemini_generate_content` | Gemini REST |
-
-Default gateway: `http://localhost:8090/v1`, `stream=true`. Models: `translate_model=gpt-5.4-mini`, `polish_model=gpt-5.4` (config qua env).
+- **provider `agy`** (mặc định): Antigravity `agy -p <prompt> --output-format json --print-timeout <t> [+ --model, --effort]`;
+  login subscription qua HOME — `agent_home` để tách account (mỗi account một HOME riêng).
+- **provider `command`**: template CLI bất kỳ cho agent khác — ACP (`acpx claude exec --format quiet {prompt}`),
+  `claude -p`, `codex exec`… `{prompt}` được thay thế, hoặc prompt append cuối argv nếu không có placeholder.
+- Prompt gửi đi = `system + "\n\n---\n\n" + user`. Retry mặc định 3 lần backoff; lỗi trả `AgentError`.
+- Adapter nằm ở `backend/app/agents/` (`runtime.py`, `agy.py`, `command.py`); stage modules chỉ gọi `complete(system, user, config)`.
 
 ## 10. API v1
 
@@ -178,7 +176,8 @@ UX rules (bắt buộc):
 ## 12. Config (env `AUTOREUP_*`, file `.env`)
 
 ```text
-LLM:      LLM_PROVIDER, LLM_BASE_URL, TRANSLATE_MODEL, POLISH_MODEL, LLM_STREAM
+Agent:    AGENT_PROVIDER (agy|command), AGENT_BIN, AGENT_HOME, AGENT_COMMAND,
+          AGENT_EFFORT, AGENT_TIMEOUT, AGENT_RETRIES, TRANSLATE_MODEL, POLISH_MODEL
 Content:  CONTENT_GENRE (hint, optional), CONTENT_NOTES (mặc định per-video)
 ASR:      ASR_WORKER_URL, ASR_MODEL, ASR_WORKERS
 Download: COOKIES_FILE, BROWSER_PATH, NODE_BIN
@@ -207,4 +206,5 @@ cd frontend && npm run dev                     # UI dev
 - Không realtime/streaming render.
 - Không multi-user.
 - Không provider/model config trong UI.
+- Không dùng API key LLM — chỉ headless CLI agent.
 - Không subtitle editing workflow trong UI (preview/review ổn trước đã).

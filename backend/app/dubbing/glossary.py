@@ -7,10 +7,12 @@ infers the domain from the content and genre is only an optional hint.
 
 from __future__ import annotations
 
-from .llm import LLMConfig, complete, parse_tsv_rows
+from backend.app.agents import AgentConfig, complete
+
 from .models import Anchor, GlossaryEntry
 from .prompts import GLOSSARY_SYSTEM, GLOSSARY_USER
 from .text import clean
+from .tsv_io import parse_tsv_rows
 
 # Cap the transcript handed to a single extraction call (chars).
 _MAX_SOURCE_CHARS = 12_000
@@ -21,7 +23,7 @@ def _source_text(anchors: list[Anchor]) -> str:
     return joined[:_MAX_SOURCE_CHARS]
 
 
-def extract_glossary(anchors: list[Anchor], config: LLMConfig, genre: str = "", notes: str = "") -> list[GlossaryEntry]:
+def extract_glossary(anchors: list[Anchor], config: AgentConfig, genre: str = "", notes: str = "") -> list[GlossaryEntry]:
     source = _source_text(anchors)
     if not source.strip():
         return []

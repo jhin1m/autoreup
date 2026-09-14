@@ -14,11 +14,17 @@ class Settings(BaseSettings):
     root_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[3])
     data_dir_name: str = "data"
     frontend_dir_name: str = "frontend"
-    llm_provider: str = "responses"
-    llm_base_url: str = "http://localhost:8090/v1"
-    translate_model: str = "gpt-5.4-mini"
-    polish_model: str = "gpt-5.4"
-    llm_stream: bool = True
+    # Agent runtime — headless CLI agents (no LLM API keys).
+    agent_provider: str = "agy"  # agy | command
+    agent_bin: str = "agy"
+    agent_home: str | None = None  # HOME override for the child process (account isolation)
+    # provider=command: template with {prompt}, e.g. "acpx claude exec --format quiet {prompt}"
+    agent_command: str = ""
+    agent_effort: str = "low"  # low | medium | high (agy)
+    agent_timeout: float = 300.0
+    agent_retries: int = 3
+    translate_model: str = "gemini-3.8-flash-low"
+    polish_model: str = "gemini-3.1-pro-high"
     content_genre: str = ""  # optional hint; glossary is extracted data-driven per video
     content_notes: str = ""  # default per-video context for the translator (cast/gender/register)
     asr_worker_url: str | None = None

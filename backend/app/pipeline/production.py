@@ -24,7 +24,7 @@ from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
 from backend.app.dubbing.chunking import ChunkConfig, build_chunks, flat_scene_map
 from backend.app.dubbing.display import build_display_cues, write_subtitles
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
-from backend.app.dubbing.llm import LLMConfig
+from backend.app.agents import AgentConfig
 from backend.app.dubbing.onset import refine_segments
 from backend.app.dubbing.models import (
     ANCHOR_FIELDS,
@@ -77,12 +77,25 @@ class ProductionPipeline:
         )
 
 
-def _translate_llm(settings: Settings) -> LLMConfig:
-    return LLMConfig(provider=settings.llm_provider, base_url=settings.llm_base_url, model=settings.translate_model, stream=False)
+def _translate_agent(settings: Settings) -> AgentConfig:
+    return _agent_config(settings, settings.translate_model)
 
 
-def _polish_llm(settings: Settings) -> LLMConfig:
-    return LLMConfig(provider=settings.llm_provider, base_url=settings.llm_base_url, model=settings.polish_model, stream=False)
+def _polish_agent(settings: Settings) -> AgentConfig:
+    return _agent_config(settings, settings.polish_model)
+
+
+def _agent_config(settings: Settings, model: str) -> AgentConfig:
+    return AgentConfig(
+        provider=settings.agent_provider,
+        bin=settings.agent_bin,
+        home=settings.agent_home,
+        command=settings.agent_command,
+        model=model,
+        effort=settings.agent_effort,
+        timeout=settings.agent_timeout,
+        retries=settings.agent_retries,
+    )
 
 
 def _hardsub_config(settings: Settings):
@@ -277,7 +290,7 @@ class GlossaryStage(PipelineStage):
             rows = json.loads(series_path.read_text(encoding="utf-8"))
             glossary = [GlossaryEntry(**row) for row in rows]
         else:
-            glossary = extract_glossary(anchors, _translate_llm(settings), genre=context.config.content_genre, notes=context.config.content_notes)
+            glossary = extract_glossary(anchors, _translate_agent(settings), genre=context.config.content_genre, notes=context.config.content_notes)
             rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
             if series_path is not None and glossary:
                 write_json(series_path, rows)
@@ -323,7 +336,7 @@ class TranslateStage(PipelineStage):
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         chunks = build_chunks(anchors, flat_scene_map(anchors), ChunkConfig())
         speech_rows = translate(
-            anchors, chunks, glossary, _translate_llm(settings),
+            anchors, chunks, glossary, _translate_agent(settings),
             TranslateConfig(max_caption_chars=settings.subtitle_max_line_chars, voice_cps=settings.tts_voice_cps, notes=context.config.content_notes),
         )
         # Text-level pre-repair: character counts alone PREDICT which anchors will
@@ -368,7 +381,7 @@ def _shorten_predicted_overflow(
     if not predicted_overflow:
         return speech_rows, 0
     return repair(
-        speech_rows, anchors, glossary, predicted_overflow, _polish_llm(settings),
+        speech_rows, anchors, glossary, predicted_overflow, _polish_agent(settings),
         RepairConfig(max_caption_chars=settings.subtitle_max_line_chars),
     )
 
@@ -487,11 +500,11 @@ class VoiceoverStage(PipelineStage):
                 break
             changed = 0
             if overflow:
-                speech_rows, n = repair(speech_rows, anchors, glossary, overflow, _polish_llm(settings), repair_cfg)
+                speech_rows, n = repair(speech_rows, anchors, glossary, overflow, _polish_agent(settings), repair_cfg)
                 changed += n
                 logs.append(f"round {rounds + 1}: shortened {n} overflow anchors")
             if underfull:
-                speech_rows, n = expand(speech_rows, anchors, glossary, underfull, _polish_llm(settings), repair_cfg)
+                speech_rows, n = expand(speech_rows, anchors, glossary, underfull, _polish_agent(settings), repair_cfg)
                 changed += n
                 logs.append(f"round {rounds + 1}: completed {n} underfull anchors")
             rounds += 1

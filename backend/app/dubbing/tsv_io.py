@@ -76,3 +76,29 @@ def parse_srt(path: Path) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+_FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?|\n?```$")
+
+
+def parse_tsv_rows(text: str, expected_cols: int) -> list[list[str]]:
+    """Parse loose agent output into rows of exactly ``expected_cols`` columns.
+
+    Strips code fences, ignores blank/markdown lines, and splits on tabs (falling
+    back to runs of 2+ spaces). Rows with too few columns are skipped; extra
+    columns are joined into the last field.
+    """
+    cleaned = _FENCE_RE.sub("", text.strip())
+    rows: list[list[str]] = []
+    for raw in cleaned.splitlines():
+        line = raw.rstrip("\r\n")  # keep trailing tabs so empty final columns survive
+        if not line.strip() or line.lstrip().startswith(("#", "//", "|---", "```")):
+            continue
+        cells = line.split("\t") if "\t" in line else re.split(r"\s{2,}", line.strip())
+        cells = [cell.strip() for cell in cells]
+        if len(cells) < expected_cols:
+            continue
+        if len(cells) > expected_cols:
+            cells = cells[: expected_cols - 1] + ["\t".join(cells[expected_cols - 1 :])]
+        rows.append(cells)
+    return rows

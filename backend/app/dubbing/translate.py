@@ -16,7 +16,9 @@ from dataclasses import dataclass
 
 from .chunking import anchors_for_chunk
 from .glossary import format_glossary
-from .llm import LLMConfig, complete, parse_tsv_rows
+from backend.app.agents import AgentConfig, complete
+
+from .tsv_io import parse_tsv_rows
 from .models import Anchor, Chunk, GlossaryEntry, SpeechRow
 from .prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
 from .text import has_han, sanitize_caption, split_text_for_explicit_turns
@@ -105,7 +107,7 @@ def translate_chunk(
     chunk_anchors: list[Anchor],
     glossary: list[GlossaryEntry],
     prev_source: str,
-    llm: LLMConfig,
+    llm: AgentConfig,
     config: TranslateConfig,
 ) -> dict[int, str]:
     def attempt(anchors: list[Anchor]) -> dict[int, str]:
@@ -136,7 +138,7 @@ def translate(
     anchors: list[Anchor],
     chunks: list[Chunk],
     glossary: list[GlossaryEntry],
-    llm: LLMConfig,
+    llm: AgentConfig,
     config: TranslateConfig | None = None,
 ) -> list[SpeechRow]:
     config = config or TranslateConfig()

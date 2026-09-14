@@ -1,11 +1,11 @@
 import backend.app.dubbing.repair as repair_mod
 from backend.app.dubbing.display import build_timed_units
-from backend.app.dubbing.llm import LLMConfig
+from backend.app.agents import AgentConfig
 from backend.app.dubbing.models import Anchor, SpeechRow
 from backend.app.dubbing.render import RenderConfig, _blocks_from_units
 from backend.app.dubbing.repair import RepairConfig, compute_targets, repair
 
-LLM = LLMConfig()
+LLM = AgentConfig()
 
 
 def test_blocks_from_units_merge_rows_and_strip_turn_markers():

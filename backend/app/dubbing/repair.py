@@ -13,7 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .glossary import format_glossary
-from .llm import LLMConfig, complete, parse_tsv_rows
+from backend.app.agents import AgentConfig, complete
+
+from .tsv_io import parse_tsv_rows
 from .models import Anchor, GlossaryEntry, SpeechRow
 from .prompts import EXPAND_SYSTEM, EXPAND_USER, REPAIR_SYSTEM, REPAIR_USER
 from .text import has_han, sanitize_caption, split_text_for_explicit_turns
@@ -31,7 +33,7 @@ class RepairConfig:
 
 
 def _batched_rewrites(
-    batches: list[str], system: str, llm: LLMConfig, workers: int
+    batches: list[str], system: str, llm: AgentConfig, workers: int
 ) -> dict[int, str]:
     """Run one LLM call per prompt batch CONCURRENTLY and merge the rewrites.
 
@@ -110,7 +112,7 @@ def repair(
     anchors: list[Anchor],
     glossary: list[GlossaryEntry],
     overflow_by_anchor: dict[int, tuple[float, float]],
-    llm: LLMConfig,
+    llm: AgentConfig,
     config: RepairConfig | None = None,
 ) -> tuple[list[SpeechRow], int]:
     config = config or RepairConfig()
@@ -162,7 +164,7 @@ def expand(
     anchors: list[Anchor],
     glossary: list[GlossaryEntry],
     underfull_by_anchor: dict[int, tuple[float, float]],
-    llm: LLMConfig,
+    llm: AgentConfig,
     config: RepairConfig | None = None,
 ) -> tuple[list[SpeechRow], int]:
     """Complete anchors whose voice is far shorter than the source window.
