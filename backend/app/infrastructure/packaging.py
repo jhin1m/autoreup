@@ -18,7 +18,7 @@ MIME_BY_KIND = {
 }
 
 
-def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packages_dir: Path, root_data_dir: Path, voice_track: Path | None = None, bed_volume: float = 0.18, hardsub: bool = False, hardsub_config=None) -> tuple[list[Artifact], list[str]]:
+def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packages_dir: Path, root_data_dir: Path, voice_track: Path | None = None, bed_volume: float = 0.55, duck: bool = True, carve_db: float = -3.0, hardsub: bool = False, hardsub_config=None) -> tuple[list[Artifact], list[str]]:
     packages_dir.mkdir(parents=True, exist_ok=True)
     stem = subtitle_json.stem.replace(".final", "")
     vtt_path = packages_dir / f"{stem}.vtt"
@@ -66,21 +66,18 @@ def _artifact(kind: ArtifactKind, path: Path, root_data_dir: Path) -> Artifact:
     )
 
 
-def dubbed_command(video: Path, voice_track: Path, subtitle_srt: Path, output: Path, bed_volume: float = 0.18) -> list[str]:
+def dubbed_command(video: Path, voice_track: Path, subtitle_srt: Path, output: Path, bed_volume: float = 0.55, duck: bool = True, carve_db: float = -3.0) -> list[str]:
     if has_audio_stream(video):
         return [
             "ffmpeg", "-y", "-v", "error",
             "-i", str(video),
             "-i", str(voice_track),
             "-i", str(subtitle_srt),
-            # Keep the original audio as a QUIET, steady bed under the (already
-            # mastered) Vietnamese voice — no sidechain ducking, which pumps. Bed
-            # level is configurable; a dub keeps the original low so the voice leads.
+            # Original bed kept alive, ducked under narration (see dub_mix_filter).
             "-filter_complex",
-            f"[0:a:0]aresample=44100,volume={bed_volume:.3f}[bed];"
-            "[1:a:0]aresample=44100,volume=1.0[vo];"
-            "[bed][vo]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-            "volume=0.95,alimiter=limit=0.95[aout]",
+            __import__("backend.app.services.audio", fromlist=["dub_mix_filter"]).dub_mix_filter(
+                "[0:a:0]", "[1:a:0]", "[aout]", bed_volume, duck=duck, carve_db=carve_db
+            ),
             "-map", "0:v:0",
             "-map", "[aout]",
             "-map", "2:0",

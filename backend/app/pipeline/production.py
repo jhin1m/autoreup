@@ -110,6 +110,8 @@ def _hardsub_config(settings: Settings):
         band_pad=settings.hardsub_band_pad,
         darken=settings.hardsub_darken,
         bed_volume=settings.dub_bed_volume,
+        duck=settings.dub_duck,
+        carve_db=settings.dub_carve_db,
         video_codec_args=tuple(video_encode_args(settings)),
         scale_filter=canonical_scale_filter(settings),
         sharpen=settings.video_sharpen,
@@ -559,6 +561,8 @@ class PackageStage(PipelineStage):
             root_data_dir=settings.data_dir,
             voice_track=Path(voice_track) if voice_track else None,
             bed_volume=settings.dub_bed_volume,
+        duck=settings.dub_duck,
+        carve_db=settings.dub_carve_db,
             hardsub_config=_hardsub_config(settings),
         )
         return StageResult(name=self.name, artifacts=artifacts, logs=logs)

@@ -29,7 +29,9 @@ class HardsubConfig:
     band_pad: int = 26        # extra px around the detected band so the original sub's outline is fully covered
     blur: int = 20            # boxblur radius (ffmpeg caps at 23); applied twice for strong coverage
     darken: float = 0.12
-    bed_volume: float = 0.18
+    bed_volume: float = 0.55
+    duck: bool = True
+    carve_db: float = -3.0
     # Encoder + canonical geometry (filled from Settings). Defaults keep the old libx264,
     # source-resolution behaviour so hardsub works standalone.
     video_codec_args: tuple[str, ...] = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
@@ -183,11 +185,9 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     video_graph = cover + f"[cov]{sharpen}null[base2];[base2][1:v]overlay=0:0{scale}[vo]"
 
     if has_voice:
-        audio_graph = (
-            f";[0:a:0]aresample=44100,volume={config.bed_volume:.3f}[bed];"
-            f"[2:a:0]aresample=44100,volume=1.0[voc];"
-            f"[bed][voc]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,volume=0.95,alimiter=limit=0.95[aout]"
-        )
+        from backend.app.services.audio import dub_mix_filter
+
+        audio_graph = ";" + dub_mix_filter("[0:a:0]", "[2:a:0]", "[aout]", config.bed_volume, duck=config.duck, carve_db=config.carve_db)
         amap = ["-map", "[aout]"]
     else:
         audio_graph = ""

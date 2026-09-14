@@ -36,6 +36,33 @@ def ffmpeg_available() -> bool:
     return not [tool for tool in ("ffmpeg", "ffprobe") if not shutil.which(tool)]
 
 
+DUB_DUCK = "sidechaincompress=threshold=0.03:ratio=6:attack=25:release=420:makeup=1"
+DUB_CARVE = "equalizer=f=2500:t=q:w=1.0:g=-3"
+
+
+def dub_mix_filter(bed: str, voice: str, out: str, bed_volume: float, duck: bool = True, carve_db: float = -3.0) -> str:
+    """Dub mix graph. ``bed``/``voice``/``out`` are stream labels ('[0:a:0]' …).
+
+    Keep the original bed alive and DUCK it under narration (sidechain 6:1, slow
+    attack/release) instead of playing it at a constant low level; a 2.5 kHz dip on
+    the bed buys intelligibility so the bed can stay loud, and music/SFX breathe back
+    in the gaps."""
+    stable = out.strip("[]")
+    carve = f",equalizer=f=2500:t=q:w=1.0:g={carve_db:.1f}" if carve_db else ""
+    if duck:
+        return (
+            f"{bed}aresample=44100,volume={bed_volume:.3f}{carve}[{stable}_bed];"
+            f"{voice}aresample=44100,volume=1.0,asplit=2[{stable}_voc][{stable}_sc];"
+            f"[{stable}_bed][{stable}_sc]{DUB_DUCK}[{stable}_ducked];"
+            f"[{stable}_ducked][{stable}_voc]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,volume=0.95,alimiter=limit=0.95{out}"
+        )
+    return (
+        f"{bed}aresample=44100,volume={bed_volume:.3f}{carve}[{stable}_bed];"
+        f"{voice}aresample=44100,volume=1.0[{stable}_voc];"
+        f"[{stable}_bed][{stable}_voc]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,volume=0.95,alimiter=limit=0.95{out}"
+    )
+
+
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
