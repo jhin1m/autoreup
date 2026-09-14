@@ -36,7 +36,8 @@ CROSSFADE = 0.06
 AUDIBLE_GAP = 0.15     # a silence this long inside a run is audible choppiness
 
 sys.path.insert(0, str(ROOT))
-from backend.app.services.audio import plan_placements  # noqa: E402
+from backend.app.dubbing.models import Unit  # noqa: E402
+from backend.app.dubbing.timeline import TimelineConfig, plan_timeline  # noqa: E402
 
 
 def read_anchors(job: str) -> list[dict]:
@@ -126,26 +127,22 @@ def audit_job(job: str) -> dict:
         "worst": worst,
     }
 
-    # 4) simulated placement with the CURRENT scheduler
-    segments = [(a["start"], Path("x"), timings[a["id"]]["tts_duration"], a["end"]) for a in anchors if a["id"] in timings]
-    placements, track_end = plan_placements(segments, GLUE_GAP, CROSSFADE, MAX_LEAD)
-    intra_silence, early = 0.0, []
-    by_id = {a["id"]: a for a in anchors}
-    for i in range(1, len(placements)):
-        prev_place, _, prev_dur, _ = placements[i - 1]
-        place, _, _, glued = placements[i]
-        gap = place - (prev_place + prev_dur)
-        inside_run = segments[i][0] - segments[i - 1][3] < RUN_GAP
-        if inside_run and gap > AUDIBLE_GAP:
-            intra_silence += gap
-    for (a_start, _, _, _), (place, _, _, _) in zip(segments, placements):
-        early.append(round(a_start - place, 3))
-    report["simulated_placement"] = {
+    # 4) v3 timeline plan for the same units (the shipped planner)
+    units = [Unit(id=a["id"], segment_ids="", start=a["start"], end=a["end"], source_zh="") for a in anchors]
+    plans = plan_timeline(units, {a["id"]: timings[a["id"]]["tts_duration"] for a in anchors if a["id"] in timings}, TimelineConfig())
+    intra_silence = 0.0
+    early = []
+    for plan in plans:
+        for placement in plan.placements[1:]:
+            if placement.breath_before > AUDIBLE_GAP:
+                intra_silence += placement.breath_before
+        early.extend(p.early_lead for p in plan.placements)
+    report["timeline_v3"] = {
         "intra_run_silence_s": round(intra_silence, 2),
         "intra_run_silence_pct_of_voice": round(intra_silence / max(0.001, voice_total) * 100, 1),
-        "max_early_lead_s": max(early) if early else None,
-        "anchors_started_early": sum(1 for e in early if e > 0.05),
-        "track_end_s": round(track_end, 1),
+        "max_early_lead_s": round(max(early), 2) if early else None,
+        "runs_need_expand": sum(1 for p in plans if p.needs_expand),
+        "runs": len(plans),
     }
 
     # 5) real pauses in the produced voice track
