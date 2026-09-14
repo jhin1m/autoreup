@@ -26,7 +26,6 @@ sys.path.insert(0, str(ROOT))
 
 from backend.app.dubbing.models import Unit  # noqa: E402
 from backend.app.dubbing.timeline import TimelineConfig, plan_timeline  # noqa: E402
-from backend.app.services.audio import plan_placements  # noqa: E402
 
 RUN_GAP = 0.8
 OLD_GLUE_GAP = 0.30
