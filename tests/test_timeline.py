@@ -12,6 +12,13 @@ def test_build_runs_splits_only_on_real_pauses():
     assert [(r.start, r.end, len(r.unit_ids)) for r in runs] == [(0.0, 4.0, 2), (4.9, 6.0, 1), (8.0, 9.0, 1)]
 
 
+def test_sentence_boundary_gets_a_floor_even_when_sources_touch():
+    # two sentences split inside one unit: block gap is 0, but the period must buy a pause
+    units = _units([(0.0, 5.0), (5.0, 10.0)])
+    plan = plan_run(build_runs(units)[0], units, {0: 4.0, 1: 4.0}, TimelineConfig(), min_breaths={1: 0.3})
+    assert plan.placements[1].breath_before >= 0.3 - 1e-6
+
+
 def test_source_pause_is_kept_as_rhythm():
     # a 0.6s source pause between two units must survive as a real breath
     units = _units([(0.0, 2.0), (2.6, 4.6)])

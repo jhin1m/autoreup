@@ -59,6 +59,8 @@ class RenderConfig:
     pause_keep: float = 0.7
     min_run_fill: float = 0.95
     min_trailing: float = 1.5
+    sentence_breath: float = 0.3
+    clause_breath: float = 0.12
 
 
 @dataclass(slots=True)
@@ -214,7 +216,19 @@ def render(
         Unit(id=index, segment_ids="", start=block.start, end=block.end, source_zh="")
         for index, block in enumerate(blocks)
     ]
-    plans = plan_timeline(pseudo_units, {index: duration for index, duration in enumerate(raw_durations)}, timeline_config)
+    min_breaths: dict[int, float] = {}
+    for index in range(1, len(blocks)):
+        previous_text = str(timed_units[index - 1].get("text", "")).rstrip()
+        if previous_text.endswith((".", "!", "?", "…")):
+            min_breaths[index] = timeline_config.sentence_breath
+        elif previous_text.endswith((",", ";", ":")):
+            min_breaths[index] = timeline_config.clause_breath
+    plans = plan_timeline(
+        pseudo_units,
+        {index: duration for index, duration in enumerate(raw_durations)},
+        timeline_config,
+        min_breaths,
+    )
     by_unit: dict[int, tuple[float, float, bool]] = {}
     for plan in plans:
         for placement in plan.placements:

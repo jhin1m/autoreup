@@ -37,6 +37,8 @@ class TimelineConfig:
     breath_max: float = 0.6       # a real source pause, kept (rhythm!)
     pause_keep: float = 0.7       # keep this share of the source pause
     contiguous_gap: float = 0.15  # below this the speaker never stopped: glue
+    sentence_breath: float = 0.3   # minimum pause after a sentence (. ! ? …)
+    clause_breath: float = 0.12    # minimum pause after a clause (, ; :)
     min_run_fill: float = 0.95    # below this the run is flagged for expand
     min_trailing: float = 1.5     # ...or when the run ends this early (absolute)
 
@@ -79,7 +81,13 @@ def build_runs(units: list[Unit], config: TimelineConfig | None = None) -> list[
     return runs
 
 
-def plan_run(run: Run, units: list[Unit], durations: dict[int, float], config: TimelineConfig) -> RunPlan:
+def plan_run(
+    run: Run,
+    units: list[Unit],
+    durations: dict[int, float],
+    config: TimelineConfig,
+    min_breaths: dict[int, float] | None = None,
+) -> RunPlan:
     """Place one run's voice clips on the timeline (see module docstring)."""
     ordered = [u for u in units if u.id in set(run.unit_ids)]
     span = max(0.001, run.end - run.start)
@@ -103,8 +111,14 @@ def plan_run(run: Run, units: list[Unit], durations: dict[int, float], config: T
             return 0.0
         source_gap = max(0.0, ordered[index].start - ordered[index - 1].end)
         if source_gap < config.contiguous_gap:
-            return config.breath_min
-        return min(config.breath_max, max(config.breath_min, source_gap * config.pause_keep))
+            base = config.breath_min
+        else:
+            base = min(config.breath_max, max(config.breath_min, source_gap * config.pause_keep))
+        # A sentence boundary is a pause even when the sources touch (two sentences
+        # were split inside one unit by char-proportional timing): otherwise the TTS
+        # runs the sentences together ("đọc dính liền").
+        floor = (min_breaths or {}).get(index, 0.0)
+        return max(base, floor)
 
     placements: list[Placement] = []
     cursor = run.start
@@ -144,9 +158,14 @@ def plan_run(run: Run, units: list[Unit], durations: dict[int, float], config: T
     )
 
 
-def plan_timeline(units: list[Unit], durations: dict[int, float], config: TimelineConfig | None = None) -> list[RunPlan]:
+def plan_timeline(
+    units: list[Unit],
+    durations: dict[int, float],
+    config: TimelineConfig | None = None,
+    min_breaths: dict[int, float] | None = None,
+) -> list[RunPlan]:
     config = config or TimelineConfig()
-    return [plan_run(run, units, durations, config) for run in build_runs(units, config)]
+    return [plan_run(run, units, durations, config, min_breaths) for run in build_runs(units, config)]
 
 
 def summarize(plans: list[RunPlan], config: TimelineConfig | None = None) -> dict:
