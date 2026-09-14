@@ -35,6 +35,9 @@ def extract_glossary(anchors: list[Anchor], config: AgentConfig, genre: str = ""
         term_zh, term_vi, kind, note = (clean(c) for c in cells)
         if not term_zh or not term_vi or term_zh in seen:
             continue
+        term_vi = term_vi.split("/")[0].strip()
+        if not term_vi:
+            continue
         seen.add(term_zh)
         entries.append(GlossaryEntry(term_zh=term_zh, term_vi=term_vi, kind=kind.lower(), note=note))
     return entries
