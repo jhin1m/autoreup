@@ -55,7 +55,8 @@ class RenderConfig:
     tempo_floor: float = 0.92
     tempo_ceiling: float = 1.18
     breath_min: float = 0.06
-    breath_max: float = 0.25
+    breath_max: float = 0.6
+    pause_keep: float = 0.7
     min_run_fill: float = 0.95
     min_trailing: float = 1.5
 
@@ -205,6 +206,7 @@ def render(
         tempo_ceiling=config.tempo_ceiling,
         breath_min=config.breath_min,
         breath_max=config.breath_max,
+        pause_keep=config.pause_keep,
         min_run_fill=config.min_run_fill,
         min_trailing=config.min_trailing,
     )

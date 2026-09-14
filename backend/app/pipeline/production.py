@@ -469,6 +469,7 @@ class VoiceoverStage(PipelineStage):
             tempo_ceiling=settings.tts_tempo_ceiling,
             breath_min=settings.tts_breath_min,
             breath_max=settings.tts_breath_max,
+            pause_keep=settings.tts_pause_keep,
             min_run_fill=settings.tts_min_run_fill,
             min_trailing=settings.tts_min_trailing,
             crossfade=settings.tts_crossfade,

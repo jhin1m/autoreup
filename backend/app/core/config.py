@@ -141,7 +141,8 @@ class Settings(BaseSettings):
     tts_tempo_floor: float = 0.92     # run-level slow-down floor (fill by slowing)
     tts_tempo_ceiling: float = 1.18   # run-level speed-up ceiling
     tts_breath_min: float = 0.06      # distributed sentence breath
-    tts_breath_max: float = 0.25
+    tts_breath_max: float = 0.6   # a real source pause kept as rhythm
+    tts_pause_keep: float = 0.7  # share of the source pause to keep
     tts_min_run_fill: float = 0.95    # below this a run is flagged for expand
     tts_min_trailing: float = 1.5     # ...or when it ends this early (seconds)
     # Voice is the master clock and stays neo'd at each anchor's onset so it matches
