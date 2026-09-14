@@ -78,6 +78,8 @@ class RenderResult:
     summary: dict = field(default_factory=dict)
     # (place_start, clip_path, playback_duration, glued)
     placements: list[tuple[float, Path, float, bool]] = field(default_factory=list)
+    # sentence start times in the same order as ``placements`` (for caption windows)
+    block_starts: list[float] = field(default_factory=list)
     runs: list[dict] = field(default_factory=list)
     total_duration: float = 0.0
 
@@ -283,4 +285,12 @@ def render(
         "voice_track": None,
         "total_duration": round(total_duration, 3),
     }
-    return RenderResult(voice_track=None, timings=timings, summary=summary, placements=placements, runs=runs, total_duration=total_duration)
+    return RenderResult(
+        voice_track=None,
+        timings=timings,
+        summary=summary,
+        placements=placements,
+        block_starts=[blocks[index].start for index, _place, _path, _play, _glued in fitted],
+        runs=runs,
+        total_duration=total_duration,
+    )

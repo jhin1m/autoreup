@@ -526,10 +526,9 @@ class VoiceoverStage(PipelineStage):
         # Voice and subtitle are built from the SAME sentence units. Time each
         # sentence's caption within the REAL synthesized clip span (placement + voice
         # duration), so the caption matches the dub's actual timing — from the TTS.
-        placements = result.placements
         voice_windows = {
-            round(seg_start, 3): (place, place + dur)
-            for (seg_start, _clip, _play, _end), (place, _p, dur, _g) in zip(result.segments, placements)
+            round(block_start, 3): (place, place + duration)
+            for block_start, (place, _path, duration, _glued) in zip(result.block_starts, result.placements)
         }
         cues = build_display_cues(speech_rows, settings.min_duration, anchors, segments, max_chars=settings.subtitle_max_line_chars, voice_windows=voice_windows, lead=settings.subtitle_lead)
         write_subtitles(cues, context.artifacts["subtitle_json"], context.artifacts["subtitle_srt"])
