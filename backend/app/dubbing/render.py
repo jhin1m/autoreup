@@ -59,7 +59,8 @@ class RenderConfig:
     pause_keep: float = 0.7
     min_run_fill: float = 0.95
     min_trailing: float = 1.5
-    sentence_breath: float = 0.3
+    sentence_breath: float = 0.35
+    dramatic_breath: float = 0.5
     clause_breath: float = 0.12
 
 
@@ -219,7 +220,9 @@ def render(
     min_breaths: dict[int, float] = {}
     for index in range(1, len(blocks)):
         previous_text = str(timed_units[index - 1].get("text", "")).rstrip()
-        if previous_text.endswith((".", "!", "?", "…")):
+        if previous_text.endswith("…"):
+            min_breaths[index] = timeline_config.dramatic_breath
+        elif previous_text.endswith((".", "!", "?")):
             min_breaths[index] = timeline_config.sentence_breath
         elif previous_text.endswith((",", ";", ":")):
             min_breaths[index] = timeline_config.clause_breath

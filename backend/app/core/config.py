@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     capcut_batch_concurrency: int = 8  # concurrent batch requests
     tts_voice: str = "BV421_vivn_streaming"
     tts_speed: float = 1.0  # neutral synth; timing is fitted by ffmpeg tempo, not provider speed
-    tts_synth_rate: float = 1.06  # local atempo speed-up applied post-synth (CapCut ignores its own rate param); >1.0 = snappier
+    tts_synth_rate: float = 1.0  # local atempo speed-up applied post-synth (CapCut ignores its own rate param); >1.0 = snappier
     # Master-stage pitch lift via resample+atempo. That double time-stretch is the main
     # source of the raspy "rè" artifact (ffmpeg here has no rubberband for a clean shift),
     # so keep it OFF (1.0). The presence EQ in VOICE_MASTER_CHAIN already adds brightness.
@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     video_height: int = 1080
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
-    tts_text_mode: str = "natural"  # keep punctuation so the voice-over pauses naturally
+    tts_text_mode: str = "expressive"  # keep punctuation variety: prosody instruction, not formatting
     # Voice speaking-rate budget: the translator condenses each line to
     # ``duration * tts_voice_cps`` characters so it reads within the time the
     # character speaks at the voice's own natural pace (measured ~19.8 ch/s for

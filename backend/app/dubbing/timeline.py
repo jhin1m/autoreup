@@ -37,7 +37,8 @@ class TimelineConfig:
     breath_max: float = 0.6       # a real source pause, kept (rhythm!)
     pause_keep: float = 0.7       # keep this share of the source pause
     contiguous_gap: float = 0.15  # below this the speaker never stopped: glue
-    sentence_breath: float = 0.3   # minimum pause after a sentence (. ! ? …)
+    sentence_breath: float = 0.35   # minimum pause after a period
+    dramatic_breath: float = 0.5    # minimum pause after an ellipsis
     clause_breath: float = 0.12    # minimum pause after a clause (, ; :)
     min_run_fill: float = 0.95    # below this the run is flagged for expand
     min_trailing: float = 1.5     # ...or when the run ends this early (absolute)

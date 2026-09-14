@@ -111,11 +111,12 @@ def align_audio(
 # old voice-over pleasant to listen to: de-rumble, tame mud at 220 Hz, lift
 # presence (3.2 kHz) and air (7.6 kHz), even out levels, then limit.
 VOICE_MASTER_CHAIN = (
-    "highpass=f=80,"
-    "equalizer=f=200:t=q:w=1.0:g=-1.0,"   # gentle low-mud cut
-    "equalizer=f=3000:t=q:w=1.4:g=1.0,"   # mild presence (was +2.2 — that harshness read as "rè")
-    "lowpass=f=13000,"                      # tame top-end fizz/sibilance + mp3 artifacts
-    "acompressor=threshold=-20dB:ratio=2.0:attack=12:release=160:makeup=1.5,"  # gentler, less make-up gain
+    "highpass=f=70,"
+    "equalizer=f=250:t=q:w=1.0:g=-0.8,"    # gentle low-mud cut (too much = thin/metal)
+    "equalizer=f=3200:t=q:w=1.4:g=1.2,"    # presence for a sweet voice
+    "equalizer=f=10000:t=q:w=1.2:g=1.0,"   # air — a female voice needs the top end
+    "lowpass=f=15000,"                      # was 13k: cutting lower dulls it
+    "acompressor=threshold=-22dB:ratio=1.6:attack=20:release=240:makeup=1.2,"  # slow attack: no pumping
     "alimiter=limit=0.95"
 )
 
@@ -151,7 +152,7 @@ def speed_clip(path: Path, rate: float) -> None:
         tmp.replace(path)
 
 
-def trim_silence(path: Path, threshold_db: float = -45.0, keep: float = 0.03) -> None:
+def trim_silence(path: Path, threshold_db: float = -50.0, keep: float = 0.08) -> None:
     """Strip leading/trailing silence from a synthesized clip so it starts and ends on
     speech. CapCut adds ~0.1-0.2s of head silence; left in, the clip (placed at the
     source time) and its caption both lead the actual voice by that much. ``keep``

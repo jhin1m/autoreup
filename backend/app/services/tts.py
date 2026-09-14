@@ -35,13 +35,22 @@ class TtsBlock:
         return data
 
 
-def clean_tts_text(text: str, text_mode: str = "natural") -> str:
+def clean_tts_text(text: str, text_mode: str = "expressive") -> str:
     text = TAG_RE.sub(" ", str(text))
     text = BRACKET_RE.sub(" ", text)
     text = text.replace("\n", " ")
     if text_mode == "continuous":
         # No pauses at all.
         text = TTS_PUNCT_RE.sub(" ", text)
+    elif text_mode == "expressive":
+        # Keep the writer's punctuation VARIEty: "..." buys a dramatic beat, "." a
+        # sentence fall, "!"/"?" intonation, "," a breath. Flattening all of them
+        # into one uniform comma made every boundary equal — the robotic reading.
+        text = re.sub(r"[—–]+", " ", text)
+        text = text.translate(str.maketrans("，。！？；：、", ",.!?;:,"))
+        text = re.sub(r"([,.!?…])\1+", r"\1", text)
+        text = re.sub(r"([,.!?…])(?=\S)", r"\1 ", text)
+        text = re.sub(r",\s+(không|chứ|nhé|nha|nhỉ|ạ|à|ư|hả|hử)\b", r" \1", text)
     else:
         # "natural": trust the translation's punctuation — in well-formed Vietnamese a
         # comma/period IS a natural reading pause. Turn EVERY clause/sentence boundary
@@ -55,6 +64,10 @@ def clean_tts_text(text: str, text_mode: str = "natural") -> str:
     text = " ".join(text.split())
     text = re.sub(r"(\s*[,，]\s*)+", ", ", text)  # collapse/normalize commas
     text = re.sub(r"\s+([,.!?…;:，。！？；：、])", r"\1", text)
+    if text_mode == "expressive":
+        # keep the closing mark: it shapes the final intonation; the scheduler owns
+        # the gap after it
+        return text.strip()
     # Drop trailing punctuation: a phrase's end-pause is wasted (the scheduled gap
     # to the next anchor already provides it) and only overruns the window.
     return text.rstrip(".,!?…;:，。！？；：、 ").strip()

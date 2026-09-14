@@ -32,10 +32,17 @@ class TtsServiceTest(unittest.TestCase):
     def test_clean_tts_text_strips_tags_brackets_and_punctuation_in_continuous_mode(self):
         self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!", "continuous"), "Xin chào các bạn")
 
-    def test_clean_tts_text_keeps_internal_punctuation_drops_trailing(self):
-        # natural mode (default) keeps internal commas (pauses) but drops the
-        # trailing punctuation, whose end-pause would just overrun the window.
-        self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!"), "Xin chào, các bạn")
+    def test_clean_tts_text_expressive_keeps_punctuation_variety(self):
+        # expressive mode (default): punctuation is a prosody instruction — the
+        # variety (comma / period / ellipsis / question) must survive, including
+        # the closing mark.
+        self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!"), "Xin chào, các bạn!")
+        self.assertEqual(clean_tts_text("Đợi đã… rồi sao? Không thể nào."), "Đợi đã… rồi sao? Không thể nào.")
+
+    def test_clean_tts_text_natural_flattens_punctuation_and_drops_trailing(self):
+        # legacy mode stays available for comparison: one uniform comma pause,
+        # trailing mark dropped (the scheduler owns the gap).
+        self.assertEqual(clean_tts_text("<i>Xin chào</i>, [noise] các bạn!", "natural"), "Xin chào, các bạn")
 
     def test_provider_scale_maps_pipeline_ratio_to_capcut_style_integer(self):
         self.assertEqual(to_provider_scale(1.15), 12)
