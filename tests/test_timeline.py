@@ -71,6 +71,17 @@ def test_chain_mode_places_monotonically_with_bounded_breaths():
     assert all(starts[i + 1] >= ends[i] - 1e-6 for i in range(len(ends) - 1))
 
 
+def test_lead_budget_holds_short_voice_back_to_the_picture():
+    # three short clips in one run: without the budget the voice would pack onto the
+    # start and end ~5.5s early, leaving the run's tail silent (no dub, no subtitles)
+    units = _units([(0.0, 3.0), (3.05, 6.05), (6.1, 9.1)])
+    plan = plan_run(build_runs(units)[0], units, {0: 1.0, 1: 1.0, 2: 1.0}, TimelineConfig())
+    assert plan.tempo == TimelineConfig().tempo_floor
+    assert all(p.early_lead <= TimelineConfig().max_lead + 1e-6 for p in plan.placements)
+    assert plan.hold_seconds > 1.0
+    assert plan.placements[-1].place_start >= 6.1 - TimelineConfig().max_lead - 1e-6
+
+
 def test_summary_reports_metrics_sample():
     units = _units([(0.0, 5.0), (5.0, 10.0)])
     plans = plan_timeline(units, {0: 4.0, 1: 4.0})

@@ -30,7 +30,7 @@ from backend.app.services.tts import (
 from .display import build_timed_units
 from .models import Anchor, AsrSegment, SpeechRow, Unit
 from .text import strip_explicit_turn_markers
-from .timeline import TimelineConfig, plan_timeline
+from .timeline import TimelineConfig, plan_timeline, summarize
 
 
 @dataclass(slots=True)
@@ -301,6 +301,7 @@ def render(
         "runs": len(runs),
         "runs_need_expand": sum(1 for r in runs if r["needs_expand"]),
         "overflow_pushes_next_voice": False,
+        "timeline": summarize(plans, timeline_config),
         "voice_track": None,
         "total_duration": round(total_duration, 3),
     }

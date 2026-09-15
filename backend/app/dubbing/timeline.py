@@ -67,6 +67,7 @@ class RunPlan:
     fill_ratio: float             # (last voice end - run start) / span
     overflow_seconds: float
     needs_expand: bool
+    hold_seconds: float = 0.0     # waited to stay within the lead budget (rule 3)
 
 
 def build_runs(units: list[Unit], config: TimelineConfig | None = None) -> list[Run]:
@@ -123,10 +124,19 @@ def plan_run(
 
     placements: list[Placement] = []
     cursor = run.start
+    holds = 0.0
     for index, unit in enumerate(ordered):
         duration = durations.get(unit.id, 0.0) / tempo
         breath_before = breath_for(index)
         place = cursor + breath_before
+        # Rule 3: the voice may run at most ``max_lead`` ahead of the picture. Without
+        # this the run packs from its start and a locally-short translation (or a long
+        # caption-less stretch) leaves the tail of the run with no voice and no
+        # subtitles while the source dialogue continues (measured: 24s at the end).
+        floor = unit.start - config.max_lead
+        if place < floor:
+            holds += floor - place
+            place = floor
         placements.append(
             Placement(
                 unit_id=unit.id,
@@ -156,6 +166,7 @@ def plan_run(
         fill_ratio=round(fill, 3),
         overflow_seconds=round(overflow, 3),
         needs_expand=trailing > config.min_trailing or fill < config.min_run_fill,
+        hold_seconds=round(holds, 3),
     )
 
 
@@ -174,6 +185,8 @@ def summarize(plans: list[RunPlan], config: TimelineConfig | None = None) -> dic
     config = config or TimelineConfig()
     audible = 0.0
     lead_max = 0.0
+    late_max = 0.0
+    holds = 0.0
     underfilled = 0
     overflow_runs = 0
     for plan in plans:
@@ -181,6 +194,8 @@ def summarize(plans: list[RunPlan], config: TimelineConfig | None = None) -> dic
             if placement.breath_before > 0.15:
                 audible += placement.breath_before
         lead_max = max(lead_max, max((p.early_lead for p in plan.placements), default=0.0))
+        late_max = max(late_max, max((-p.early_lead for p in plan.placements), default=0.0))
+        holds += plan.hold_seconds
         if plan.needs_expand:
             underfilled += 1
         if plan.overflow_seconds > 0.05:
@@ -189,6 +204,8 @@ def summarize(plans: list[RunPlan], config: TimelineConfig | None = None) -> dic
         "runs": len(plans),
         "audible_breath_seconds": round(audible, 2),
         "max_early_lead_s": round(lead_max, 3),
+        "max_late_lead_s": round(late_max, 3),
+        "hold_seconds": round(holds, 2),
         "underfilled_runs": underfilled,
         "overflow_runs": overflow_runs,
     }

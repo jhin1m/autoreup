@@ -122,6 +122,39 @@ def _regions_from_probs(probs, step: float) -> list[tuple[float, float]]:
 _DROP_MAX_PROB = 0.15  # music-only hallucinations sit <0.1; soft real speech ~0.2-0.4
 
 
+def tighten_to_speech(segments: list[AsrSegment], packed, pad: float = 0.12, min_density: float = 0.3) -> tuple[list[AsrSegment], int]:
+    """Shrink ASR segments onto the VAD speech they actually contain; drop the rest.
+
+    Whisper on music returns ONE long segment whose text belongs to a brief line at an
+    edge (measured: an 18.7s "攻撃は単調だ！" whose only speech was ~1s at the end). That
+    span becomes an anchor window full of dead air: the fit stage reads it as dropped
+    content and "completes" it, and the run-based timeline packs the following voice far
+    ahead of the picture — a 24s stretch lost its dub *and* its subtitles. Returns
+    ``(kept, dropped)``; without VAD the rail is returned untouched."""
+    if packed is None:
+        return segments, 0
+    probs, step = packed
+    regions = _regions_from_probs(probs, step)
+    kept: list[AsrSegment] = []
+    dropped = 0
+    for seg in segments:
+        inside = [(max(s, seg.start), min(e, seg.end)) for s, e in regions if e > seg.start and s < seg.end]
+        inside = [(s, e) for s, e in inside if e - s > 0.01]
+        if not inside:
+            dropped += 1  # music-only: nothing speech-like inside
+            continue
+        start = max(seg.start, inside[0][0] - pad)
+        end = min(seg.end, inside[-1][1] + pad)
+        speech = sum(e - s for s, e in inside)
+        if end - start < 0.2 or speech / (end - start) < min_density:
+            dropped += 1  # a few music blips under a hallucinated line
+            continue
+        kept.append(AsrSegment(id=0, start=round(start, 3), end=round(end, 3), text_zh=seg.text_zh))
+    for index, seg in enumerate(kept):
+        seg.id = index
+    return kept, dropped
+
+
 def refine_segments(segments: list[AsrSegment], video: Path, packed=None) -> tuple[list[AsrSegment], int, int]:
     """Snap starts to VAD speech onsets and drop hallucinated segments.
 

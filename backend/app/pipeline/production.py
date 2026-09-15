@@ -21,7 +21,7 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
-from backend.app.dubbing.coverage import CoverageConfig, fill_coverage_gaps, fuse_rails, speech_coverage
+from backend.app.dubbing.coverage import CoverageConfig, dedupe_overlaps, fill_coverage_gaps, fuse_rails, speech_coverage
 from backend.app.dubbing.normalize import normalize_segments
 from backend.app.dubbing.units import build_units
 from backend.app.dubbing.display import build_display_cues, write_subtitles
@@ -249,6 +249,11 @@ class ASRStage(PipelineStage):
         from backend.app.dubbing.onset import _speech_probs
 
         packed = _speech_probs(video)
+        from backend.app.dubbing.onset import tighten_to_speech
+
+        segments, tightened = tighten_to_speech(segments, packed)
+        if tightened:
+            logs.append(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(segments)} of {total} left)")
         from backend.app.services.audio import probe_duration
 
         duration = probe_duration(video)
@@ -296,6 +301,10 @@ class ASRStage(PipelineStage):
                 f"({gap_stats['seconds']}s) -> +{gap_stats['recovered']} segments, skipped {gap_stats['skipped']} lyric/artifact, "
                 f"unrecovered {gap_stats['unrecovered']}s"
             )
+        before_dedupe = len(segments)
+        segments = dedupe_overlaps(segments)
+        if len(segments) != before_dedupe:
+            logs.append(f"rail-dedupe: {before_dedupe} -> {len(segments)} segments after overlap trim")
         segments, normalize_metrics = normalize_segments(segments, _translate_agent(settings))
         logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
         covered, speech_total, ratio = speech_coverage([(s.start, s.end) for s in segments], packed)

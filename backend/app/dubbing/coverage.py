@@ -43,7 +43,9 @@ _ATTEMPTS: list[dict] = [
 @dataclass(slots=True)
 class CoverageConfig:
     enabled: bool = True
-    min_gap: float = 5.0        # only ranges this long are worth a re-pass
+    min_gap: float = 5.0        # coarse fallback when VAD is unavailable
+    min_hole_seconds: float = 0.8  # smallest VAD-speech hole worth a re-run
+    max_holes: int = 60            # bound the number of worker calls per job
     speech_floor: float = 0.10  # share of VAD frames above threshold inside the gap
     slice_seconds: float = 25.0
     slice_overlap: float = 1.0
@@ -60,6 +62,43 @@ def find_gaps(spans: list[tuple[float, float]], duration: float, min_gap: float 
     if duration - prev_end >= min_gap:
         gaps.append((prev_end, duration))
     return [(round(a, 3), round(b, 3)) for a, b in gaps]
+
+
+def find_speech_holes(
+    spans: list[tuple[float, float]],
+    packed,
+    min_seconds: float = 0.8,
+    merge_gap: float = 0.4,
+) -> list[tuple[float, float]]:
+    """VAD-speech frames NOT covered by any span, grouped into ranges.
+
+    The coarse ``find_gaps`` only sees holes >= min_gap; measured on a real job that
+    left 3.2s of speech untexted in short holes (0.1-1.5s each, e.g. 48.3-49.8s
+    inside a Japanese scene). This walks the VAD directly so any speech-bearing hole
+    is found, with a floor and a merge distance to skip jitter/breath frames."""
+    if packed is None:
+        return []
+    probs, step = packed
+    raw: list[float] = []
+    ordered = sorted(spans)
+    for index, value in enumerate(probs):
+        if value <= 0.5:
+            continue
+        t = index * step
+        if any(start - 1e-6 <= t <= end + 1e-6 for start, end in ordered):
+            continue
+        raw.append(t)
+    if not raw:
+        return []
+    ranges: list[tuple[float, float]] = []
+    start = prev = raw[0]
+    for t in raw[1:]:
+        if t - prev > merge_gap:
+            ranges.append((start, prev))
+            start = t
+        prev = t
+    ranges.append((start, prev))
+    return [(round(a, 3), round(b, 3)) for a, b in ranges if b - a >= min_seconds - 1e-9]
 
 
 def speech_fraction(packed, start: float, end: float) -> float:
@@ -115,6 +154,30 @@ def fuse_rails(ocr: list[AsrSegment], asr: list[AsrSegment], overlap_ratio: floa
     merged = sorted([*ocr, *kept], key=lambda seg: (seg.start, seg.end))
     merged = [AsrSegment(id=index, start=seg.start, end=seg.end, text_zh=seg.text_zh) for index, seg in enumerate(merged)]
     return merged, {"ocr": len(ocr), "asr_kept": len(kept), "asr_overlapped": dropped}
+
+
+def dedupe_overlaps(segments: list[AsrSegment], min_keep: float = 0.2) -> list[AsrSegment]:
+    """Enforce the rail invariant: sorted, non-overlapping segments.
+
+    Nested spans (a gap-fill insert inside a long ASR blob) otherwise create nested
+    anchors — the unit builder then shoves the later unit past the container's end and
+    the same second of audio gets voiced and subtitled twice."""
+    ordered = sorted(segments, key=lambda seg: (seg.start, seg.end))
+    out: list[AsrSegment] = []
+    for seg in ordered:
+        if out and seg.start < out[-1].end - 0.05:
+            prev = out[-1]
+            if seg.end <= prev.end + 0.05:  # nested: keep the tighter time claim
+                if (seg.end - seg.start) < (prev.end - prev.start):
+                    out[-1] = seg
+                continue
+            prev.end = round(seg.start, 3)  # partial: trim the earlier tail
+            if prev.end - prev.start < min_keep:
+                out.pop()
+                if out and out[-1].end > seg.start:
+                    out[-1].end = round(seg.start, 3)
+        out.append(seg)
+    return [AsrSegment(id=index, start=seg.start, end=seg.end, text_zh=seg.text_zh) for index, seg in enumerate(out)]
 
 
 def speech_coverage(spans: list[tuple[float, float]], packed, step: float | None = None) -> tuple[float, float, float]:
@@ -191,7 +254,13 @@ def fill_coverage_gaps(
     if not config.enabled or not worker_url:
         return segments, stats
 
-    gaps = find_gaps([(s.start, s.end) for s in segments], duration, config.min_gap)
+    spans = [(s.start, s.end) for s in segments]
+    gaps = find_speech_holes(spans, packed, min_seconds=config.min_hole_seconds) if packed is not None else []
+    if not gaps:
+        gaps = find_gaps(spans, duration, config.min_gap)
+    gaps = [gap for gap in gaps if gap[1] - gap[0] >= config.min_hole_seconds]
+    if len(gaps) > config.max_holes:
+        gaps = sorted(gaps, key=lambda gap: gap[1] - gap[0], reverse=True)[: config.max_holes]
     stats["gaps"] = len(gaps)
     if not gaps:
         return segments, stats
@@ -226,11 +295,24 @@ def fill_coverage_gaps(
             stats["skipped"] += skipped
             if not kept:
                 stats["unrecovered"] += round(min(config.slice_seconds, gap_end - cursor), 1)
-            recovered.extend(
-                AsrSegment(id=0, start=float(r.get("start", cursor)), end=float(r.get("end", cursor + 1)), text_zh=str(r["text"]))
-                for r in kept
-            )
+            slice_end = cursor + length
+            for r in kept:
+                # Whisper's segment ends can overshoot the slice; an unclamped span
+                # injects dead air into the rail (and a bogus anchor window with it).
+                start = max(cursor, min(float(r.get("start", cursor)), slice_end))
+                end = min(slice_end, max(float(r.get("end", start + 1)), start))
+                if end - start < 0.2:
+                    continue
+                recovered.append(AsrSegment(id=0, start=round(start, 3), end=round(end, 3), text_zh=str(r["text"])))
             cursor += max(1.0, length - config.slice_overlap)
+
+    if recovered:
+        # The ladder can hallucinate on music ("ご視聴ありがとうございました" is Whisper's
+        # classic Japanese artifact): keep only what VAD agrees is speech.
+        from .onset import tighten_to_speech
+
+        recovered, hallucinated = tighten_to_speech(recovered, packed if packed is not None else _speech_probs(video))
+        stats["skipped"] += hallucinated
 
     if not recovered:
         return segments, stats
