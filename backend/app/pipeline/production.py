@@ -21,6 +21,7 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
+from backend.app.dubbing.coverage import CoverageConfig, fill_coverage_gaps
 from backend.app.dubbing.normalize import normalize_segments
 from backend.app.dubbing.units import build_units
 from backend.app.dubbing.display import build_display_cues, write_subtitles
@@ -244,8 +245,32 @@ class ASRStage(PipelineStage):
         # the on-screen character and phantom dialogue appears. Align the rail to
         # Silero-VAD speech regions (the WhisperX-style fix) before anything trusts it.
         total = len(segments)
-        segments, moved, dropped = refine_segments(segments, Path(context.artifacts["video"]))
+        video = Path(context.artifacts["video"])
+        from backend.app.dubbing.onset import _speech_probs
+
+        packed = _speech_probs(video)
+        segments, moved, dropped = refine_segments(segments, video, packed=packed)
         logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {total} segments")
+        from backend.app.services.audio import probe_duration
+
+        segments, gap_stats = fill_coverage_gaps(
+            video=video,
+            segments=segments,
+            duration=probe_duration(video),
+            worker_url=str(settings.asr_worker_url or ""),
+            model=settings.asr_model,
+            packed=packed,
+            config=CoverageConfig(
+                enabled=settings.asr_gap_fill,
+                min_gap=settings.asr_gap_min_seconds,
+                speech_floor=settings.asr_gap_speech_floor,
+            ),
+        )
+        if gap_stats["gaps"]:
+            logs.append(
+                f"gap-fill: {gap_stats['filled']}/{gap_stats['gaps']} speech gaps re-ASR'd "
+                f"({gap_stats['seconds']}s) -> +{gap_stats['recovered']} segments, skipped {gap_stats['skipped']} lyric/artifact"
+            )
         segments, normalize_metrics = normalize_segments(segments, _translate_agent(settings))
         logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
         units = build_units(segments)
@@ -260,7 +285,7 @@ class ASRStage(PipelineStage):
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.source_json, anchors_tsv, settings.data_dir)],
-            metrics={"segments": len(segments), "units": len(anchors), **normalize_metrics},
+            metrics={"segments": len(segments), "units": len(anchors), **normalize_metrics, **gap_stats},
             logs=logs,
         )
 
@@ -653,6 +678,7 @@ def _run_asr(context: PipelineContext, output_srt: Path) -> list[str]:
         "--language", "zh",
         "--model", str(settings.asr_model),
         "--workers", str(settings.asr_workers),
+        "--chunk-seconds", str(settings.asr_chunk_seconds),
         "--max-chars", "18",
     ]
     return run_command(command, cwd=settings.root_dir)

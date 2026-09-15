@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     asr_worker_url: str | None = None
     asr_model: str = "@cf/openai/whisper-large-v3-turbo"
     asr_workers: int = 8  # concurrent chunk uploads to the Cloudflare worker (it parallelizes well)
+    asr_chunk_seconds: float = 30.0  # 60s chunks collapse on music stretches; 30s is steadier
+    asr_gap_fill: bool = True        # re-ASR speech-bearing gaps the main pass dropped
+    asr_gap_min_seconds: float = 5.0
+    asr_gap_speech_floor: float = 0.10
     cookies_file: str | None = None
     browser_path: str | None = None  # Chrome/Edge binary for the headless Douyin extractor
     node_bin: str = "node"

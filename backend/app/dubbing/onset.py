@@ -122,7 +122,7 @@ def _regions_from_probs(probs, step: float) -> list[tuple[float, float]]:
 _DROP_MAX_PROB = 0.15  # music-only hallucinations sit <0.1; soft real speech ~0.2-0.4
 
 
-def refine_segments(segments: list[AsrSegment], video: Path) -> tuple[list[AsrSegment], int, int]:
+def refine_segments(segments: list[AsrSegment], video: Path, packed=None) -> tuple[list[AsrSegment], int, int]:
     """Snap starts to VAD speech onsets and drop hallucinated segments.
 
     Dropping is deliberately conservative — only when the VAD saw essentially NO
@@ -130,7 +130,8 @@ def refine_segments(segments: list[AsrSegment], video: Path) -> tuple[list[AsrSe
     be worse than keeping a phantom one). Returns ``(segments, moved, dropped)``.
     Best-effort: without VAD (missing dependency / decode failure) the rail is
     returned untouched."""
-    packed = _speech_probs(video)
+    if packed is None:
+        packed = _speech_probs(video)
     if packed is None:
         return segments, 0, 0
     probs, step = packed
