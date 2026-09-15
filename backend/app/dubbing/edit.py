@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from backend.app.agents import AgentConfig, complete
 
 from .glossary import format_glossary
-from .models import Anchor, GlossaryEntry
+from .models import GlossaryEntry
 from .prompts import EDIT_SYSTEM, EDIT_USER
 from .text import has_han, sanitize_caption
 from .tsv_io import parse_tsv_rows
@@ -29,7 +29,7 @@ _NEGATIONS = ("không", "chưa", "đừng", "chẳng", "chả")
 class EditConfig:
     enabled: bool = True
     min_len_ratio: float = 0.75
-    max_len_ratio: float = 1.25
+    max_len_ratio: float = 1.12  # the editor must not blow the per-caption budget
 
 
 def _digits(text: str) -> set[str]:
@@ -59,16 +59,18 @@ def gate_patch(current: str, patched: str, glossary: list[GlossaryEntry], config
 
 def edit_texts(
     texts: dict[int, str],
-    anchors: list[Anchor],
+    sources: dict[int, str],
     glossary: list[GlossaryEntry],
     llm: AgentConfig,
     config: EditConfig | None = None,
 ) -> tuple[dict[int, str], int]:
-    """One editor pass over a batch; returns (texts, accepted_patch_count)."""
+    """One editor pass over a batch; returns (texts, accepted_patch_count).
+
+    ``texts``/``sources`` are keyed by caption id (one line each)."""
     config = config or EditConfig()
     if not config.enabled or not texts:
         return texts, 0
-    rows = "\n".join(f"{a.id}\t{a.source_zh}\t{texts[a.id]}" for a in anchors if texts.get(a.id))
+    rows = "\n".join(f"{cid}\t{sources.get(cid, '')}\t{texts[cid]}" for cid in texts)
     if not rows:
         return texts, 0
     try:
@@ -76,29 +78,29 @@ def edit_texts(
     except Exception:  # noqa: BLE001 - the editor is best-effort; never fail the job
         return texts, 0
 
-    valid_ids = {a.id for a in anchors}
+    valid_ids = set(texts)
     patched: dict[int, str] = {}
     for cells in parse_tsv_rows(raw, expected_cols=2):
         try:
-            unit_id = int(cells[0].strip())
+            caption_id = int(cells[0].strip().lstrip("#"))
         except ValueError:
             continue
-        if unit_id in valid_ids:
+        if caption_id in valid_ids:
             text = sanitize_caption(cells[1])
             if text:
-                patched[unit_id] = text
+                patched[caption_id] = text
 
     accepted = 0
     result: dict[int, str] = {}
-    for unit_id, current in texts.items():
-        candidate = patched.get(unit_id)
+    for caption_id, current in texts.items():
+        candidate = patched.get(caption_id)
         if candidate is None:
-            result[unit_id] = current
+            result[caption_id] = current
             continue
         gated = gate_patch(current, candidate, glossary, config)
         if gated is None:
-            result[unit_id] = current
+            result[caption_id] = current
         else:
-            result[unit_id] = gated
+            result[caption_id] = gated
             accepted += 1 if gated != current else 0
     return result, accepted

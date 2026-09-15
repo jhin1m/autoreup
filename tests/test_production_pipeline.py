@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from backend.app.core.config import Settings
 from backend.app.domain.jobs import PipelineConfig, StageName
-from backend.app.dubbing.models import Anchor, SpeechRow
+from backend.app.dubbing.models import Anchor, AsrSegment, SpeechRow
 from backend.app.pipeline.contracts import PipelineContext
 from backend.app.pipeline.production import (
     ProductionPipeline,
@@ -26,13 +26,19 @@ def _context(root: Path) -> PipelineContext:
     settings = Settings(root_dir=root, _env_file=None, tts_enabled=False, tts_server_url=None)
     settings.ensure_directories()
     anchors = [Anchor(0, 0.0, 2.0, "0-1", "源一"), Anchor(1, 2.0, 4.0, "2-3", "源二")]
+    segments = [
+        AsrSegment(0, 0.0, 1.0, "源"),
+        AsrSegment(1, 1.0, 2.0, "一"),
+        AsrSegment(2, 2.0, 3.0, "源"),
+        AsrSegment(3, 3.0, 4.0, "二"),
+    ]
     return PipelineContext(
         job_id="job",
         input_url="https://example.com/video",
         job_dir=settings.jobs_dir / "job",
         settings=settings,
         config=PipelineConfig(display_max_chars=settings.display_max_chars, min_duration=settings.min_duration),
-        artifacts={"anchors": anchors, "glossary": [], "video": root / "v.mp4"},
+        artifacts={"anchors": anchors, "segments": segments, "glossary": [], "video": root / "v.mp4"},
     )
 
 
@@ -50,16 +56,20 @@ class ProductionPipelineTest(unittest.TestCase):
     def test_translate_then_qa_produces_covered_subtitles(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _context(Path(tmp))
-            anchors = ctx.artifacts["anchors"]
+            segments = ctx.artifacts["segments"]
 
             def fake_complete(system, user, config):
-                return "\n".join(f"{a.id}\tLời thoại {a.id}" for a in anchors if str(a.id) in user)
+                # one Vietnamese line per caption id present in the prompt
+                return "\n".join(f"{s.id}\tLời caption {s.id}" for s in segments if f"{s.id}\t" in user)
 
             with patch("backend.app.dubbing.translate.complete", side_effect=fake_complete), patch(
                 "backend.app.dubbing.edit.complete", side_effect=lambda system, user, config: ""
             ):
                 TranslateStage().run(ctx)
-            self.assertEqual({r.anchor_id for r in ctx.artifacts["speech_rows"]}, {0, 1})
+            rows = ctx.artifacts["speech_rows"]
+            # every caption translated, each row exactly on its caption's window
+            self.assertEqual([r.source_ids for r in rows], [f"{s.id}-{s.id}" for s in segments])
+            self.assertEqual([r.anchor_start for r in rows], [s.start for s in segments])
 
             result = QAStage().run(ctx)
             self.assertEqual(result.metrics["issues"], 0)

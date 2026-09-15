@@ -47,54 +47,42 @@ def test_speech_row_roundtrip():
     assert abs(again.anchor_duration - 1.5) < 1e-9
 
 
-def test_display_cues_split_at_clauses_and_follow_segments():
+def test_display_cues_cover_each_caption_window():
     from backend.app.dubbing.display import build_display_cues
 
-    # Anchor spans 2 segments with a gap between them. A short line stays WHOLE
-    # (one readable cue, no needless flicker); two sentences split at the sentence
-    # end and the second is timed near the second segment (14s), not the middle of
-    # the anchor window — and words are never broken across cues.
+    # one row per caption: the cue window IS the caption window — no interpolation
+    # across segments, no voice window, no hold pass
     segments = [AsrSegment(0, 10.0, 11.0, "甲甲甲"), AsrSegment(1, 14.0, 15.0, "乙乙乙")]
-    anchor = Anchor(0, 10.0, 15.0, "0-1", "甲甲甲乙乙乙")
-
-    short = [SpeechRow(0, 0, 10.0, 15.0, "0-1", "phần một ba, phần hai bốn")]
-    cues = build_display_cues(short, 0.4, [anchor], segments)
-    assert [c["translated"] for c in cues] == ["phần một ba, phần hai bốn"]
-
-    # sentence 2 sits past the halfway char mark, so its content belongs to segment 2
-    two_sentences = [SpeechRow(0, 0, 10.0, 15.0, "0-1", "Câu đầu tiên nói khá là dài dòng nhé. Câu sau.")]
-    cues = build_display_cues(two_sentences, 0.4, [anchor], segments)
-    assert len(cues) == 2
-    assert cues[0]["translated"] == "Câu đầu tiên nói khá là dài dòng nhé."
-    assert cues[1]["translated"] == "Câu sau."
-    assert cues[1]["start"] >= 13.0
-    assert cues[0]["end"] <= cues[1]["start"] + 1e-6
-
-
-def test_display_holds_the_last_line_until_the_source_caption_ends():
-    from backend.app.dubbing.display import build_display_cues
-
-    # a compact line (voice 3s) under a 9s source caption: the subtitle must stay up
-    # while the caption is on screen, not blink off 6s early
-    segments = [AsrSegment(0, 0.0, 9.0, "一整段字幕")]
-    anchor = Anchor(0, 0.0, 9.0, "0-0", "一整段字幕")
-    rows = [SpeechRow(0, 0, 0.0, 9.0, "0-0", "Một câu ngắn.")]
-    cues = build_display_cues(rows, 0.4, [anchor], segments, voice_windows={0.0: (0.0, 3.0)})
-    assert len(cues) == 1
-    assert cues[0]["end"] == 9.0
-
-
-def test_display_hold_never_overlaps_the_next_cue():
-    from backend.app.dubbing.display import build_display_cues
-
-    # unit 0's caption runs to 9s but unit 1's voice starts at 6s: the hold is clamped
-    segments = [AsrSegment(0, 0.0, 9.0, "一二"), AsrSegment(1, 9.0, 12.0, "三四")]
-    anchors = [Anchor(0, 0.0, 9.0, "0-0", "一二"), Anchor(1, 9.0, 12.0, "1-1", "三四")]
     rows = [
-        SpeechRow(0, 0, 0.0, 9.0, "0-0", "Câu một."),
-        SpeechRow(1, 1, 9.0, 12.0, "1-1", "Câu hai."),
+        SpeechRow(0, 0, 10.0, 11.0, "0-0", "phần một"),
+        SpeechRow(1, 1, 14.0, 15.0, "1-1", "phần hai"),
     ]
-    cues = build_display_cues(rows, 0.4, anchors, segments, voice_windows={0.0: (0.0, 3.0), 9.0: (6.0, 9.5)})
+    cues = build_display_cues(rows, segments, min_duration=0.4)
+    assert [c["translated"] for c in cues] == ["phần một", "phần hai"]
+    assert cues[0]["start"] == 10.0 and cues[0]["end"] == 11.0
+    assert cues[1]["start"] == 14.0 and cues[1]["end"] == 15.0
+    assert cues[0]["source"] == "甲甲甲" and cues[0]["source_ids"] == "0-0"
+
+
+def test_display_reflows_long_lines_inside_the_same_caption():
+    from backend.app.dubbing.display import build_display_cues
+
+    segments = [AsrSegment(0, 0.0, 6.0, "一整段字幕")]
+    rows = [SpeechRow(0, 0, 0.0, 6.0, "0-0", "Một câu dài cần chia thành hai dòng đọc cho dễ, phần còn lại xuống dòng.")]
+    cues = build_display_cues(rows, segments, min_duration=0.4, max_chars=42)
     assert len(cues) == 2
-    assert cues[0]["end"] == cues[1]["start"] == 6.0  # hold clamped at the next cue
-    assert cues[1]["end"] == 12.0                    # last cue holds to its own caption end
+    assert cues[0]["start"] == 0.0 and cues[-1]["end"] == 6.0
+    assert cues[0]["end"] <= cues[1]["start"] + 1e-6
+    assert all(len(c["text"]) <= 42 + 8 for c in cues)
+
+
+def test_display_closes_micro_gaps_between_captions():
+    from backend.app.dubbing.display import build_display_cues
+
+    segments = [AsrSegment(0, 0.0, 2.0, "一"), AsrSegment(1, 2.3, 4.0, "二")]
+    rows = [
+        SpeechRow(0, 0, 0.0, 2.0, "0-0", "Câu một."),
+        SpeechRow(1, 1, 2.3, 4.0, "1-1", "Câu hai."),
+    ]
+    cues = build_display_cues(rows, segments, min_duration=0.4)
+    assert cues[0]["end"] == cues[1]["start"] == 2.3  # 0.3s gap closed (no flicker)

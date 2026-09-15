@@ -21,13 +21,20 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
-from backend.app.dubbing.coverage import CoverageConfig, dedupe_overlaps, fill_coverage_gaps, fuse_rails, speech_coverage
+from backend.app.dubbing.coverage import (
+    CoverageConfig,
+    dedupe_overlaps,
+    fill_coverage_gaps,
+    fuse_rails,
+    speech_coverage,
+    speech_seconds,
+)
 from backend.app.dubbing.normalize import normalize_segments
 from backend.app.dubbing.units import build_units
 from backend.app.dubbing.display import build_display_cues, write_subtitles
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
 from backend.app.agents import AgentConfig
-from backend.app.dubbing.onset import refine_segments
+from backend.app.dubbing.onset import _speech_probs, refine_segments
 from backend.app.dubbing.models import (
     ANCHOR_FIELDS,
     SEGMENT_FIELDS,
@@ -48,7 +55,7 @@ from backend.app.infrastructure.packaging import package_outputs
 from backend.app.infrastructure.process import run_command
 from backend.app.pipeline.contracts import PipelineContext, PipelineStage, StageResult
 
-_VOICEOVER_REPAIR_ROUNDS = 1
+_VOICEOVER_REPAIR_ROUNDS = 3  # converge; each round only re-synthesizes what changed
 
 
 class ProductionPipeline:
@@ -249,6 +256,7 @@ class ASRStage(PipelineStage):
         from backend.app.dubbing.onset import _speech_probs
 
         packed = _speech_probs(video)
+        context.artifacts["vad_probs"] = packed
         from backend.app.dubbing.onset import tighten_to_speech
 
         segments, tightened = tighten_to_speech(segments, packed)
@@ -402,55 +410,20 @@ class TranslateStage(PipelineStage):
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
         anchors: list[Anchor] = context.artifacts["anchors"]
+        segments: list[AsrSegment] = context.artifacts["segments"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         speech_rows = translate(
-            anchors, glossary, _translate_agent(settings),
-            TranslateConfig(notes=context.config.content_notes),
+            anchors, segments, glossary, _translate_agent(settings),
+            TranslateConfig(notes=context.config.content_notes, voice_cps=settings.tts_voice_cps),
         )
-        # Text-level pre-repair: character counts alone PREDICT which anchors will
-        # overflow (read pace is known), so shorten them here in one concurrent
-        # rewrite wave. Before this, ~half the anchors of a long video reached the
-        # voiceover stage over budget and burned 3 synth-measure-repair rounds.
-        speech_rows, pre_repaired = _shorten_predicted_overflow(speech_rows, anchors, glossary, settings)
         context.artifacts["speech_rows"] = speech_rows
         path = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
         write_tsv(path, [r.to_row() for r in speech_rows], SPEECH_FIELDS)
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.subtitle_json, path, settings.data_dir)],
-            metrics={"speech_rows": len(speech_rows), "pre_repaired_anchors": pre_repaired},
+            metrics={"speech_rows": len(speech_rows), "captions": len(segments)},
         )
-
-
-def _shorten_predicted_overflow(
-    speech_rows: list[SpeechRow],
-    anchors: list[Anchor],
-    glossary: list[GlossaryEntry],
-    settings: Settings,
-) -> tuple[list[SpeechRow], int]:
-    """Predict per-anchor voice duration from character counts and shorten the
-    over-budget anchors via the normal repair path (batched, concurrent)."""
-    effective_cps = settings.tts_voice_read_cps * settings.tts_synth_rate
-    by_anchor: dict[int, int] = {}
-    for row in speech_rows:
-        by_anchor[row.anchor_id] = by_anchor.get(row.anchor_id, 0) + len(row.text)
-    predicted_overflow: dict[int, tuple[float, float]] = {}
-    for anchor in anchors:
-        chars = by_anchor.get(anchor.id)
-        if not chars:
-            continue
-        window = max(0.1, anchor.end - anchor.start)
-        est_duration = chars / effective_cps
-        # same tolerance as the render loop's repair_over_ms, plus the tempo fit's
-        # ability to absorb a bit of overrun
-        if est_duration > (window * settings.tts_tempo_ceiling) + 0.3:
-            predicted_overflow[anchor.id] = (window, est_duration)
-    if not predicted_overflow:
-        return speech_rows, 0
-    return repair(
-        speech_rows, anchors, glossary, predicted_overflow, _polish_agent(settings),
-        RepairConfig(),
-    )
 
 
 class QAStage(PipelineStage):
@@ -473,10 +446,13 @@ class QAStage(PipelineStage):
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
-        anchors: list[Anchor] = context.artifacts["anchors"]
+        segments: list[AsrSegment] = context.artifacts["segments"]
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
-        cues = build_display_cues(speech_rows, settings.min_duration, anchors, context.artifacts.get("segments"), max_chars=settings.subtitle_max_line_chars)
-        report = qa_report(speech_rows, anchors, cues, max_display_chars=settings.subtitle_max_line_chars)
+        cues = build_display_cues(
+            speech_rows, segments, settings.min_duration,
+            max_chars=settings.subtitle_max_line_chars, lead=settings.subtitle_lead,
+        )
+        report = qa_report(speech_rows, segments, cues, max_display_chars=settings.subtitle_max_line_chars)
 
         subtitle_json = settings.subtitles_dir / f"{context.job_id}.vi.display.json"
         subtitle_srt = settings.subtitles_dir / f"{context.job_id}.vi.display.srt"
@@ -510,8 +486,6 @@ class VoiceoverStage(PipelineStage):
         voice = settings.tts_dir / f"{context.job_id}.voice.m4a"
         if not (voice.exists() and voice.stat().st_size > 0):
             return False
-        # The subtitle files on disk were rewritten from the voice timing when this
-        # stage succeeded, so PackageStage only needs the track + those paths.
         context.artifacts["voice_track"] = voice
         return True
 
@@ -522,85 +496,83 @@ class VoiceoverStage(PipelineStage):
         if not settings.tts_server_url:
             raise RuntimeError("Missing TTS server URL. Set AUTOREUP_TTS_SERVER_URL.")
 
-        anchors: list[Anchor] = context.artifacts["anchors"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
+        segments: list[AsrSegment] = context.artifacts.get("segments", [])
+        sources = {s.id: s.text_zh for s in segments}
         synth_client = _build_capcut_client(settings)
         render_config = RenderConfig(
             provider_url="capcut-native" if synth_client is not None else settings.tts_server_url,
             speaker=settings.tts_voice,
             text_mode=settings.tts_text_mode,
-            run_gap=settings.tts_run_gap,
-            tempo_floor=settings.tts_tempo_floor,
-            tempo_ceiling=settings.tts_tempo_ceiling,
-            breath_min=settings.tts_breath_min,
-            breath_max=settings.tts_breath_max,
-            pause_keep=settings.tts_pause_keep,
-            min_run_fill=settings.tts_min_run_fill,
-            min_trailing=settings.tts_min_trailing,
             crossfade=settings.tts_crossfade,
-            repair_over_ms=settings.tts_repair_over_ms,
-            min_duration=settings.min_duration,
             workers=settings.tts_workers,
             batch_size=settings.capcut_batch_size,
             batch_concurrency=settings.capcut_batch_concurrency,
             synth_rate=settings.tts_synth_rate,
+            lead=settings.tts_lead,
+            tempo_ceiling=settings.tts_tempo_ceiling,
+            overflow_tolerance=settings.tts_overflow_tolerance,
         )
         work_dir = context.job_dir / "tts"
         cache_dir = settings.tts_cache_dir
         output_audio = settings.tts_dir / f"{context.job_id}.voice.m4a"
-        segments = context.artifacts.get("segments")
 
-        result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments, synth_client=synth_client)
+        # ONE budget, measured and consistent with what the translator was told: the
+        # caption's own window. The VAD speech is evidence only — it distinguishes a
+        # genuine source pause (keep the dub short) from dropped content (complete it).
+        packed = context.artifacts.get("vad_probs")
+        if packed is None:
+            packed = _speech_probs(Path(context.artifacts["video"]))
+        window_of: dict[int, float] = {}
+        vad_of: dict[int, float] = {}
+        for index, row in enumerate(speech_rows):
+            limit = speech_rows[index + 1].anchor_start if index + 1 < len(speech_rows) else row.anchor_end + 0.5
+            window_of[row.sub_id] = round(max(0.1, row.anchor_end - row.anchor_start), 3)
+            vad_of[row.sub_id] = round(speech_seconds(packed, row.anchor_start - 0.2, max(limit, row.anchor_end)), 3)
+
+        result = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
         logs = [f"render round 0: {result.summary}"]
         repair_cfg = RepairConfig()
         rounds = 0
         while rounds < _VOICEOVER_REPAIR_ROUNDS:
-            # Overflow: voice overruns the window -> shorten. Underfull: voice far
-            # shorter than the source (often dropped content) -> complete it.
-            overflow = {t.anchor_id: (t.target_duration, t.tts_duration) for t in result.timings if t.needs_repair}
-            # Only restore lines that are clearly gutted (voice fills <40% of the
-            # window) — leftover window at natural pace is an intended pause, not a
-            # dropped idea, so we must not re-inflate it back into a rushed line.
-            block_anchor = {index: int(b.block_id) for index, b in enumerate([])}  # v3: unit ids come from runs
-            underfull = {}
-            for run in result.runs:
-                if not run.get("needs_expand"):
-                    continue
-                for unit_id in run["unit_ids"]:
-                    timing = next((t for t in result.timings if t.anchor_id == unit_id), None)
-                    if timing is not None:
-                        underfull[unit_id] = (timing.target_duration, timing.tts_duration)
+            overflow = {
+                t.sub_id: (window_of.get(t.sub_id, 0.0), t.tts_duration)
+                for t in result.timings
+                if t.tts_duration > window_of.get(t.sub_id, 0.0) + render_config.overflow_tolerance
+            }
+            # Underfill = the dub is far shorter than the caption while the SOURCE was
+            # actually speaking through it (a real pause is not dropped content).
+            underfull = {
+                t.sub_id: (window_of.get(t.sub_id, 0.0), t.tts_duration)
+                for t in result.timings
+                if window_of.get(t.sub_id, 0.0) >= 1.0
+                and t.tts_duration < window_of[t.sub_id] * settings.tts_expand_floor
+                and vad_of.get(t.sub_id, 0.0) >= window_of[t.sub_id] * 0.7
+            }
             if not overflow and not underfull:
                 break
             changed = 0
             if overflow:
-                speech_rows, n = repair(speech_rows, anchors, glossary, overflow, _polish_agent(settings), repair_cfg)
+                speech_rows, n = repair(speech_rows, sources, glossary, overflow, _polish_agent(settings), repair_cfg)
                 changed += n
-                logs.append(f"round {rounds + 1}: shortened {n} overflow anchors")
+                logs.append(f"round {rounds + 1}: shortened {n} over-budget rows")
             if underfull:
-                speech_rows, n = expand(speech_rows, anchors, glossary, underfull, _polish_agent(settings), repair_cfg)
+                speech_rows, n = expand(speech_rows, sources, glossary, underfull, _polish_agent(settings), repair_cfg)
                 changed += n
-                logs.append(f"round {rounds + 1}: completed {n} underfull anchors")
+                logs.append(f"round {rounds + 1}: completed {n} under-filled rows")
             rounds += 1
             if not changed:
                 break
-            result = render(speech_rows, anchors, render_config, work_dir, cache_dir, segments=segments, synth_client=synth_client)
+            result = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
             logs.append(f"render round {rounds}: {result.summary}")
 
-        # Assemble the final track once, after timings have converged.
+        # Assemble the final track once, after timings have converged. The display
+        # subtitles were already written by the QA stage from the same rows — their
+        # windows are the captions', so voice timing never rewrites them.
         assemble_voice(result, output_audio, work_dir, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)
         context.artifacts["speech_rows"] = speech_rows
-        # Voice and subtitle are built from the SAME sentence units. Time each
-        # sentence's caption within the REAL synthesized clip span (placement + voice
-        # duration), so the caption matches the dub's actual timing — from the TTS.
-        voice_windows = {
-            round(block_start, 3): (place, place + duration)
-            for block_start, (place, _path, duration, _glued) in zip(result.block_starts, result.placements)
-        }
-        cues = build_display_cues(speech_rows, settings.min_duration, anchors, segments, max_chars=settings.subtitle_max_line_chars, voice_windows=voice_windows, lead=settings.subtitle_lead)
-        write_subtitles(cues, context.artifacts["subtitle_json"], context.artifacts["subtitle_srt"])
-        context.artifacts["display_cues"] = cues
+        context.artifacts["timings"] = result.timings
 
         manifest = settings.tts_dir / f"{context.job_id}.tts.json"
         write_json(manifest, {"summary": result.summary, "timings": [asdict(t) for t in result.timings]})

@@ -101,6 +101,17 @@ def find_speech_holes(
     return [(round(a, 3), round(b, 3)) for a, b in ranges if b - a >= min_seconds - 1e-9]
 
 
+def speech_seconds(packed, start: float, end: float) -> float:
+    """VAD speech seconds inside ``[start, end]`` (the source speech a row covers)."""
+    if packed is None or end <= start:
+        return 0.0
+    probs, step = packed
+    lo, hi = int(start / step), min(len(probs), int(end / step) + 1)
+    if hi <= lo:
+        return 0.0
+    return sum(1 for value in probs[lo:hi] if value > 0.5) * step
+
+
 def speech_fraction(packed, start: float, end: float) -> float:
     if packed is None:
         return 0.0

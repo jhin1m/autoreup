@@ -86,17 +86,6 @@ class Unit:
     flags: list[str] = field(default_factory=list)
 
 @dataclass(slots=True)
-class Run:
-    """A stretch of continuous speech: consecutive units whose internal gap is
-    below the run gap (default 0.8s). Runs are the only places the voice timeline
-    anchors to the picture."""
-
-    id: int
-    unit_ids: list[int]
-    start: float
-    end: float
-
-@dataclass(slots=True)
 class SpeechRow:
     """The central artifact: one Vietnamese cue spoken + displayed."""
 

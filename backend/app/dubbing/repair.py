@@ -1,10 +1,10 @@
-"""Timing repair: shorten only the anchors whose speech overran their window.
+"""Timing fit: shorten lines that overrun the free time, complete lines that fall
+far short of the source speech (measured, per row).
 
-Driven by measured render timings, not a guess. For each over-budget anchor we
-compute a shorter character target (proportional to how far it overran), ask the
-LLM to rewrite under that target while keeping key facts, and accept only if the
-rewrite is genuinely shorter (by speech weight) and Han-free. Repair is local:
-other anchors are untouched.
+Every row carries a real caption window and a measured TTS duration, so the budget
+is a fact, not a guess: the free time is the gap until the next caption's picture,
+and the underfill budget is the VAD speech the row must cover. Rewrites are local
+(one row), accepted only when genuinely shorter/longer by speech weight and Han-free.
 """
 
 from __future__ import annotations
@@ -16,28 +16,25 @@ from .glossary import format_glossary
 from backend.app.agents import AgentConfig, complete
 
 from .tsv_io import parse_tsv_rows
-from .models import Anchor, GlossaryEntry, SpeechRow
+from .models import GlossaryEntry, SpeechRow
 from .prompts import EXPAND_SYSTEM, EXPAND_USER, REPAIR_SYSTEM, REPAIR_USER
-from .text import has_han, sanitize_caption, split_text_for_explicit_turns_only
+from .text import has_han, sanitize_caption
 from .weights import vi_speech_weight
 
-_MIN_TARGET_CHARS = 12
+_MIN_TARGET_CHARS = 8
 
 
 @dataclass(slots=True)
 class RepairConfig:
     target_scale: float = 0.92  # shrink target a touch below the proportional estimate
-    batch_anchors: int = 16
+    batch_rows: int = 16
     batch_workers: int = 4  # batches are independent -> call the LLM concurrently
 
 
 def _batched_rewrites(
     batches: list[str], system: str, llm: AgentConfig, workers: int
 ) -> dict[int, str]:
-    """Run one LLM call per prompt batch CONCURRENTLY and merge the rewrites.
-
-    A 30-min video's first repair round used to be ~9 serial LLM round-trips —
-    the single biggest avoidable wait in the voiceover stage."""
+    """Run one LLM call per prompt batch CONCURRENTLY and merge the rewrites."""
     def call(user: str) -> dict[int, str]:
         raw = complete(system, user, llm)
         return {int(c[0]): sanitize_caption(c[1]) for c in parse_tsv_rows(raw, expected_cols=2) if c[0].strip().isdigit()}
@@ -51,162 +48,123 @@ def _batched_rewrites(
 
 @dataclass(slots=True)
 class RepairTarget:
-    anchor_id: int
+    sub_id: int
     target_chars: int
 
 
-def _group(rows: list[SpeechRow]) -> dict[int, list[SpeechRow]]:
-    grouped: dict[int, list[SpeechRow]] = {}
-    for row in rows:
-        grouped.setdefault(row.anchor_id, []).append(row)
-    return grouped
-
-
 def compute_targets(
-    grouped: dict[int, list[SpeechRow]],
-    overflow_by_anchor: dict[int, tuple[float, float]],
+    rows: dict[int, SpeechRow],
+    overflow: dict[int, tuple[float, float]],
     config: RepairConfig,
 ) -> list[RepairTarget]:
-    """``overflow_by_anchor`` maps anchor_id -> (target_duration, tts_duration)."""
+    """``overflow`` maps sub_id -> (free_seconds, measured_seconds)."""
     targets: list[RepairTarget] = []
-    for anchor_id, (target_duration, tts_duration) in overflow_by_anchor.items():
-        rows = grouped.get(anchor_id)
-        if not rows or tts_duration <= 0:
+    for sub_id, (free_seconds, measured) in overflow.items():
+        row = rows.get(sub_id)
+        if row is None or measured <= 0:
             continue
-        current_chars = sum(len(r.text) for r in rows)
-        ratio = max(0.3, min(1.0, target_duration / tts_duration)) * config.target_scale
-        target_chars = max(_MIN_TARGET_CHARS, int(current_chars * ratio))
-        targets.append(RepairTarget(anchor_id=anchor_id, target_chars=target_chars))
+        ratio = max(0.3, min(1.0, free_seconds / measured)) * config.target_scale
+        target_chars = max(_MIN_TARGET_CHARS, int(len(row.text) * ratio))
+        targets.append(RepairTarget(sub_id=sub_id, target_chars=target_chars))
     return targets
 
 
-def _format_repair_rows(targets: list[RepairTarget], amap: dict[int, Anchor], grouped: dict[int, list[SpeechRow]]) -> str:
+def _format_rows(targets: list[RepairTarget], rows: dict[int, SpeechRow], sources: dict[int, str], budget: dict[int, float], measured: dict[int, float]) -> str:
     lines = []
     for target in targets:
-        anchor = amap[target.anchor_id]
-        current = " ⟂ ".join(r.text for r in grouped[target.anchor_id])
-        # ≤N (same shape as the translate input) so an echoed budget is caught by
-        # sanitize_caption — a bare number leaked into a caption verbatim before.
-        lines.append(f"{target.anchor_id}\t≤{target.target_chars}\t{anchor.source_zh}\t{current}")
+        row = rows[target.sub_id]
+        # seconds columns only as context; an echoed number is caught by sanitize_caption
+        lines.append(
+            f"{target.sub_id}\t{measured[target.sub_id]:.1f}s\t{budget[target.sub_id]:.1f}s\t"
+            f"{sources.get(target.sub_id, '')}\t{row.text}"
+        )
     return "\n".join(lines)
 
 
-def _rebuild_rows(anchor: Anchor, text: str) -> list[SpeechRow]:
-    # One row per unit (split only on explicit turns): caption sizing belongs to
-    # the display reflow. TTS rejoins the rows per unit, so audio is unaffected.
-    parts = split_text_for_explicit_turns_only(text) or [text]
-    return [
-        SpeechRow(
-            sub_id=0,
-            anchor_id=anchor.id,
-            anchor_start=anchor.start,
-            anchor_end=anchor.end,
-            source_ids=anchor.source_ids,
-            text=part,
-        )
-        for part in parts
-    ]
+def _apply_rewrites(
+    speech_rows: list[SpeechRow],
+    candidates: dict[int, str],
+    accept,
+) -> tuple[list[SpeechRow], int]:
+    """Return a NEW row list with the accepted rewrites; never mutates the input."""
+    changed = 0
+    out: list[SpeechRow] = []
+    for row in speech_rows:
+        text = candidates.get(row.sub_id)
+        if text and not has_han(text) and accept(row, text):
+            out.append(SpeechRow(row.sub_id, row.anchor_id, row.anchor_start, row.anchor_end, row.source_ids, text))
+            changed += 1
+        else:
+            out.append(SpeechRow(row.sub_id, row.anchor_id, row.anchor_start, row.anchor_end, row.source_ids, row.text))
+    return out, changed
 
 
 def repair(
     speech_rows: list[SpeechRow],
-    anchors: list[Anchor],
+    sources: dict[int, str],
     glossary: list[GlossaryEntry],
-    overflow_by_anchor: dict[int, tuple[float, float]],
+    overflow: dict[int, tuple[float, float]],
     llm: AgentConfig,
     config: RepairConfig | None = None,
 ) -> tuple[list[SpeechRow], int]:
     config = config or RepairConfig()
-    amap = {a.id: a for a in anchors}
-    grouped = _group(speech_rows)
-    targets = [t for t in compute_targets(grouped, overflow_by_anchor, config) if t.anchor_id in amap]
+    by_id = {row.sub_id: row for row in speech_rows}
+    targets = compute_targets(by_id, overflow, config)
     if not targets:
         return speech_rows, 0
 
+    budget = {t.sub_id: overflow[t.sub_id][0] for t in targets}
+    measured = {t.sub_id: overflow[t.sub_id][1] for t in targets}
     batches = [
         REPAIR_USER.format(
             glossary=format_glossary(glossary),
-            anchors=_format_repair_rows(targets[start : start + config.batch_anchors], amap, grouped),
+            rows=_format_rows(targets[start : start + config.batch_rows], by_id, sources, budget, measured),
         )
-        for start in range(0, len(targets), config.batch_anchors)
+        for start in range(0, len(targets), config.batch_rows)
     ]
     rewrites = _batched_rewrites(batches, REPAIR_SYSTEM, llm, config.batch_workers)
 
-    repaired = 0
-    for target in targets:
-        text = rewrites.get(target.anchor_id)
-        if not text or has_han(text):
-            continue
-        current_weight = sum(vi_speech_weight(r.text) for r in grouped[target.anchor_id])
-        if vi_speech_weight(text) >= current_weight:
-            continue  # not actually shorter -> reject
-        grouped[target.anchor_id] = _rebuild_rows(amap[target.anchor_id], text)
-        repaired += 1
-
-    out: list[SpeechRow] = []
-    for anchor in anchors:
-        for row in grouped.get(anchor.id, []):
-            row.sub_id = len(out)
-            out.append(row)
-    return out, repaired
-
-
-def _format_expand_rows(anchor_ids: list[int], amap: dict[int, Anchor], grouped: dict[int, list[SpeechRow]], window: dict[int, float]) -> str:
-    lines = []
-    for anchor_id in anchor_ids:
-        current = " ⟂ ".join(r.text for r in grouped[anchor_id])
-        # ≈Ns so an echoed window duration is caught by sanitize_caption.
-        lines.append(f"{anchor_id}\t≈{window[anchor_id]:.1f}s\t{amap[anchor_id].source_zh}\t{current}")
-    return "\n".join(lines)
+    return _apply_rewrites(
+        speech_rows,
+        rewrites,
+        lambda row, text: vi_speech_weight(text) < vi_speech_weight(row.text),  # must be shorter
+    )
 
 
 def expand(
     speech_rows: list[SpeechRow],
-    anchors: list[Anchor],
+    sources: dict[int, str],
     glossary: list[GlossaryEntry],
-    underfull_by_anchor: dict[int, tuple[float, float]],
+    underfull: dict[int, tuple[float, float]],
     llm: AgentConfig,
     config: RepairConfig | None = None,
 ) -> tuple[list[SpeechRow], int]:
-    """Complete anchors whose voice is far shorter than the source window.
+    """Complete rows whose voice is far shorter than the source speech.
 
-    ``underfull_by_anchor`` maps anchor_id -> (window_seconds, tts_duration). The
-    voice being much shorter than the source usually means the translation dropped
-    content; ask the LLM to restore the full source meaning (no invention). Accept
-    only a meaningfully longer rewrite; if the LLM judges the line complete and
-    keeps it, leave it unchanged.
+    ``underfull`` maps sub_id -> (source_speech_seconds, measured_seconds). The LLM
+    may keep a line it judges complete; only a meaningfully longer rewrite is accepted.
     """
     config = config or RepairConfig()
-    amap = {a.id: a for a in anchors}
-    grouped = _group(speech_rows)
-    ids = [aid for aid in underfull_by_anchor if aid in amap and aid in grouped]
+    by_id = {row.sub_id: row for row in speech_rows}
+    ids = [sub_id for sub_id in underfull if sub_id in by_id]
     if not ids:
         return speech_rows, 0
-    window = {aid: underfull_by_anchor[aid][0] for aid in ids}
+    speech = {sub_id: underfull[sub_id][0] for sub_id in ids}
+    measured = {sub_id: underfull[sub_id][1] for sub_id in ids}
 
+    # reuse the repair formatter with the speech budget in the "budget" column
+    targets = [RepairTarget(sub_id=sub_id, target_chars=len(by_id[sub_id].text)) for sub_id in ids]
     batches = [
         EXPAND_USER.format(
             glossary=format_glossary(glossary),
-            anchors=_format_expand_rows(ids[start : start + config.batch_anchors], amap, grouped, window),
+            rows=_format_rows(targets[start : start + config.batch_rows], by_id, sources, speech, measured),
         )
-        for start in range(0, len(ids), config.batch_anchors)
+        for start in range(0, len(ids), config.batch_rows)
     ]
     rewrites = _batched_rewrites(batches, EXPAND_SYSTEM, llm, config.batch_workers)
 
-    expanded = 0
-    for anchor_id in ids:
-        text = rewrites.get(anchor_id)
-        if not text or has_han(text):
-            continue
-        current_weight = sum(vi_speech_weight(r.text) for r in grouped[anchor_id])
-        if vi_speech_weight(text) <= current_weight * 1.1:
-            continue  # not meaningfully longer -> keep current (line was complete)
-        grouped[anchor_id] = _rebuild_rows(amap[anchor_id], text)
-        expanded += 1
-
-    out: list[SpeechRow] = []
-    for anchor in anchors:
-        for row in grouped.get(anchor.id, []):
-            row.sub_id = len(out)
-            out.append(row)
-    return out, expanded
+    return _apply_rewrites(
+        speech_rows,
+        {sub_id: rewrites[sub_id] for sub_id in ids if sub_id in rewrites},
+        lambda row, text: vi_speech_weight(text) > vi_speech_weight(row.text) * 1.1,  # meaningfully longer
+    )

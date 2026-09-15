@@ -1,8 +1,9 @@
 """ASR rail helpers: parse the worker's SRT into micro-segments.
 
-ASR micro-segments are the hard timing rail — they are preserved exactly and are
-never merged away. Semantic units (``units.build_units``) are built on top of them
-for translation; the timeline (``timeline.plan_timeline``) groups them into runs.
+ASR/OCR captions are the hard timing rail — preserved exactly, never merged away.
+Each caption becomes one translated row (``translate``) and one placed voice clip
+(``timeline.plan_rows``); semantic units (``units.build_units``) group captions for
+translation context only.
 """
 
 from __future__ import annotations

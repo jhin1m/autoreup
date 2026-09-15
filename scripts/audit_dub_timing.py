@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Audit dub timing on finished artifacts — evidence only, never touches the pipeline.
 
-Reads:  subtitles/<job>.anchors.tsv, subtitles/<job>.speech.tsv,
+Reads:  subtitles/<job>.speech.tsv, subtitles/<job>.segments.tsv,
         tts/<job>.tts.json, tts/<job>.voice.m4a (optional),
         subtitles/<job>.qa.json (optional), subtitles/<job>.glossary.json (optional)
 
 Reports per job:
-  * underfill per anchor (target vs tts duration) — how often the dub undershoots
-  * source pause histogram — validates the run-gap threshold
-  * speech runs: voice total vs run duration ("dead air inside runs")
-  * simulated placement with the CURRENT scheduler (glue_gap/max_lead) —
-    artificial intra-run silence, early-lead drift
+  * caption coverage: how many rail captions got a Vietnamese row
+  * fill per row: measured voice vs the caption's free time and vs the VAD speech
+  * simulated placement with the shipped per-row planner (lead, lateness, pauses,
+    overflow) — the numbers the fit loop is graded on
   * real pauses in the produced voice track (ffmpeg silencedetect)
-  * subtitle shape: rows/anchor, mid-sentence rows, overlong cues, glossary variants
+  * subtitle shape: rows, mid-sentence rows, overlong cues, glossary variants
 
 Usage: .venv/bin/python scripts/audit_dub_timing.py <job_id> [<job_id> ...]
 Writes data/audit/<job>.json and prints a summary table.
@@ -29,36 +28,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-RUN_GAP = 0.8          # a source pause below this is "same speech run"
-GLUE_GAP = 0.30        # current scheduler: below this = glued (no absolute onset)
-MAX_LEAD = 0.3         # current scheduler: never start earlier than source - this
-CROSSFADE = 0.06
-AUDIBLE_GAP = 0.15     # a silence this long inside a run is audible choppiness
+AUDIBLE_GAP = 0.15
 
 sys.path.insert(0, str(ROOT))
-from backend.app.dubbing.models import Unit  # noqa: E402
-from backend.app.dubbing.timeline import TimelineConfig, plan_timeline  # noqa: E402
+from backend.app.dubbing.models import AsrSegment, SpeechRow  # noqa: E402
+from backend.app.dubbing.onset import _speech_probs  # noqa: E402
+from backend.app.dubbing.coverage import speech_seconds  # noqa: E402
+from backend.app.dubbing.timeline import TimelineConfig, plan_rows, summarize  # noqa: E402
 
 
-def read_anchors(job: str) -> list[dict]:
-    path = DATA / "subtitles" / f"{job}.anchors.tsv"
-    rows = list(csv.DictReader(path.open(), delimiter="\t"))
-    return [{"id": int(r["ID"]), "start": float(r["START"]), "end": float(r["END"]), "zh": r["SOURCE_ZH"]} for r in rows]
+def read_rows(job: str) -> list[SpeechRow]:
+    path = DATA / "subtitles" / f"{job}.speech.tsv"
+    return [SpeechRow.from_row(r) for r in csv.DictReader(path.open(), delimiter="\t")]
+
+
+def read_segments(job: str) -> list[AsrSegment]:
+    path = DATA / "subtitles" / f"{job}.segments.tsv"
+    return [AsrSegment.from_row(r) for r in csv.DictReader(path.open(), delimiter="\t")]
 
 
 def read_timings(job: str) -> dict[int, dict]:
     data = json.loads((DATA / "tts" / f"{job}.tts.json").read_text())
-    return {int(t["anchor_id"]): t for t in data.get("timings", [])}
-
-
-def group_runs(anchors: list[dict], gap: float = RUN_GAP) -> list[list[dict]]:
-    runs: list[list[dict]] = []
-    for anchor in anchors:
-        if runs and anchor["start"] - runs[-1][-1]["end"] < gap:
-            runs[-1].append(anchor)
-        else:
-            runs.append([anchor])
-    return runs
+    # new jobs key by sub_id; old artifacts keyed by anchor_id must not crash the audit
+    return {int(t.get("sub_id", t.get("anchor_id", -1))): t for t in data.get("timings", [])}
 
 
 def silence_events(voice: Path) -> list[dict]:
@@ -82,70 +74,51 @@ def silence_events(voice: Path) -> list[dict]:
 
 
 def audit_job(job: str) -> dict:
-    anchors = read_anchors(job)
+    rows = read_rows(job)
+    segments = read_segments(job)
     timings = read_timings(job)
-    report: dict = {"job": job, "anchors": len(anchors)}
+    report: dict = {"job": job, "rows": len(rows), "captions": len(segments)}
 
-    # 1) underfill
-    under = [
-        (t["target_duration"] - t["tts_duration"]) / max(0.001, t["target_duration"])
-        for t in timings.values()
-        if t["target_duration"] > 0
+    # 1) caption coverage (every rail caption must have a row on its own window)
+    by_caption = {}
+    for row in rows:
+        lo, _, _hi = row.source_ids.partition("-")
+        by_caption[int(lo)] = row if lo.strip().isdigit() else None
+    missing = [s.id for s in segments if s.id not in by_caption]
+    misaligned = sum(
+        1
+        for s in segments
+        if (row := by_caption.get(s.id)) is not None and (abs(row.anchor_start - s.start) > 0.01 or abs(row.anchor_end - s.end) > 0.01)
+    )
+    report["coverage"] = {"missing": len(missing), "misaligned": misaligned, "first_missing": missing[:5]}
+
+    # 2) fill per row: measured voice vs free time and vs the source speech (VAD)
+    video = DATA / "videos" / f"{job}.mp4"
+    packed = _speech_probs(video) if video.exists() else None
+    speech_budget = {}
+    for index, row in enumerate(rows):
+        limit = rows[index + 1].anchor_start if index + 1 < len(rows) else row.anchor_end + 0.5
+        speech_budget[row.sub_id] = speech_seconds(packed, row.anchor_start - 0.2, max(limit, row.anchor_end))
+    measured = {sub_id: t["tts_duration"] for sub_id, t in timings.items()}
+    ratios = [measured[s] / speech_budget[s] for s in speech_budget if speech_budget[s] >= 1.0 and s in measured]
+    over_budget = [
+        s for s, t in timings.items() if t.get("free_after", -1) > 0 and t["tts_duration"] > t["free_after"] + 0.15
     ]
-    voice_total = sum(t["tts_duration"] for t in timings.values())
-    source_total = sum(t["target_duration"] for t in timings.values())
-    under_sorted = sorted(under)
-    report["underfill"] = {
-        "median": round(under_sorted[len(under) // 2], 3) if under else None,
-        "gt_25pct": sum(1 for x in under if x > 0.25),
-        "gt_40pct": sum(1 for x in under if x > 0.40),
-        "voice_to_source_ratio": round(voice_total / max(0.001, source_total), 3),
+    ratios.sort()
+    report["fill"] = {
+        "median_voice_over_speech": round(ratios[len(ratios) // 2], 3) if ratios else None,
+        "rows_below_70pct": sum(1 for r in ratios if r < 0.7),
+        "rows_over_free_time": len(over_budget),
+        "max_overflow_ms": max((t.get("overflow_ms", 0) for t in timings.values()), default=0),
     }
 
-    # 2) source pause histogram
-    gaps = [b["start"] - a["end"] for a, b in zip(anchors, anchors[1:])]
-    report["source_pause_hist"] = {
-        "<0.3": sum(1 for g in gaps if g < 0.3),
-        "0.3-0.8": sum(1 for g in gaps if 0.3 <= g < 0.8),
-        "0.8-1.5": sum(1 for g in gaps if 0.8 <= g < 1.5),
-        ">1.5": sum(1 for g in gaps if g >= 1.5),
-    }
+    # 3) the shipped planner, re-run on the measured durations (what the fit loop grades)
+    plans = plan_rows(rows, measured, TimelineConfig())
+    summary = summarize(plans)
+    report["timeline"] = summary
+    report["timeline"]["audible_pauses_ge_150ms"] = sum(1 for p in plans if p.gap_before > AUDIBLE_GAP)
 
-    # 3) runs: dead air if the whole run were played at source boundaries
-    runs = group_runs(anchors)
-    run_slack = []
-    for run in runs:
-        run_dur = run[-1]["end"] - run[0]["start"]
-        voice = sum(timings[a["id"]]["tts_duration"] for a in run if a["id"] in timings)
-        run_slack.append({"first": run[0]["id"], "last": run[-1]["id"], "run_dur": round(run_dur, 2),
-                          "voice": round(voice, 2), "slack_ratio": round((run_dur - voice) / max(0.001, run_dur), 3)})
-    worst = sorted(run_slack, key=lambda r: -r["slack_ratio"])[:5]
-    report["runs"] = {
-        "count": len(runs),
-        "silent_ratio": round(1 - voice_total / max(0.001, sum(r["run_dur"] for r in run_slack)), 3),
-        "slack_gt_25pct": sum(1 for r in run_slack if r["slack_ratio"] > 0.25),
-        "worst": worst,
-    }
-
-    # 4) v3 timeline plan for the same units (the shipped planner)
-    units = [Unit(id=a["id"], segment_ids="", start=a["start"], end=a["end"], source_zh="") for a in anchors]
-    plans = plan_timeline(units, {a["id"]: timings[a["id"]]["tts_duration"] for a in anchors if a["id"] in timings}, TimelineConfig())
-    intra_silence = 0.0
-    early = []
-    for plan in plans:
-        for placement in plan.placements[1:]:
-            if placement.breath_before > AUDIBLE_GAP:
-                intra_silence += placement.breath_before
-        early.extend(p.early_lead for p in plan.placements)
-    report["timeline_v3"] = {
-        "intra_run_silence_s": round(intra_silence, 2),
-        "intra_run_silence_pct_of_voice": round(intra_silence / max(0.001, voice_total) * 100, 1),
-        "max_early_lead_s": round(max(early), 2) if early else None,
-        "runs_need_expand": sum(1 for p in plans if p.needs_expand),
-        "runs": len(plans),
-    }
-
-    # 5) real pauses in the produced voice track
+    # 4) real pauses in the produced voice track
     events = silence_events(DATA / "tts" / f"{job}.voice.m4a")
     long = [e for e in events if e["duration"] >= 0.3]
     report["voice_track"] = {
@@ -155,12 +128,8 @@ def audit_job(job: str) -> dict:
         "longest_pause_s": round(max((e["duration"] for e in events), default=0), 2),
     }
 
-    # 6) subtitle shape + glossary hygiene
-    speech = list(csv.DictReader((DATA / "subtitles" / f"{job}.speech.tsv").open(), delimiter="\t"))
-    per_anchor = {}
-    for r in speech:
-        per_anchor.setdefault(r["ANCHOR_ID"], []).append(r["TEXT"])
-    mid = sum(1 for r in speech if r["TEXT"] and not r["TEXT"].rstrip().endswith((".", "!", "?", "…", ":", '"')))
+    # 5) subtitle shape + glossary hygiene
+    mid = sum(1 for r in rows if r.text and not r.text.rstrip().endswith((".", "!", "?", "…", ":", '"')))
     overlong = None
     manifest_path = DATA / "jobs" / f"{job}" / "manifest.json"
     if manifest_path.exists():
@@ -173,8 +142,7 @@ def audit_job(job: str) -> dict:
     if glossary_path.exists():
         variants = sum(1 for e in json.loads(glossary_path.read_text()) if "/" in e.get("term_vi", ""))
     report["subtitle_shape"] = {
-        "rows": len(speech),
-        "rows_per_anchor": round(len(speech) / max(1, len(per_anchor)), 2),
+        "rows": len(rows),
         "rows_mid_sentence": mid,
         "overlong_display_cues": overlong,
         "glossary_multi_variant": variants,

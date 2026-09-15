@@ -4,9 +4,10 @@ One coherent design, not per-genre tables:
   * GLOSSARY analyses the WHOLE transcript once and produces the "show bible" —
     consistent term/name translations plus, for each character, gender + a fixed
     Vietnamese address term inferred from full context (not the unreliable 他/她).
-  * TRANSLATE turns Chinese anchors into natural, meaning-based Vietnamese condensed
-    to each line's speaking-time budget, using the glossary's cast for consistent
-    pronouns.
+  * TRANSLATE turns a unit's captions into natural, meaning-based Vietnamese — one
+    line per caption, using the glossary's cast for consistent pronouns. Timing is
+    never budgeted in the prompt: the render measures the voice and the fit loop
+    (REPAIR/EXPAND) closes the gap.
   * REPAIR / EXPAND fit the voice to its window, driven by MEASURED render timings
     only — no blanket editor pass (rewriting half the anchors bred more artifacts
     than it fixed).
@@ -52,13 +53,13 @@ GLOSSARY_USER = (
     "Trả về bảng TSV (TERM_ZH<TAB>TERM_VI<TAB>KIND<TAB>NOTE)."
 )
 
-# --- Translate v3: units in, units out — no char budget, no caption split ---
+# --- Translate v3: caption in, caption out (one Vietnamese line per caption) ---
 
 TRANSLATE_SYSTEM = (
     "Bạn là người THUYẾT MINH reup phim Việt CÓ DUYÊN — kiểu kênh kể chuyện triệu view. Bạn nhận từng "
-    "ĐƠN VỊ CÂU (một câu/đoạn nguồn hoàn chỉnh) — nguồn có thể là TIẾNG TRUNG hoặc TIẾNG NHẬT (anime gốc) — "
-    "và viết lời Việt TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT cho đúng câu đó. Tên riêng tiếng Nhật phiên âm romaji chuẩn "
-    "(vd Tanjiro), TUYỆT ĐỐI không Hán-Việt hoá tên Nhật.\n"
+    "ĐƠN VỊ CÂU (một câu/đoạn nguồn hoàn chỉnh) đã tách thành các DÒNG CAPTION — nguồn có thể là TIẾNG TRUNG "
+    "hoặc TIẾNG NHẬT (anime gốc) — và viết lời Việt TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT cho đúng đơn vị đó. Tên riêng "
+    "tiếng Nhật phiên âm romaji chuẩn (vd Tanjiro), TUYỆT ĐỐI không Hán-Việt hoá tên Nhật.\n"
     "1. DỊCH THEO NGHĨA như người Việt kể lại — KHÔNG dịch sát từng chữ, không bê cấu trúc hay âm Hán-Việt.\n"
     "2. THÀNH NGỮ/ĐIỂN CỐ gốc Hán: dịch NGHĨA THƯỜNG (先到先得 → 'ai nhanh chân thì được'), KHÔNG phiên âm "
     "Hán-Việt thành cụm bốn chữ sáo.\n"
@@ -66,9 +67,15 @@ TRANSLATE_SYSTEM = (
     "ở cao trào. TUYỆT ĐỐI không bịa tình tiết, không thêm bình luận ngoài nội dung.\n"
     "4. XƯNG HÔ theo GLOSSARY, nhất quán; không dùng đại từ miệt thị cho nhân vật trung tính/chính diện.\n"
     "5. NGỮ CẢNH TRƯỚC (2 đơn vị liền trước) chỉ để nối mạch — KHÔNG dịch lại phần đó.\n"
-    "6. Dùng ⟂ (CHỈ ký tự này) giữa hai LƯỢT THOẠI KHÁC NGƯỜI trong cùng đơn vị; không dùng | / để ngắt.\n"
+    "6. TRẢ VỀ ĐÚNG MỘT DÒNG CHO MỖI CAPTION ID, giữ nguyên ID. Mỗi dòng là lời Việt của caption đó, đọc lên "
+    "nghe liền mạch với các dòng quanh nó (đây là lời nói, không phải phụ đề rời). Câu có thể tràn qua 2-3 "
+    "caption theo đúng thứ tự — đừng lặp ý, đừng bỏ ý; chỉ dùng ⟂ (CHỈ ký tự này) khi HAI NGƯỜI khác nhau nói "
+    "trong cùng một caption; không dùng | / để ngắt.\n"
+    "7. ĐỌC VỪA THỜI LƯỢNG: mỗi dòng có kèm ~Ns (~N ký tự) — đó là thời gian caption đó hiện trên hình. Lời "
+    "Việt phải đọc hết trong ngần ấy giây ở tốc độ nói tự nhiên. Ý dài hơn thời lượng thì RÚT GỌN CÁCH NÓI "
+    "(bỏ từ đệm, đại từ thừa, lặp ý) — KHÔNG bỏ sự kiện, KHÔNG viết tắt khó hiểu.\n"
     "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
-    "UNIT_ID<TAB>TEXT"
+    "CAPTION_ID<TAB>TEXT"
 )
 
 TRANSLATE_USER = (
@@ -76,8 +83,9 @@ TRANSLATE_USER = (
     "BỐI CẢNH/NHÂN VẬT người dùng cung cấp (ưu tiên tuyệt đối):\n{notes}\n\n"
     "NGỮ CẢNH TRƯỚC — nguồn (không dịch):\n{prev_source}\n"
     "NGỮ CẢNH TRƯỚC — lời Việt đã viết (tham khảo giọng văn, không dịch lại):\n{prev_vi}\n\n"
-    "CÁC ĐƠN VỊ CẦN DỊCH — UNIT_ID<TAB>SOURCE_ZH:\n{units}\n\n"
-    "Viết lời Việt cho MỌI UNIT_ID ở trên. Chỉ TSV."
+    "CÁC ĐƠN VỊ CẦN DỊCH — mỗi đơn vị gồm các caption theo thứ tự "
+    "(CAPTION_ID<TAB>THỜI LƯỢNG<TAB>SOURCE_ZH):\n{units}\n\n"
+    "Viết lời Việt cho MỌI CAPTION_ID ở trên, đúng một dòng mỗi ID, đọc vừa thời lượng ghi kèm. Chỉ TSV."
 )
 
 # --- Normalize: fix ASR recognition noise (keep meaning) ---------------------
@@ -106,50 +114,50 @@ EDIT_SYSTEM = (
     "CẤM: thêm/bớt sự kiện, đổi ai-làm-gì, thêm số liệu/tên mới, bình luận ngoài thoại. Dòng nào đã ổn — "
     "chép y nguyên.\n"
     "Output DUY NHẤT là TSV, không markdown, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
-    "UNIT_ID<TAB>TEXT"
+    "CAPTION_ID<TAB>TEXT"
 )
 
 EDIT_USER = (
     "GLOSSARY:\n{glossary}\n\n"
-    "CÁC DÒNG (UNIT_ID<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{rows}\n\n"
-    "Trả về MỌI UNIT_ID (dòng ổn thì chép y nguyên). Chỉ TSV."
+    "CÁC DÒNG (CAPTION_ID<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{rows}\n\n"
+    "Trả về MỌI CAPTION_ID (dòng ổn thì chép y nguyên). Chỉ TSV."
 )
 
-# --- Repair: shorten over-budget units -------------------------------------
+# --- Repair: shorten over-budget lines (measured seconds, not guesses) -------
 
 REPAIR_SYSTEM = (
-    "Bạn rút gọn lời lồng tiếng Việt cho khớp thời lượng. Mỗi anchor có lời hiện đọc QUÁ DÀI so với khung "
-    "giờ. Viết lại NGẮN HƠN nhưng giữ trọn fact then chốt (số liệu, tên theo glossary, phủ định, nhân quả) "
-    "và đúng XƯNG HÔ theo glossary; bỏ chữ thừa/filler; vẫn tự nhiên, dễ nghe.\n"
+    "Bạn rút gọn lời lồng tiếng Việt cho khớp thời lượng. Mỗi dòng có lời hiện đọc QUÁ DÀI so với thời gian "
+    "trống trước câu kế tiếp. Viết lại NGẮN HƠN nhưng giữ trọn fact then chốt (số liệu, tên theo glossary, "
+    "phủ định, nhân quả) và đúng XƯNG HÔ theo glossary; bỏ chữ thừa/filler; vẫn tự nhiên, dễ nghe.\n"
     "Output DUY NHẤT là TSV, không markdown, KHÔNG Hán tự, mỗi dòng:\n"
-    "ANCHOR_ID<TAB>TEXT\n"
+    "SUB_ID<TAB>TEXT\n"
     "Mỗi bản viết lại phải NGẮN HƠN bản cũ. Giữ ⟂ nếu cần tách lượt thoại. Viết như lời nói: câu ngắn, "
     "dấu phẩy chỉ khi ngữ pháp cần — không chèn phẩy để chia cụm."
 )
 
 REPAIR_USER = (
     "GLOSSARY:\n{glossary}\n\n"
-    "CÁC ANCHOR QUÁ DÀI (ANCHOR_ID<TAB>≤CHARS<TAB>SOURCE_ZH<TAB>CURRENT_VI — cột ≤CHARS là ngân sách, "
-    "KHÔNG chép vào TEXT):\n{anchors}\n\n"
-    "Viết lại ngắn hơn cho mọi ANCHOR_ID. Chỉ TSV."
+    "CÁC DÒNG QUÁ DÀI (SUB_ID<TAB>ĐANG ĐỌC<TAB>NGÂN SÁCH<TAB>SOURCE_ZH<TAB>CURRENT_VI — hai cột thời "
+    "lượng chỉ để tham khảo, KHÔNG chép vào TEXT):\n{rows}\n\n"
+    "Viết lại ngắn hơn cho mọi SUB_ID. Chỉ TSV."
 )
 
-# --- Expand: complete anchors that dropped source content -------------------
+# --- Expand: complete lines that dropped source content ---------------------
 
 EXPAND_SYSTEM = (
-    "Bạn là biên tập lồng tiếng Việt. Mỗi anchor có lời Việt hiện đọc QUÁ NGẮN so với câu gốc — thường vì "
-    "đã BỎ SÓT ý của câu gốc.\n"
-    "Với mỗi anchor: nếu lời Việt đã truyền đạt ĐỦ ý câu gốc thì GIỮ NGUYÊN; nếu còn THIẾU ý, viết lại "
+    "Bạn là biên tập lồng tiếng Việt. Mỗi dòng có lời Việt hiện đọc QUÁ NGẮN so với thời lượng thoại gốc — "
+    "thường vì đã BỎ SÓT ý của câu gốc.\n"
+    "Với mỗi dòng: nếu lời Việt đã truyền đạt ĐỦ ý câu gốc thì GIỮ NGUYÊN; nếu còn THIẾU ý, viết lại "
     "ĐẦY ĐỦ toàn bộ ý câu gốc, tự nhiên, dài hơn cho khớp thời lượng thoại gốc, đúng XƯNG HÔ theo glossary. "
     "TUYỆT ĐỐI không bịa thông tin ngoài câu gốc.\n"
     "Viết như lời nói: câu ngắn, dấu phẩy chỉ khi ngữ pháp cần — không chèn phẩy để chia cụm.\n"
     "Output DUY NHẤT là TSV, KHÔNG Hán tự, mỗi dòng:\n"
-    "ANCHOR_ID<TAB>TEXT"
+    "SUB_ID<TAB>TEXT"
 )
 
 EXPAND_USER = (
     "GLOSSARY:\n{glossary}\n\n"
-    "CÁC ANCHOR ĐỌC QUÁ NGẮN (ANCHOR_ID<TAB>≈GIÂY_GỐC<TAB>SOURCE_ZH<TAB>CURRENT_VI — cột ≈GIÂY_GỐC là "
-    "thời lượng, KHÔNG chép vào TEXT):\n{anchors}\n\n"
-    "Trả về lời Việt đầy đủ (hoặc giữ nguyên) cho mọi ANCHOR_ID. Chỉ TSV."
+    "CÁC DÒNG ĐỌC QUÁ NGẮN (SUB_ID<TAB>ĐANG ĐỌC<TAB>THOẠI GỐC<TAB>SOURCE_ZH<TAB>CURRENT_VI — hai cột thời "
+    "lượng chỉ để tham khảo, KHÔNG chép vào TEXT):\n{rows}\n\n"
+    "Trả về lời Việt đầy đủ (hoặc giữ nguyên) cho mọi SUB_ID. Chỉ TSV."
 )

@@ -1,100 +1,62 @@
-from backend.app.dubbing.models import Unit
-from backend.app.dubbing.timeline import TimelineConfig, build_runs, plan_run, plan_timeline, summarize
+from backend.app.dubbing.models import SpeechRow
+from backend.app.dubbing.timeline import TimelineConfig, plan_rows, summarize
 
 
-def _units(spans: list[tuple[int, float, float]]) -> list[Unit]:
-    return [Unit(id=i, segment_ids=f"{i}-{i}", start=s, end=e, source_zh=f"u{i}") for i, (s, e) in enumerate(spans)]
+def _rows(spans: list[tuple[float, float]]) -> list[SpeechRow]:
+    return [SpeechRow(i, 0, s, e, f"{i}-{i}", f"line {i}") for i, (s, e) in enumerate(spans)]
 
 
-def test_build_runs_splits_only_on_real_pauses():
-    units = _units([(0.0, 2.0), (2.2, 4.0), (4.9, 6.0), (8.0, 9.0)])
-    runs = build_runs(units, TimelineConfig(run_gap=0.8))
-    assert [(r.start, r.end, len(r.unit_ids)) for r in runs] == [(0.0, 4.0, 2), (4.9, 6.0, 1), (8.0, 9.0, 1)]
+def test_rows_anchor_to_their_own_caption():
+    # four 2s captions 3s apart; each voice is 1s -> every clip starts at its caption
+    rows = _rows([(0.0, 2.0), (3.0, 5.0), (6.0, 8.0), (9.0, 11.0)])
+    plans = plan_rows(rows, {i: 1.0 for i in range(4)}, TimelineConfig(lead=0.0))
+    assert [p.place_start for p in plans] == [0.0, 3.0, 6.0, 9.0]
+    assert all(p.tempo == 1.0 for p in plans)
+    assert all(p.early_lead == 0.0 for p in plans)
 
 
-def test_sentence_boundary_gets_a_floor_even_when_sources_touch():
-    # two sentences split inside one unit: block gap is 0, but the period must buy a pause
-    units = _units([(0.0, 5.0), (5.0, 10.0)])
-    plan = plan_run(build_runs(units)[0], units, {0: 4.0, 1: 4.0}, TimelineConfig(), min_breaths={1: 0.3})
-    assert plan.placements[1].breath_before >= 0.3 - 1e-6
+def test_short_voice_does_not_drift_ahead_across_rows():
+    # the old run-packing model packed these onto 0-4s and left the tail silent;
+    # per-row re-anchoring can never end up more than `lead` ahead of the picture
+    rows = _rows([(0.0, 2.0), (10.0, 12.0), (20.0, 22.0), (30.0, 32.0)])
+    plans = plan_rows(rows, {i: 0.5 for i in range(4)}, TimelineConfig(lead=0.0))
+    assert [p.place_start for p in plans] == [0.0, 10.0, 20.0, 30.0]
+    assert max(p.early_lead for p in plans) <= 1e-6
+    assert max(-p.early_lead for p in plans) <= 1e-6
 
 
-def test_source_pause_is_kept_as_rhythm():
-    # a 0.6s source pause between two units must survive as a real breath
-    units = _units([(0.0, 2.0), (2.6, 4.6)])
-    plan = plan_run(build_runs(units)[0], units, {0: 1.8, 1: 1.8}, TimelineConfig())
-    assert 0.35 <= plan.placements[1].breath_before <= 0.45
+def test_long_voice_speeds_up_only_to_fit_the_free_time():
+    # caption 0-2s, next caption at 3s: free 3s, raw 3.6s -> ceil(3.6/3)=1.18
+    rows = _rows([(0.0, 2.0), (3.0, 4.0)])
+    plans = plan_rows(rows, {0: 3.6, 1: 0.5}, TimelineConfig(tempo_ceiling=1.18))
+    assert plans[0].tempo == 1.18
+    assert plans[0].overflow_seconds == 0.0  # 3.6/1.18 = 3.05 <= free 3.0 + tolerance
+    # a line that cannot fit even at the ceiling is reported, not hidden
+    plans = plan_rows(rows, {0: 6.0, 1: 0.5}, TimelineConfig(tempo_ceiling=1.18))
+    assert plans[0].tempo == 1.18
+    assert plans[0].overflow_seconds > 1.0
 
 
-def test_short_dub_fills_with_breaths_within_lead_budget():
-    # span 10s, voice 8s (0.8x) -> tempo floor 0.92 cannot fill; breaths spend the rest
-    units = _units([(0.0, 5.0), (5.0, 10.0)])
-    plan = plan_run(build_runs(units)[0], units, {0: 4.0, 1: 4.0}, TimelineConfig())
-    assert plan.tempo == 0.92
-    assert plan.fill_ratio > 0.85
-    # contiguous speech gets only the minimum breath; the remaining slack is
-    # trailing (before the next real pause) and flagged for the fit loop
-    assert plan.trailing_silence <= 1.5
-    assert plan.needs_expand is True
-    assert all(p.early_lead <= TimelineConfig().max_lead + 1e-6 for p in plan.placements)
-    assert 0.06 <= plan.placements[1].breath_before <= 0.25
+def test_late_predecessor_re_anchors_at_the_next_picture():
+    # row 0 overflows into row 1's picture; row 1 starts late, but row 2 (whose
+    # predecessor finished early) is back on its own caption
+    config = TimelineConfig()
+    rows = _rows([(0.0, 1.0), (1.5, 2.5), (6.0, 7.0)])
+    plans = plan_rows(rows, {0: 2.0, 1: 0.5, 2: 0.5}, config)
+    assert plans[0].place_start == 0.0
+    end0 = plans[0].place_start + plans[0].playback_duration
+    assert abs(plans[1].place_start - end0) < 1e-6    # pushed by the overflow, no added gap
+    assert plans[1].early_lead < 0                    # late, and reported as such
+    assert abs(plans[2].place_start - (6.0 - config.lead)) < 1e-6    # re-anchored to its caption
+    assert abs(plans[2].early_lead - config.lead) < 1e-6
 
 
-def test_long_dub_speeds_up_then_overflows_locally():
-    # span 6s, voice 8s -> speed up to ceiling, remainder overflows into the pause
-    units = _units([(0.0, 3.0), (3.0, 6.0)])
-    plan = plan_run(build_runs(units)[0], units, {0: 4.0, 1: 4.0}, TimelineConfig())
-    assert plan.tempo == TimelineConfig().tempo_ceiling
-    assert plan.overflow_seconds > 0
-    assert plan.fill_ratio > 1.0
-
-
-def test_underfilled_run_is_flagged_for_expand():
-    units = _units([(0.0, 10.0)])
-    plan = plan_run(build_runs(units)[0], units, {0: 3.0}, TimelineConfig())
-    assert plan.needs_expand is True
-    plan_ok = plan_run(build_runs(units)[0], units, {0: 9.8}, TimelineConfig())
-    assert plan_ok.needs_expand is False
-    assert plan_ok.trailing_silence <= 1.5
-
-
-def test_chain_mode_places_monotonically_with_bounded_breaths():
-    # five short clips in one long run: chained with breaths, no per-unit re-anchor
-    units = _units([(i * 4.0, i * 4.0 + 4.0) for i in range(5)])
-    durations = {i: 1.5 for i in range(5)}
-    plan = plan_run(build_runs(units)[0], units, durations, TimelineConfig())
-    assert plan.placements[0].place_start == 0.0
-    gaps = [p.breath_before for p in plan.placements[1:]]
-    assert all(0.06 - 1e-9 <= g <= 0.25 + 1e-9 for g in gaps)
-    ends = [p.place_start + p.playback_duration for p in plan.placements]
-    starts = [p.place_start for p in plan.placements]
-    assert all(starts[i + 1] >= ends[i] - 1e-6 for i in range(len(ends) - 1))
-
-
-def test_lead_budget_holds_short_voice_back_to_the_picture():
-    # three short clips in one run: without the budget the voice would pack onto the
-    # start and end ~5.5s early, leaving the run's tail silent (no dub, no subtitles)
-    units = _units([(0.0, 3.0), (3.05, 6.05), (6.1, 9.1)])
-    plan = plan_run(build_runs(units)[0], units, {0: 1.0, 1: 1.0, 2: 1.0}, TimelineConfig())
-    assert plan.tempo == TimelineConfig().tempo_floor
-    assert all(p.early_lead <= TimelineConfig().max_lead + 1e-6 for p in plan.placements)
-    assert plan.hold_seconds > 1.0
-    assert plan.placements[-1].place_start >= 6.1 - TimelineConfig().max_lead - 1e-6
-
-
-def test_late_chain_skips_breaths_to_catch_up():
-    # the first line overruns its window; the next must not add a pause on top — any
-    # breath while the chain is behind only deepens the lag
-    units = _units([(0.0, 2.0), (2.5, 6.0)])
-    plan = plan_run(build_runs(units)[0], units, {0: 2.6, 1: 1.0}, TimelineConfig())
-    first, second = plan.placements
-    assert first.place_start + first.playback_duration > units[1].start
-    assert round(second.place_start - (first.place_start + first.playback_duration), 6) == 0.0
-
-
-def test_summary_reports_metrics_sample():
-    units = _units([(0.0, 5.0), (5.0, 10.0)])
-    plans = plan_timeline(units, {0: 4.0, 1: 4.0})
+def test_summarize_reports_leads_pauses_and_overflows():
+    rows = _rows([(0.0, 2.0), (3.0, 5.0), (6.0, 8.0), (12.0, 14.0)])
+    plans = plan_rows(rows, {0: 1.0, 1: 4.5, 2: 1.0, 3: 1.0}, TimelineConfig())
     summary = summarize(plans)
-    assert summary["runs"] == 1
-    assert summary["max_early_lead_s"] <= TimelineConfig().max_lead
+    assert summary["rows"] == 4
+    assert summary["max_early_lead_s"] <= TimelineConfig().lead + 1e-6
+    assert summary["max_late_lead_s"] > 0
+    assert summary["overflow_rows"] >= 1
+    assert summary["pause_seconds"] > 0

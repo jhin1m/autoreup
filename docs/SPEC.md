@@ -100,8 +100,9 @@ queued → running → succeeded | failed | canceled
 - Không ký tự Hán trong output Việt.
 - Không missing/duplicate source cue coverage; không overlap; gap sau snap ≤ 0.12s.
 - Rail ASR: segment được co về đúng vùng VAD speech chứa nó (bỏ blob nhạc dài), hallucination nhạc bị loại; rail bất biến **sorted, không chồng lấn** sau gap-fill.
-- Display: cue **cuối của mỗi unit giữ tới hết caption nguồn** (clamp để không chồng cue sau) — sub Việt không được biến mất khi hardsub gốc còn trên hình.
-- Voice: **lead budget `max_lead = 0.8s`** so với hình; khi chuỗi đã trễ thì không thêm breath (bắt kịp ngay). Đo bằng `max_early_lead_s` / `max_late_lead_s` / `hold_seconds` trong metrics voiceover.
+- **Caption = row = clip = cue**: mỗi caption nguồn là một dòng Việt (`translate`), một clip TTS, một cue — cùng cửa sổ thời gian của caption. Không nội suy theo tỉ lệ ký tự, không pack theo run, không clamp/hold.
+- **Ngân sách thời gian được ĐO, không đoán**: mỗi caption có `~Ns` (cửa sổ hiện trên hình) truyền vào prompt dịch; fit loop (repair/expand) kiểm chứng bằng thời lượng TTS thật + VAD, hội tụ (tối đa 3 vòng).
+- QA gate: **mọi caption phải có dòng Việt đúng cửa sổ rail** (`captions_missing_coverage`, `rows_misaligned_with_rail`), không Hán, cue không chồng, 1 dòng/cue.
 
 ## 8. TTS contract
 
@@ -111,7 +112,8 @@ Voice tuning (BV421 'Nguồn nhỏ ngọt ngào', đã A/B chọn):
 - trim silence: keep 0.08s, ngưỡng -50dB (cắt sát làm cụt hơi = "khựng");
 - mastering: compressor chậm (ratio 1.6, attack 20ms, release 240ms, makeup 1.2), presence 3.2k +1.2, air 10k +1.0, lowpass 15k;
 - mix với âm gốc: bed **0.55**, **sidechain duck 6:1** (attack 25ms/release 420ms), **carve 2.5kHz −3dB** — nhạc/SFX nở lại khi ngừng thoại, tiếng gốc chỉ bị hạ lúc có thoại;
-- timeline pause floors theo dấu câu: `…` 0.5s, `.`/`!`/`?` 0.35s, `,`/`;`/`:` 0.12s; pause nguồn giữ 70% (≤0.6s).
+- timeline mỗi row neo vào caption của nó: `start = max(voice trước kết thúc, caption.start - lead)`; voice chỉ được **tăng tốc** (≤ `tempo_ceiling 1.18`), chỉ vừa đủ để khớp, không bao giờ làm chậm; không thêm gap giữa các clip (crossfade lo click).
+- fit loop chỉ chạy khi đo được: `voice > window + 0.15s` → rút gọn; `voice < 0.65 × window` **và** VAD cho thấy nguồn đang nói (`vad ≥ 0.7 × window`) → hoàn thiện; lặp tới hội tụ.
 
 
 

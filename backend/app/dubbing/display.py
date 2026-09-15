@@ -1,45 +1,25 @@
 """Turn speech rows into one-line display subtitle cues.
 
-The Vietnamese subtitle is re-segmented to follow the Chinese ASR rail: the
-anchor's Vietnamese text is split at natural clause boundaries (commas, full
-stops…) and each clause is timed to where its content is actually spoken,
-interpolated across the source ASR segments (honouring the gaps between them).
-This keeps the Vietnamese subtitle as finely separated as the Chinese source —
-without breaking words mid-phrase — and stops cues running ahead of the original
-voice. Re-segmentation is display-only: it never re-translates and never changes
-the per-anchor voice-over. Falls back to a proportional spread when segment
-timing isn't available.
+One row = one source caption (``translate`` builds them that way), so a cue's window
+IS the caption's window: the Vietnamese subtitle is on screen exactly while the
+source caption is. Long lines are reflowed at safe break points (never mid-word) and
+the resulting lines spread char-proportionally inside the same window. There is no
+cross-segment interpolation, no voice-window mapping and no hold pass — those existed
+only to hide a timing model that merged captions into units.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from backend.app.services.subtitle_formats import write_srt, write_vtt
-from .models import Anchor, AsrSegment, SpeechRow
+from .models import AsrSegment, SpeechRow
 from .text import sanitize_caption, strip_explicit_turn_markers
 from .tsv_io import write_json
 
 # A display cue may exceed its target width this far to reach a safe break (never
 # splitting a two-syllable word). QA gates at the same allowance.
 LINE_SLACK = 8
-# A sentence end is the closing punctuation PLUS any closing quotes/brackets hugging
-# it, then whitespace. The quotes stay with the sentence they close (dialogue). The
-# old `(?<=[.!?…])\s+` required the space to sit right after the punctuation, so a
-# quote-closed line (`…nghiệm." "Khoan…`) never split — two sentences jammed into one
-# oversized unit and got chopped mid-phrase (even mid-word). \x00 marks the cut.
-_SENTENCE_END_RE = re.compile(r'([.!?…。！？]+["”’\'」』）)\]】»]*)\s+')
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split at sentence ends only (. ! ? …, incl. a closing quote) — NEVER mid-sentence.
-    A sentence is the atomic unit for the voice so it is never cut into two clips."""
-    marked = _SENTENCE_END_RE.sub(lambda m: m.group(1) + "\x00", text)
-    parts = [p.strip() for p in marked.split("\x00") if p.strip()]
-    return parts or [text]
-
-
 # Vietnamese connector/function words: a line may break BEFORE one of these (it
 # starts a new phrase) — that keeps two-syllable words ("chuẩn bị", "linh tuyền",
 # "quan sát") intact instead of splitting them across lines (a subtitle antipattern).
@@ -130,127 +110,37 @@ def _chunk_line(text: str, max_chars: int) -> list[str]:
     return chunks or [text]
 
 
-def _segment_timeline(segs: list[AsrSegment]) -> list[tuple[float, float, float, float]]:
-    """Map source-char fractions [0,1] to real times, weighted per ASR segment."""
-    total = sum(max(1, len(s.text_zh)) for s in segs)
-    spans: list[tuple[float, float, float, float]] = []
-    acc = 0
-    for seg in segs:
-        weight = max(1, len(seg.text_zh))
-        spans.append((acc / total, (acc + weight) / total, seg.start, seg.end))
-        acc += weight
-    return spans
-
-
-def _time_at(frac: float, timeline: list[tuple[float, float, float, float]], side: str) -> float:
-    """A cue *start* belongs to the next segment (waits for that speech to begin,
-    not the preceding gap); a cue *end* belongs to the current segment."""
-    for index, (frac_start, frac_end, t_start, t_end) in enumerate(timeline):
-        last = index == len(timeline) - 1
-        contains = (frac < frac_end or last) if side == "start" else (frac <= frac_end)
-        if contains:
-            local = (frac - frac_start) / max(1e-9, frac_end - frac_start)
-            return t_start + min(max(local, 0.0), 1.0) * (t_end - t_start)
-    return timeline[-1][3]
-
-
-def build_timed_units(
-    speech_rows: list[SpeechRow],
-    min_duration: float = 0.4,
-    anchors: list[Anchor] | None = None,
-    segments: list[AsrSegment] | None = None,
-) -> list[dict]:
-    """Split each anchor's Vietnamese into SENTENCES, each timed to the source ASR
-    segments (char-proportional).
-
-    A sentence is the atomic unit: it is the thing the voice synthesizes as ONE
-    continuous clip and places as ONE contiguous block, so a continuous sentence is
-    never cut into two TTS clips nor scattered across distant source-segment times
-    (which happened at clause granularity when VI/ZH word order differed). Each unit
-    is ``{anchor_id, start, end, text, source, source_ids}``. Falls back to a
-    proportional spread over the anchor window when segment timing isn't available."""
-    anchor_by_id = {a.id: a for a in (anchors or [])}
-    seg_by_id = {s.id: s for s in (segments or [])}
-
-    by_anchor: dict[int, list[SpeechRow]] = {}
-    order: list[int] = []
-    for row in speech_rows:
-        if row.anchor_id not in by_anchor:
-            order.append(row.anchor_id)
-        by_anchor.setdefault(row.anchor_id, []).append(row)
-
-    units: list[dict] = []
-    prev_end = 0.0
-    for anchor_id in order:
-        rows = by_anchor[anchor_id]
-        anchor = anchor_by_id.get(anchor_id)
-        vi_text = sanitize_caption(strip_explicit_turn_markers(" ".join(r.text for r in rows)))
-        if not vi_text:
-            continue
-        anchor_start, anchor_end = rows[0].anchor_start, rows[0].anchor_end
-
-        segs = []
-        if anchor:
-            lo, hi = anchor.source_id_range()
-            segs = [seg_by_id[i] for i in range(lo, hi + 1) if i in seg_by_id]
-
-        sentences = _split_sentences(vi_text)
-        timeline = _segment_timeline(segs) if segs else []
-        total_chars = sum(max(1, len(s)) for s in sentences)
-
-        cursor = 0
-        for index, sentence in enumerate(sentences):
-            frac0 = cursor / total_chars
-            cursor += max(1, len(sentence))
-            frac1 = cursor / total_chars
-            if timeline:
-                u_start = anchor_start if index == 0 else _time_at(frac0, timeline, "start")
-                u_end = anchor_end if index == len(sentences) - 1 else _time_at(frac1, timeline, "end")
-            else:
-                window = max(min_duration, anchor_end - anchor_start)
-                u_start = anchor_start + window * frac0
-                u_end = anchor_end if index == len(sentences) - 1 else anchor_start + window * frac1
-
-            u_start = max(u_start, prev_end)
-            u_end = max(u_end, u_start + min_duration)
-            units.append(
-                {
-                    "start": round(u_start, 3),
-                    "end": round(u_end, 3),
-                    "text": sentence,
-                    "source": anchor.source_zh if anchor else "",
-                    "anchor_id": anchor_id,
-                    "source_ids": rows[0].source_ids,
-                }
-            )
-            prev_end = u_end
-    return units
-
-
 def build_display_cues(
     speech_rows: list[SpeechRow],
-    min_duration: float = 0.4,
-    anchors: list[Anchor] | None = None,
     segments: list[AsrSegment] | None = None,
+    min_duration: float = 0.4,
     max_chars: int = 42,
-    voice_windows: dict[float, tuple[float, float]] | None = None,
     lead: float = 0.0,
 ) -> list[dict]:
-    """Subtitle = each sentence-unit subdivided into readable lines, timed WITHIN the
-    sentence's real spoken span. ``voice_windows`` maps a unit's source-start (rounded
-    to 3dp) to the actual [placement, placement+voice_duration] the synthesized clip
-    occupies on the timeline; the lines are spread char-proportionally across THAT, so
-    the caption matches the voice's real length/position (from the TTS), not the
-    source window. Falls back to the source window when a clip span isn't available."""
-    voice_windows = voice_windows or {}
+    """One caption -> its Vietnamese line(s), spread over THAT caption's window.
+
+    The row's window IS the caption's window (``translate`` builds rows per caption),
+    so cue timing is exact by construction: no interpolation across merged segments,
+    no voice-window mapping, no hold pass. Longer lines are reflowed at safe break
+    points (``_chunk_line``) and the lines spread char-proportionally inside the same
+    window — the subtitle is on screen exactly while the source caption is."""
+    seg_by_id = {s.id: s for s in (segments or [])}
     cues: list[dict] = []
-    holds: list[tuple[int, float]] = []  # (last cue of a unit, that unit's source end)
     prev_end = 0.0
-    for unit in build_timed_units(speech_rows, min_duration, anchors, segments):
-        base, top = voice_windows.get(round(unit["start"], 3), (unit["start"], unit["end"]))
+    for row in speech_rows:
+        text = sanitize_caption(strip_explicit_turn_markers(row.text))
+        if not text:
+            continue
+        base = row.anchor_start
+        top = max(row.anchor_end, base + min_duration)
         span = max(min_duration, top - base)
-        lines = _chunk_line(unit["text"], max_chars)
+        lines = _chunk_line(text, max_chars)
         total_chars = sum(max(1, len(line)) for line in lines)
+        source = ""
+        lo, _, hi = row.source_ids.partition("-")
+        first = seg_by_id.get(int(lo)) if lo.strip().isdigit() else None
+        if first is not None:
+            source = first.text_zh
         cursor = 0
         for index, line in enumerate(lines):
             frac0 = cursor / total_chars
@@ -266,34 +156,16 @@ def build_display_cues(
                     "end": round(cue_end, 3),
                     "text": line,
                     "translated": line,
-                    "source": unit["source"],
-                    "anchor_id": unit["anchor_id"],
-                    "source_ids": unit["source_ids"],
+                    "source": source,
+                    "anchor_id": row.anchor_id,
+                    "source_ids": row.source_ids,
                 }
             )
             prev_end = cue_end
-        holds.append((len(cues) - 1, unit["end"]))
     _enforce_min_duration(cues)
     _apply_lead(cues, lead)
     _close_micro_gaps(cues)
-    _hold_to_source_end(cues, holds)
     return cues
-
-
-def _hold_to_source_end(cues: list[dict], holds: list[tuple[int, float]]) -> None:
-    """Keep a unit's last line up until its source caption leaves the picture.
-
-    The Vietnamese dub is ~0.84x the source length, so a compact line often finishes
-    1-3.5s before its caption run ends (measured: 5 anchors) — the viewer then saw the
-    original caption with no Vietnamese subtitle. Only the LAST line is held (holding
-    the whole unit would drag its text away from the voice), and the hold is clamped so
-    no cue overlaps the next one."""
-    for index, source_end in holds:
-        cue = cues[index]
-        ceiling = cues[index + 1]["start"] if index + 1 < len(cues) else None
-        target = source_end if ceiling is None else min(source_end, ceiling)
-        if target > cue["end"]:
-            cue["end"] = round(target, 3)
 
 
 def _apply_lead(cues: list[dict], lead: float) -> None:

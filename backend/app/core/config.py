@@ -122,56 +122,26 @@ class Settings(BaseSettings):
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
     tts_text_mode: str = "expressive"  # keep punctuation variety: prosody instruction, not formatting
-    # Voice speaking-rate budget: the translator condenses each line to
-    # ``duration * tts_voice_cps`` characters so it reads within the time the
-    # character speaks at the voice's own natural pace (measured ~19.8 ch/s for
-    # BV421). Budget sits just under that so lines fit at tempo ~1.0 with a touch of
-    # natural pause — condensing the over-dense source (22-29 ch/s) without needless
-    # content loss or underfill.
-    tts_voice_cps: float = 18.0
-    # MEASURED natural reading pace of the voice (ch/s, before synth_rate). Used to
-    # PREDICT from character counts alone which lines will overflow their window —
-    # so most over-long lines are shortened right after translate, by text math,
-    # instead of being discovered three synth-render-repair rounds later.
-    tts_voice_read_cps: float = 19.8
-    # Each unique line costs ~6s upstream (CapCut) but the TTS server is fully
-    # concurrent and caches by text — so synth throughput = workers / 6s. This is the
-    # real voiceover bottleneck; raise for long videos (server handled 24 fine).
+    # MEASURED natural read pace of the voice (chars/second): the translator is given
+    # each caption's own duration and targets it; the fit loop then verifies with the
+    # real TTS durations.
+    tts_voice_cps: float = 19.8
+    # The TTS server is fully concurrent and caches by text — synth throughput =
+    # workers / ~6s per unique line. This is the voiceover bottleneck.
     tts_workers: int = 16
-    tts_repair_over_ms: int = 1500
-    tts_post_tempo: float = 1.12
-    # Read at (near-)natural pace so the dub is intelligible: never slow below 1.0
-    # (no dragging) and only a hair of speed-up (1.08) for slightly-long lines.
-    # Density is fixed at the source — the translator condenses to tts_voice_cps and
-    # the repair loop shortens whatever still overruns — NOT by speeding the voice.
-    # L6 timeline: run-based placement (docs/TRANSLATE-V3.md)
-    tts_run_gap: float = 0.8          # source gap below this = same speech run
-    tts_tempo_floor: float = 0.92     # run-level slow-down floor (fill by slowing)
-    tts_tempo_ceiling: float = 1.18   # run-level speed-up ceiling
-    tts_breath_min: float = 0.06      # distributed sentence breath
-    tts_breath_max: float = 0.6   # a real source pause kept as rhythm
-    tts_pause_keep: float = 0.7  # share of the source pause to keep
-    tts_min_run_fill: float = 0.95    # below this a run is flagged for expand
-    tts_min_trailing: float = 1.5     # ...or when it ends this early (seconds)
-    # Voice is the master clock and stays neo'd at each anchor's onset so it matches
-    # the picture ("khớp ảnh") AND the subtitle (which is derived from the voice
-    # window). glue_gap=0 disables the earlier-shifting glue — it traded picture/sub
-    # sync for marginal smoothness. crossfade still declicks clip edges.
-    # Close underfill micro-gaps: when the condensed voice is shorter than its source
-    # window, the leftover silence made the dub feel choppy/slow ("chậm chậm"). Any gap
-    # smaller than this butt-joins to the previous line so speech flows continuously; only
-    # real on-screen pauses (>= this) keep their absolute onset for picture sync.
-    # A glued clip may start at most this far BEFORE its source onset. Condensed
-    # lines in a long continuous run used to drag every following line earlier
-    # (dub spoke ~1s before the on-screen speaker); this caps that drift while
-    # keeping the butt-joined flow.
+    # Per-row placement (dubbing/timeline.py): one clip per caption, re-anchored to
+    # the picture. The voice may start this far before its caption and is sped up
+    # (never slowed) up to the ceiling only as much as needed to fit the free time
+    # before the next caption; overflow past the free time + tolerance is a measured
+    # fit-loop bug, not something the timeline hides.
+    tts_lead: float = 0.15
+    tts_tempo_ceiling: float = 1.18
+    tts_overflow_tolerance: float = 0.15
+    # A row whose voice covers < this share of the VAD speech it belongs to is
+    # "clearly under-filled" -> the fit loop asks the editor to complete it.
+    tts_expand_floor: float = 0.7
     tts_crossfade: float = 0.06
-    tts_assembly_mode: str = "sequential"
-    tts_group_blocks: bool = True
-    tts_group_max_gap: float = 2.0
-    tts_group_max_duration: float = 30.0
-    tts_group_max_chars: int = 1000
-
+    tts_crossfade: float = 0.06
     @property
     def data_dir(self) -> Path:
         return self.root_dir / self.data_dir_name
