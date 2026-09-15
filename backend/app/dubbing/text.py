@@ -25,6 +25,13 @@ def clean(text: object) -> str:
     return " ".join(str(text or "").replace("\n", " ").split()).strip()
 
 
+def has_kana(text: str) -> bool:
+    """True when the text still carries Japanese kana (source leaked through)."""
+    import re as _re
+
+    return bool(_re.search(r"[\u3040-\u30ff]", str(text)))
+
+
 def has_han(text: object) -> bool:
     return bool(HAN_RE.search(str(text or "")))
 

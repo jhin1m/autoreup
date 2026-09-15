@@ -675,7 +675,7 @@ def _run_asr(context: PipelineContext, output_srt: Path) -> list[str]:
         sys.executable, str(script), str(context.artifacts["video"]),
         "--worker-url", str(settings.asr_worker_url),
         "--output", str(output_srt),
-        "--language", "zh",
+        "--language", "auto",  # dialogue may be Chinese OR Japanese (mixed anime audio)
         "--model", str(settings.asr_model),
         "--workers", str(settings.asr_workers),
         "--chunk-seconds", str(settings.asr_chunk_seconds),

@@ -24,7 +24,7 @@ from .edit import EditConfig, edit_texts
 from .glossary import format_glossary
 from .models import Anchor, GlossaryEntry, SpeechRow
 from .prompts import TRANSLATE_SYSTEM, TRANSLATE_USER
-from .text import has_han, sanitize_caption, split_text_for_explicit_turns_only
+from .text import has_han, has_kana, sanitize_caption, split_text_for_explicit_turns_only
 from .tsv_io import parse_tsv_rows
 
 _CONTEXT_SOURCE_CHARS = 200
@@ -62,8 +62,8 @@ def _validate(texts: dict[int, str], units: list[Anchor]) -> None:
         text = texts.get(unit.id)
         if not text:
             raise TranslateError(f"unit {unit.id} has no translation")
-        if has_han(text):
-            raise TranslateError(f"unit {unit.id} translation still contains Han characters")
+        if has_han(text) or has_kana(text):
+            raise TranslateError(f"unit {unit.id} translation still contains Han/kana characters")
 
 
 def translate_batch(
@@ -87,7 +87,7 @@ def translate_batch(
 
     texts = attempt(units)
     # per-line flake retry (skipped line / Han leak), not a whole-batch failure
-    bad = [a for a in units if not texts.get(a.id) or has_han(texts[a.id])]
+    bad = [a for a in units if not texts.get(a.id) or has_han(texts[a.id]) or has_kana(texts[a.id])]
     if bad:
         retried = attempt(bad)
         texts.update({uid: t for uid, t in retried.items() if t and not has_han(t)})

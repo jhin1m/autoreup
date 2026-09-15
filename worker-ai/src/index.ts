@@ -190,16 +190,21 @@ export default {
 
     const contentType = request.headers.get("content-type") || "";
     let audio: string | undefined;
-    let language = "zh";
+    // "auto" = let Whisper detect per window (mixed Chinese dialogue + Japanese OP).
+    let language = "auto";
     let offset = 0;
     let model = "@cf/openai/whisper-large-v3-turbo";
+    // Whisper's own VAD strips music-heavy stretches (sung vocals, speech over BGM);
+    // the coverage pass disables it to catch exactly those.
+    let vadFilter = true;
 
     if (contentType.includes("application/json")) {
-      const body = await request.json<{ audio?: string; language?: string; offset?: number; model?: string }>();
+      const body = await request.json<{ audio?: string; language?: string; offset?: number; model?: string; vad_filter?: boolean }>();
       audio = body.audio;
       language = body.language || language;
       offset = body.offset || 0;
       model = body.model || model;
+      vadFilter = body.vad_filter ?? vadFilter;
     } else {
       const bytes = await request.arrayBuffer();
       audio = arrayBufferToBase64(bytes);
@@ -221,9 +226,9 @@ export default {
         ? { audio: base64ToBytes(audio) }
         : {
             audio,
-            language,
+            ...(language && language !== "auto" ? { language } : {}),
             task: "transcribe",
-            vad_filter: true,
+            vad_filter: vadFilter,
             condition_on_previous_text: false,
           };
       result = await env.AI.run(model, input) as WhisperResult;

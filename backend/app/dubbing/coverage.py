@@ -73,11 +73,13 @@ def filter_recovered(rows: list[dict]) -> tuple[list[dict], int]:
     skipped = 0
     for row in rows:
         text = str(row.get("text") or "").strip()
-        if not text or not any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in text)  # Han (zh or ja kanji)
+        has_kana = any("\u3040" <= ch <= "\u30ff" for ch in text)  # hiragana/katakana
+        if not text or not (has_cjk or has_kana):
             skipped += 1  # latin-only / empty: whisper artifact
             continue
-        if kept and _similar(kept[-1]["text"], text) > 0.5 and len(text) >= 4:
-            skipped += 1  # loop / song lyric
+        if kept and _similar(kept[-1]["text"], text) > 0.85 and len(text) >= 6:
+            skipped += 1  # near-identical repeat: whisper loop
             continue
         kept.append({**row, "text": text})
     return kept, skipped
@@ -96,6 +98,9 @@ def _transcribe_slice(worker_url: str, video: Path, start: float, length: float,
             "offset": start,
             "language": language,
             "model": model,
+            # Whisper's own VAD strips sung/spoken-over-music stretches — the exact
+            # content this pass exists to recover.
+            "vad_filter": False,
         }).encode()
     request = Request(
         worker_url.rstrip("/") + "/transcribe",
@@ -115,7 +120,7 @@ def fill_coverage_gaps(
     duration: float,
     worker_url: str,
     model: str,
-    language: str = "zh",
+    language: str = "auto",
     packed=None,
     config: CoverageConfig | None = None,
 ) -> tuple[list[AsrSegment], dict]:

@@ -56,7 +56,9 @@ GLOSSARY_USER = (
 
 TRANSLATE_SYSTEM = (
     "Bạn là người THUYẾT MINH reup phim Việt CÓ DUYÊN — kiểu kênh kể chuyện triệu view. Bạn nhận từng "
-    "ĐƠN VỊ CÂU (một câu/đoạn nguồn hoàn chỉnh) và viết lời Việt TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT cho đúng câu đó.\n"
+    "ĐƠN VỊ CÂU (một câu/đoạn nguồn hoàn chỉnh) — nguồn có thể là TIẾNG TRUNG hoặc TIẾNG NHẬT (anime gốc) — "
+    "và viết lời Việt TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT cho đúng câu đó. Tên riêng tiếng Nhật phiên âm romaji chuẩn "
+    "(vd Tanjiro), TUYỆT ĐỐI không Hán-Việt hoá tên Nhật.\n"
     "1. DỊCH THEO NGHĨA như người Việt kể lại — KHÔNG dịch sát từng chữ, không bê cấu trúc hay âm Hán-Việt.\n"
     "2. THÀNH NGỮ/ĐIỂN CỐ gốc Hán: dịch NGHĨA THƯỜNG (先到先得 → 'ai nhanh chân thì được'), KHÔNG phiên âm "
     "Hán-Việt thành cụm bốn chữ sáo.\n"
@@ -81,7 +83,7 @@ TRANSLATE_USER = (
 # --- Normalize: fix ASR recognition noise (keep meaning) ---------------------
 
 NORMALIZE_SYSTEM = (
-    "Bạn sửa lỗi NHẬN DẠNG GIỌNG NÓI (ASR) trong transcript tiếng Trung: đồng âm sai, chữ thừa/lặp, lỗi "
+    "Bạn sửa lỗi NHẬN DẠNG GIỌNG NÓI (ASR) trong transcript tiếng Trung HOẶC tiếng Nhật: đồng âm sai, chữ thừa/lặp, lỗi "
     "số/đơn vị. TUYỆT ĐỐI giữ nguyên nghĩa, người nói, thứ tự; KHÔNG thêm/bớt thông tin; KHÔNG viết lại "
     "văn phong. Nếu một dòng đã đúng hoặc không chắc — chép y nguyên.\n"
     "Output DUY NHẤT là TSV, mỗi dòng ĐÚNG 2 cột:\n"

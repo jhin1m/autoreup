@@ -18,15 +18,15 @@ def test_speech_fraction_counts_vad_frames_above_threshold():
     assert speech_fraction(None, 0.0, 6.0) == 0.0
 
 
-def test_filter_recovered_drops_latin_artifacts_and_loops():
+def test_filter_recovered_keeps_cjk_and_kana_drops_latin_and_loops():
     rows = [
-        {"start": 25.0, "end": 27.0, "text": "让我藉尔的"},          # keep
-        {"start": 27.0, "end": 29.0, "text": "召喚的数 heading"},    # han present but loop of next? no -> keep
-        {"start": 29.0, "end": 31.0, "text": "你会有吗"},            # keep
-        {"start": 31.0, "end": 33.0, "text": "你会有吗"},            # loop -> drop
-        {"start": 33.0, "end": 35.0, "text": "heading"},             # latin only -> drop
-        {"start": 35.0, "end": 36.0, "text": ""},                    # empty -> drop
+        {"start": 25.0, "end": 27.0, "text": "让我藉尔的"},              # Han -> keep
+        {"start": 27.0, "end": 29.0, "text": "どうなってんだよ"},        # kana -> keep
+        {"start": 29.0, "end": 31.0, "text": "あなたのことが好きです"},  # duplicate below -> keep this one
+        {"start": 31.0, "end": 33.0, "text": "あなたのことが好きです"},  # near-identical loop -> drop
+        {"start": 33.0, "end": 35.0, "text": "heading"},                 # latin only -> drop
+        {"start": 35.0, "end": 36.0, "text": ""},                        # empty -> drop
     ]
     kept, skipped = filter_recovered(rows)
-    assert [r["text"] for r in kept] == ["让我藉尔的", "召喚的数 heading", "你会有吗"]
+    assert [r["text"] for r in kept] == ["让我藉尔的", "どうなってんだよ", "あなたのことが好きです"]
     assert skipped == 3
