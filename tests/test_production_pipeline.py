@@ -268,3 +268,35 @@ class ProductionPipelineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DownloadCacheTest(unittest.TestCase):
+    def test_download_stage_reuses_cached_source_video(self):
+        """A retry of a long episode must not re-download: the bytes are cached by id."""
+        import backend.app.pipeline.production as prod
+        from backend.app.domain.jobs import JobInput
+        from backend.app.pipeline.production import DownloadStage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(root_dir=root, _env_file=None)
+            settings.ensure_directories()
+            # a previous job already downloaded this source
+            cached = settings.videos_dir / "src-4863edb7fc33.mp4"
+            cached.write_bytes(b"x" * 2048)
+            ctx = PipelineContext(
+                job_id="job2", input_url="https://example.com/v", job_dir=settings.jobs_dir / "job2",
+                settings=settings, config=PipelineConfig(),
+                artifacts={},
+            )
+            ctx.source_video_id = "4863edb7fc33"
+
+            def explode(*args, **kwargs):
+                raise AssertionError("cached video present -> must not download")
+
+            with patch.object(prod, "_download_source", side_effect=explode):
+                result = DownloadStage().run(ctx)
+            self.assertTrue(result.metrics["reused_cached_video"])
+            self.assertTrue(ctx.artifacts["video"].exists())
+            self.assertEqual(ctx.artifacts["video"].read_bytes(), b"x" * 2048)
+            # and the cache was seeded on a fresh download in the normal path

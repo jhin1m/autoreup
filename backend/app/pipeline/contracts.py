@@ -34,4 +34,5 @@ class PipelineContext:
     settings: object
     config: object
     artifacts: dict[str, object] = field(default_factory=dict)
-    series_id: str | None = None  # library link: lets stages share per-series state (e.g. glossary)
+    series_id: str | None = None
+    source_video_id: str | None = None  # library link: keys the source-video cache  # library link: lets stages share per-series state (e.g. glossary)

@@ -13,6 +13,8 @@ client (an external-service adapter, like yt-dlp/ffmpeg).
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 import time
 from dataclasses import asdict
@@ -84,6 +86,7 @@ class ProductionPipeline:
             config=config,
             artifacts={},
             series_id=job_input.series_id,
+            source_video_id=job_input.source_video_id,
         )
 
 
@@ -201,8 +204,38 @@ class DownloadStage(PipelineStage):
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
+        # Reuse an already-downloaded copy of the same source: a retry/requeue of a
+        # 48-min episode burned 43 min on a repeat download (Douyin throttles), and the
+        # bytes do not change. Keyed by the source video id; hard link when possible.
+        source_id = context.source_video_id
+        cached = settings.videos_dir / f"src-{source_id}.mp4" if source_id else None
+        if cached is not None and cached.exists() and cached.stat().st_size > 0:
+            video = settings.videos_dir / f"{context.job_id}.mp4"
+            if not video.exists():
+                try:
+                    os.link(cached, video)
+                except OSError:
+                    shutil.copyfile(cached, video)
+            context.artifacts["video"] = video
+            thumb = _make_thumbnail(video, settings.videos_dir / f"{context.job_id}.thumb.jpg")
+            artifacts = [_artifact(ArtifactKind.video, video, settings.data_dir)]
+            if thumb is not None:
+                artifacts.append(_artifact(ArtifactKind.thumbnail, thumb, settings.data_dir))
+            from backend.app.services.audio import probe_duration
+
+            return StageResult(
+                name=self.name,
+                artifacts=artifacts,
+                metrics={"reused_cached_video": True, "duration": probe_duration(video)},
+                logs=[f"download: reused cached source video {cached.name}"],
+            )
         result = _download_source(settings, context.input_url, context.job_id)
         video = Path(result["path"])
+        if cached is not None and video.exists() and not cached.exists():
+            try:
+                os.link(video, cached)
+            except OSError:
+                shutil.copyfile(video, cached)
         context.artifacts["video"] = video
         artifacts = [_artifact(ArtifactKind.video, video, settings.data_dir)]
         thumb = _make_thumbnail(video, settings.videos_dir / f"{context.job_id}.thumb.jpg")
