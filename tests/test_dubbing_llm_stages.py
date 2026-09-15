@@ -40,31 +40,32 @@ def _rail_and_units():
     return segs, anchors
 
 
-def test_translate_covers_every_caption_with_rail_windows(monkeypatch):
+def test_translate_is_one_row_per_unit_on_the_unit_window(monkeypatch):
     segments, anchors = _rail_and_units()
 
     def fake(system, user, config):
-        # one Vietnamese line per caption id present in the prompt
-        return "\n".join(f"{s.id}\tLời {s.id}" for s in segments if f"{s.id}\t" in user)
+        # one Vietnamese line per unit id present in the prompt
+        return "\n".join(f"{a.id}\tLời {a.id}" for a in anchors if f"{a.id}\t" in user)
 
     monkeypatch.setattr(translate_mod, "complete", fake)
     monkeypatch.setattr(edit_mod, "complete", fake)
-    rows = translate(anchors, segments, [], LLM, TranslateConfig())
-    # one row per caption, in rail order, each with the caption's own window
-    assert [r.source_ids for r in rows] == [f"{s.id}-{s.id}" for s in segments]
-    assert [r.anchor_start for r in rows] == [s.start for s in segments]
-    assert [r.anchor_end for r in rows] == [s.end for s in segments]
+    rows = translate(anchors, [], LLM, TranslateConfig())
+    assert [r.anchor_id for r in rows] == [a.id for a in anchors]
+    assert [r.text for r in rows] == [f"Lời {a.id}" for a in anchors]
+    # the row's window IS the unit's window (the rail owns timing)
+    assert [r.anchor_start for r in rows] == [a.start for a in anchors]
+    assert [r.anchor_end for r in rows] == [a.end for a in anchors]
+    assert [r.source_ids for r in rows] == [a.source_ids for a in anchors]
     assert [r.sub_id for r in rows] == list(range(len(rows)))
-    assert {r.anchor_id for r in rows} == {a.id for a in anchors}
 
 
-def test_translate_raises_when_a_caption_has_no_line(monkeypatch):
+def test_translate_raises_when_a_unit_has_no_line(monkeypatch):
     segments, anchors = _rail_and_units()
-    # answers only the FIRST caption of each unit -> the rest are missing
-    monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "0\tLời 0\n2\tLời 2\n4\tLời 4")
+    # answers only the FIRST unit -> the rest are missing
+    monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "0\tLời 0")
     monkeypatch.setattr(edit_mod, "complete", lambda s, u, c: "")
     try:
-        translate(anchors, segments, [], LLM, TranslateConfig())
+        translate(anchors, [], LLM, TranslateConfig())
         assert False, "expected TranslateError"
     except translate_mod.TranslateError:
         pass
@@ -72,10 +73,10 @@ def test_translate_raises_when_a_caption_has_no_line(monkeypatch):
 
 def test_translate_raises_on_han_leak(monkeypatch):
     segments, anchors = _rail_and_units()
-    monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "\n".join(f"{s.id}\t还有中文" for s in segments))
+    monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "\n".join(f"{a.id}\t还有中文" for a in anchors))
     monkeypatch.setattr(edit_mod, "complete", lambda s, u, c: "")
     try:
-        translate(anchors, segments, [], LLM, TranslateConfig())
+        translate(anchors, [], LLM, TranslateConfig())
         assert False, "expected TranslateError"
     except translate_mod.TranslateError:
         pass

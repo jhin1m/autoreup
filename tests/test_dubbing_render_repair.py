@@ -58,7 +58,7 @@ def test_render_config_defaults():
     cfg = RenderConfig(provider_url="http://x")
     assert cfg.speaker == "BV421_vivn_streaming"
     assert cfg.tempo_ceiling == 1.18
-    assert cfg.overflow_tolerance == 0.15
+    assert cfg.overflow_tolerance == 0.4
 
 
 def test_expand_completes_underfilled_keeps_complete(monkeypatch):

@@ -100,9 +100,10 @@ queued → running → succeeded | failed | canceled
 - Không ký tự Hán trong output Việt.
 - Không missing/duplicate source cue coverage; không overlap; gap sau snap ≤ 0.12s.
 - Rail ASR: segment được co về đúng vùng VAD speech chứa nó (bỏ blob nhạc dài), hallucination nhạc bị loại; rail bất biến **sorted, không chồng lấn** sau gap-fill.
-- **Caption = row = clip = cue**: mỗi caption nguồn là một dòng Việt (`translate`), một clip TTS, một cue — cùng cửa sổ thời gian của caption. Không nội suy theo tỉ lệ ký tự, không pack theo run, không clamp/hold.
-- **Ngân sách thời gian được ĐO, không đoán**: mỗi caption có `~Ns` (cửa sổ hiện trên hình) truyền vào prompt dịch; fit loop (repair/expand) kiểm chứng bằng thời lượng TTS thật + VAD, hội tụ (tối đa 3 vòng).
-- QA gate: **mọi caption phải có dòng Việt đúng cửa sổ rail** (`captions_missing_coverage`, `rows_misaligned_with_rail`), không Hán, cue không chồng, 1 dòng/cue.
+- **Nghĩa là đơn vị dịch (F1)**: `translate` nhận 1 đơn vị câu (unit) và trả ĐÚNG một dòng Việt tự nhiên cho nó — không bao giờ dịch theo mảnh caption, không đặt ngân sách độ dài trong prompt (áp lực độ dài phải không được làm hỏng câu chữ).
+- **Row = unit = clip**: mỗi unit một clip TTS neo vào cửa sổ của unit; timing không nội suy, không pack theo run, không clamp/hold.
+- **Sub = voice, cùng thời điểm (F4)**: khối cue của unit = `[voice_start − lead, max(voice_end, unit_end)]` (clamp theo cue kế) — sub hiện trước voice ~0.12s và phủ trọn cửa sổ caption gốc; text sub dựng lại SAU fit loop nên luôn khớp đúng lời đọc.
+- QA gate: mọi unit có dòng Việt đúng cửa sổ rail (`units_missing_coverage`, `rows_misaligned_with_rail`), không Hán, cue không chồng, 1 dòng/cue.
 
 ## 8. TTS contract
 
@@ -112,8 +113,8 @@ Voice tuning (BV421 'Nguồn nhỏ ngọt ngào', đã A/B chọn):
 - trim silence: keep 0.08s, ngưỡng -50dB (cắt sát làm cụt hơi = "khựng");
 - mastering: compressor chậm (ratio 1.6, attack 20ms, release 240ms, makeup 1.2), presence 3.2k +1.2, air 10k +1.0, lowpass 15k;
 - mix với âm gốc: bed **0.55**, **sidechain duck 6:1** (attack 25ms/release 420ms), **carve 2.5kHz −3dB** — nhạc/SFX nở lại khi ngừng thoại, tiếng gốc chỉ bị hạ lúc có thoại;
-- timeline mỗi row neo vào caption của nó: `start = max(voice trước kết thúc, caption.start - lead)`; voice chỉ được **tăng tốc** (≤ `tempo_ceiling 1.18`), chỉ vừa đủ để khớp, không bao giờ làm chậm; không thêm gap giữa các clip (crossfade lo click).
-- fit loop chỉ chạy khi đo được: `voice > window + 0.15s` → rút gọn; `voice < 0.65 × window` **và** VAD cho thấy nguồn đang nói (`vad ≥ 0.7 × window`) → hoàn thiện; lặp tới hội tụ.
+- timeline mỗi unit neo vào cửa sổ của nó: `start = max(voice trước kết thúc, unit.start - lead)`; voice chỉ được **tăng tốc** (≤ `tempo_ceiling 1.18`), chỉ vừa đủ để khớp, không bao giờ làm chậm; không thêm gap giữa clip (crossfade lo click).
+- fit loop chấm bằng SỐ ĐO: `voice > free_time (tới hình kế) + 0.4s` → rút gọn; `voice < 0.65 × VAD speech` **và** nguồn đang nói (`vad ≥ 0.8s`) → hoàn thiện; lặp tới hội tụ (≤3 vòng). Không dùng ngân sách ký tự để đoán.
 
 
 

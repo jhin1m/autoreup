@@ -79,18 +79,32 @@ def audit_job(job: str) -> dict:
     timings = read_timings(job)
     report: dict = {"job": job, "rows": len(rows), "captions": len(segments)}
 
-    # 1) caption coverage (every rail caption must have a row on its own window)
-    by_caption = {}
-    for row in rows:
-        lo, _, _hi = row.source_ids.partition("-")
-        by_caption[int(lo)] = row if lo.strip().isdigit() else None
-    missing = [s.id for s in segments if s.id not in by_caption]
+    # 1) unit coverage (every semantic unit has a row) + rail coverage (every caption
+    #    sits inside some translated unit)
+    anchors_path = DATA / "subtitles" / f"{job}.anchors.tsv"
+    unit_windows = {}
+    covered_segments: set[int] = set()
+    if anchors_path.exists():
+        for a in csv.DictReader(anchors_path.open(), delimiter="\t"):
+            lo, _, hi = str(a["SOURCE_IDS"]).partition("-")
+            unit_windows[int(a["ID"])] = (float(a["START"]), float(a["END"]))
+            if lo.strip().isdigit() and hi.strip().isdigit():
+                covered_segments.update(range(int(lo), int(hi) + 1))
+    row_units = {r.anchor_id for r in rows}
+    missing_units = sorted(set(unit_windows) - row_units)
     misaligned = sum(
         1
-        for s in segments
-        if (row := by_caption.get(s.id)) is not None and (abs(row.anchor_start - s.start) > 0.01 or abs(row.anchor_end - s.end) > 0.01)
+        for r in rows
+        if (w := unit_windows.get(r.anchor_id)) is not None and (abs(r.anchor_start - w[0]) > 0.01 or abs(r.anchor_end - w[1]) > 0.01)
     )
-    report["coverage"] = {"missing": len(missing), "misaligned": misaligned, "first_missing": missing[:5]}
+    uncovered_captions = [s.id for s in segments if s.id not in covered_segments]
+    report["coverage"] = {
+        "units": len(unit_windows),
+        "rows": len(rows),
+        "missing_units": missing_units[:5],
+        "misaligned": misaligned,
+        "captions_outside_units": uncovered_captions[:5],
+    }
 
     # 2) fill per row: measured voice vs free time and vs the source speech (VAD)
     video = DATA / "videos" / f"{job}.mp4"

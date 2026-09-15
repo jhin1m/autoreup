@@ -49,7 +49,7 @@ class RenderConfig:
     # timeline (per-row placement, see timeline.TimelineConfig)
     lead: float = 0.15
     tempo_ceiling: float = 1.18
-    overflow_tolerance: float = 0.15
+    overflow_tolerance: float = 0.4
 
 
 @dataclass(slots=True)

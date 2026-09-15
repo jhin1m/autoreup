@@ -1,11 +1,19 @@
-"""Turn speech rows into one-line display subtitle cues.
+"""Turn speech rows into one-line display subtitle cues (F4: sub == voice, in time).
 
-One row = one source caption (``translate`` builds them that way), so a cue's window
-IS the caption's window: the Vietnamese subtitle is on screen exactly while the
-source caption is. Long lines are reflowed at safe break points (never mid-word) and
-the resulting lines spread char-proportionally inside the same window. There is no
-cross-segment interpolation, no voice-window mapping and no hold pass — those existed
-only to hide a timing model that merged captions into units.
+One row = one semantic unit's Vietnamese text (``translate``). A cue block covers
+what the viewer must be able to read:
+
+* the VOICE — the block starts at ``voice_start - lead`` (the eye gets a lead-in),
+  so the words appear exactly while they are read;
+* the SOURCE window — the block always ends no earlier than the unit's own window
+  end, because the original caption is on screen for that long (the original band
+  is covered, so an early-blinking subtitle would leave it blank mid-line).
+
+Inside the block the lines are reflowed at safe break points and the non-final
+lines are spread across the spoken span (char share of the measured voice), with
+the last line holding to the block end. Blocks are clamped so no cue overlaps the
+next. No cross-segment interpolation, no separate hold pass: the union above IS
+the rule.
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ from .tsv_io import write_json
 # A display cue may exceed its target width this far to reach a safe break (never
 # splitting a two-syllable word). QA gates at the same allowance.
 LINE_SLACK = 8
+
 # Vietnamese connector/function words: a line may break BEFORE one of these (it
 # starts a new phrase) — that keeps two-syllable words ("chuẩn bị", "linh tuyền",
 # "quan sát") intact instead of splitting them across lines (a subtitle antipattern).
@@ -116,38 +125,46 @@ def build_display_cues(
     min_duration: float = 0.4,
     max_chars: int = 42,
     lead: float = 0.0,
+    voice_windows: dict[int, tuple[float, float]] | None = None,
 ) -> list[dict]:
-    """One caption -> its Vietnamese line(s), spread over THAT caption's window.
-
-    The row's window IS the caption's window (``translate`` builds rows per caption),
-    so cue timing is exact by construction: no interpolation across merged segments,
-    no voice-window mapping, no hold pass. Longer lines are reflowed at safe break
-    points (``_chunk_line``) and the lines spread char-proportionally inside the same
-    window — the subtitle is on screen exactly while the source caption is."""
+    """One cue block per unit covering the voice and the source window (see module doc)."""
+    voice_windows = voice_windows or {}
     seg_by_id = {s.id: s for s in (segments or [])}
-    cues: list[dict] = []
-    prev_end = 0.0
+    blocks: list[dict] = []
     for row in speech_rows:
         text = sanitize_caption(strip_explicit_turn_markers(row.text))
         if not text:
             continue
-        base = row.anchor_start
-        top = max(row.anchor_end, base + min_duration)
-        span = max(min_duration, top - base)
-        lines = _chunk_line(text, max_chars)
-        total_chars = sum(max(1, len(line)) for line in lines)
+        base, top = voice_windows.get(row.sub_id, (row.anchor_start, row.anchor_end))
+        start = min(base, row.anchor_start) - lead
+        end = max(top, row.anchor_end)
+        blocks.append({"row": row, "base": base, "top": top, "start": start, "end": end, "text": text})
+
+    # clamp blocks: a cue never runs into the next one
+    for index in range(len(blocks) - 1):
+        blocks[index]["end"] = min(blocks[index]["end"], blocks[index + 1]["start"])
+    for block in blocks:
+        block["end"] = max(block["end"], block["start"] + min_duration)
+
+    cues: list[dict] = []
+    prev_end = 0.0
+    for block in blocks:
+        row = block["row"]
         source = ""
-        lo, _, hi = row.source_ids.partition("-")
+        lo, _, _hi = row.source_ids.partition("-")
         first = seg_by_id.get(int(lo)) if lo.strip().isdigit() else None
         if first is not None:
             source = first.text_zh
+        lines = _chunk_line(block["text"], max_chars)
+        total_chars = sum(max(1, len(line)) for line in lines)
+        span = max(min_duration, block["top"] - block["base"])
         cursor = 0
         for index, line in enumerate(lines):
             frac0 = cursor / total_chars
             cursor += max(1, len(line))
             frac1 = cursor / total_chars
-            cue_start = base if index == 0 else base + span * frac0
-            cue_end = top if index == len(lines) - 1 else base + span * frac1
+            cue_start = block["start"] if index == 0 else block["base"] + span * frac0
+            cue_end = block["end"] if index == len(lines) - 1 else block["base"] + span * frac1
             cue_start = max(cue_start, prev_end)
             cue_end = max(cue_end, cue_start + min_duration)
             cues.append(
@@ -163,20 +180,8 @@ def build_display_cues(
             )
             prev_end = cue_end
     _enforce_min_duration(cues)
-    _apply_lead(cues, lead)
     _close_micro_gaps(cues)
     return cues
-
-
-def _apply_lead(cues: list[dict], lead: float) -> None:
-    """Pro lead-in: bring each caption on screen ``lead`` seconds BEFORE its voice so
-    the eye can start reading — but never before the previous cue ends (no overlap),
-    so back-to-back lines get no lead and only onsets after a pause move earlier."""
-    if lead <= 0:
-        return
-    for index, cue in enumerate(cues):
-        floor = cues[index - 1]["end"] if index > 0 else 0.0
-        cue["start"] = round(max(floor, cue["start"] - lead), 3)
 
 
 def _enforce_min_duration(cues: list[dict], target: float = 0.9) -> None:

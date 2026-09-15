@@ -60,17 +60,17 @@ class ProductionPipelineTest(unittest.TestCase):
             segments = ctx.artifacts["segments"]
 
             def fake_complete(system, user, config):
-                # one Vietnamese line per caption id present in the prompt
-                return "\n".join(f"{s.id}\tLời caption {s.id}" for s in segments if f"{s.id}\t" in user)
+                # one Vietnamese line per unit id present in the prompt
+                return "\n".join(f"{a.id}\tLời unit {a.id}" for a in ctx.artifacts["anchors"] if f"{a.id}\t" in user)
 
             with patch("backend.app.dubbing.translate.complete", side_effect=fake_complete), patch(
                 "backend.app.dubbing.edit.complete", side_effect=lambda system, user, config: ""
             ):
                 TranslateStage().run(ctx)
             rows = ctx.artifacts["speech_rows"]
-            # every caption translated, each row exactly on its caption's window
-            self.assertEqual([r.source_ids for r in rows], [f"{s.id}-{s.id}" for s in segments])
-            self.assertEqual([r.anchor_start for r in rows], [s.start for s in segments])
+            # every unit translated, each row exactly on its unit's window
+            self.assertEqual([r.anchor_id for r in rows], [a.id for a in ctx.artifacts["anchors"]])
+            self.assertEqual([r.anchor_start for r in rows], [a.start for a in ctx.artifacts["anchors"]])
 
             result = QAStage().run(ctx)
             self.assertEqual(result.metrics["issues"], 0)
@@ -156,6 +156,7 @@ class ProductionPipelineTest(unittest.TestCase):
                 SpeechRow(0, 0, 0.0, 2.0, "0-0", "Lời cũ một"),
                 SpeechRow(1, 1, 2.0, 4.0, "1-1", "Lời cũ hai"),
             ]
+            # the QA stage gates on unit coverage: both units have a row on their window
             QAStage().run(ctx)  # writes the pre-fit subtitles + cue artifacts
 
             # row 0 overruns its 2s window by 1.35s -> the fit loop must shorten it

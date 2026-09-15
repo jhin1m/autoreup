@@ -122,10 +122,6 @@ class Settings(BaseSettings):
     tts_pitch: float = 1.0
     tts_volume: float = 1.0
     tts_text_mode: str = "expressive"  # keep punctuation variety: prosody instruction, not formatting
-    # MEASURED natural read pace of the voice (chars/second): the translator is given
-    # each caption's own duration and targets it; the fit loop then verifies with the
-    # real TTS durations.
-    tts_voice_cps: float = 19.8
     # The TTS server is fully concurrent and caches by text — synth throughput =
     # workers / ~6s per unique line. This is the voiceover bottleneck.
     tts_workers: int = 16
@@ -136,7 +132,7 @@ class Settings(BaseSettings):
     # fit-loop bug, not something the timeline hides.
     tts_lead: float = 0.15
     tts_tempo_ceiling: float = 1.18
-    tts_overflow_tolerance: float = 0.15
+    tts_overflow_tolerance: float = 0.4
     # A row whose voice covers < this share of the VAD speech it belongs to is
     # "clearly under-filled" -> the fit loop asks the editor to complete it.
     tts_expand_floor: float = 0.7

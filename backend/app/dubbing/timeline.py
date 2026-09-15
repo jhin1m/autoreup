@@ -32,7 +32,7 @@ from .models import SpeechRow
 class TimelineConfig:
     lead: float = 0.15               # the voice may start this much before its caption
     tempo_ceiling: float = 1.18      # fastest speed-up used to fit a long line
-    overflow_tolerance: float = 0.15  # playback may overrun the free time by this
+    overflow_tolerance: float = 0.4   # playback may overrun the free time by this
 
 
 @dataclass(slots=True)

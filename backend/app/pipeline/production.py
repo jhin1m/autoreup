@@ -413,8 +413,8 @@ class TranslateStage(PipelineStage):
         segments: list[AsrSegment] = context.artifacts["segments"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         speech_rows = translate(
-            anchors, segments, glossary, _translate_agent(settings),
-            TranslateConfig(notes=context.config.content_notes, voice_cps=settings.tts_voice_cps),
+            anchors, glossary, _translate_agent(settings),
+            TranslateConfig(notes=context.config.content_notes),
         )
         context.artifacts["speech_rows"] = speech_rows
         path = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
@@ -446,13 +446,14 @@ class QAStage(PipelineStage):
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
+        anchors: list[Anchor] = context.artifacts["anchors"]
         segments: list[AsrSegment] = context.artifacts["segments"]
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
         cues = build_display_cues(
             speech_rows, segments, settings.min_duration,
             max_chars=settings.subtitle_max_line_chars, lead=settings.subtitle_lead,
         )
-        report = qa_report(speech_rows, segments, cues, max_display_chars=settings.subtitle_max_line_chars)
+        report = qa_report(speech_rows, anchors, cues, max_display_chars=settings.subtitle_max_line_chars)
 
         subtitle_json = settings.subtitles_dir / f"{context.job_id}.vi.display.json"
         subtitle_srt = settings.subtitles_dir / f"{context.job_id}.vi.display.srt"
@@ -537,9 +538,9 @@ class VoiceoverStage(PipelineStage):
         rounds = 0
         while rounds < _VOICEOVER_REPAIR_ROUNDS:
             overflow = {
-                t.sub_id: (window_of.get(t.sub_id, 0.0), t.tts_duration)
+                t.sub_id: (t.free_after, t.tts_duration)
                 for t in result.timings
-                if t.tts_duration > window_of.get(t.sub_id, 0.0) + render_config.overflow_tolerance
+                if t.free_after > 0 and t.tts_duration > t.free_after + render_config.overflow_tolerance
             }
             # Underfill = the dub is far shorter than the caption while the SOURCE was
             # actually speaking through it (a real pause is not dropped content).
@@ -577,9 +578,11 @@ class VoiceoverStage(PipelineStage):
         # the voice reads the post-fit one ("sub không khớp với voice"). The windows are
         # the captions', so only the text (and its reflow) changes here.
         if rounds:
+            voice_windows = {t.sub_id: (t.place_start, t.place_start + t.tts_duration) for t in result.timings}
             cues = build_display_cues(
                 speech_rows, segments, settings.min_duration,
                 max_chars=settings.subtitle_max_line_chars, lead=settings.subtitle_lead,
+                voice_windows=voice_windows,
             )
             write_subtitles(cues, Path(context.artifacts["subtitle_json"]), Path(context.artifacts["subtitle_srt"]))
             context.artifacts["display_cues"] = cues
