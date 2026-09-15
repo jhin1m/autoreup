@@ -38,3 +38,31 @@ def test_filter_recovered_keeps_cjk_and_kana_drops_latin_and_loops():
     kept, skipped = filter_recovered(rows)
     assert [r["text"] for r in kept] == ["让我藉尔的", "どうなってんだよ", "あなたのことが好きです"]
     assert skipped == 3
+
+
+def test_fuse_rails_prefers_ocr_where_captions_exist():
+    from backend.app.dubbing.models import AsrSegment
+    from backend.app.dubbing.coverage import fuse_rails
+
+    ocr = [AsrSegment(0, 10.0, 12.0, "", "这是字幕")]
+    asr = [
+        AsrSegment(0, 10.1, 11.9, "", "这是声音"),   # overlaps OCR -> dropped
+        AsrSegment(1, 20.0, 22.0, "", "どうなってんだ"),  # no caption -> kept (JP scene)
+    ]
+    merged, stats = fuse_rails(ocr, asr)
+    texts = [seg.text_zh for seg in merged]
+    assert "这是字幕" in texts and "どうなってんだ" in texts
+    assert "这是声音" not in texts
+    assert stats == {"ocr": 1, "asr_kept": 1, "asr_overlapped": 1}
+    assert [seg.id for seg in merged] == [0, 1]
+
+
+def test_speech_coverage_counts_vad_frames_inside_spans():
+    from backend.app.dubbing.coverage import speech_coverage
+
+    packed = ([0.0, 0.9, 0.9, 0.1, 0.8, 0.0], 1.0)  # 3 speech frames
+    covered, total, ratio = speech_coverage([(0.0, 3.0)], packed)
+    assert total == 3.0
+    assert covered == 2.0
+    assert abs(ratio - 2 / 3) < 1e-9
+    assert speech_coverage([(0.0, 1.0)], None)[2] == 0.0

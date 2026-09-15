@@ -97,6 +97,42 @@ def filter_recovered(rows: list[dict]) -> tuple[list[dict], int]:
     return kept, skipped
 
 
+def fuse_rails(ocr: list[AsrSegment], asr: list[AsrSegment], overlap_ratio: float = 0.5) -> tuple[list[AsrSegment], dict]:
+    """OCR (the burned-in script) wins where it has captions; ASR fills the rest.
+
+    An ASR segment is dropped when most of its span already carries an OCR caption
+    (the caption is the authored script — no homophone mistakes). ASR segments with
+    no caption (original-language scenes, songs without subs) stay."""
+    kept: list[AsrSegment] = []
+    dropped = 0
+    for segment in asr:
+        duration = max(0.001, segment.end - segment.start)
+        overlap = sum(max(0.0, min(segment.end, o.end) - max(segment.start, o.start)) for o in ocr)
+        if overlap / duration > overlap_ratio:
+            dropped += 1
+            continue
+        kept.append(segment)
+    merged = sorted([*ocr, *kept], key=lambda seg: (seg.start, seg.end))
+    merged = [AsrSegment(id=index, start=seg.start, end=seg.end, text_zh=seg.text_zh) for index, seg in enumerate(merged)]
+    return merged, {"ocr": len(ocr), "asr_kept": len(kept), "asr_overlapped": dropped}
+
+
+def speech_coverage(spans: list[tuple[float, float]], packed, step: float | None = None) -> tuple[float, float, float]:
+    """(speech_seconds_covered, speech_seconds_total, ratio) from the VAD probs."""
+    if packed is None:
+        return 0.0, 0.0, 0.0
+    probs, size = packed
+    total = float(sum(1 for value in probs if value > 0.5)) * size
+    if total <= 0:
+        return 0.0, 0.0, 0.0
+    covered = 0.0
+    for start, end in spans:
+        lo, hi = int(start / size), min(len(probs), int(end / size) + 1)
+        covered += sum(1 for value in probs[lo:hi] if value > 0.5) * size
+    covered = min(covered, total)
+    return covered, total, covered / total
+
+
 def score_rows(rows: list[dict]) -> float:
     """Prefer longer CJK/kana content and punish repetition loops."""
     kept, skipped = filter_recovered(rows)

@@ -21,7 +21,7 @@ from pathlib import Path
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.domain.jobs import JobInput, PipelineConfig, StageName
-from backend.app.dubbing.coverage import CoverageConfig, fill_coverage_gaps
+from backend.app.dubbing.coverage import CoverageConfig, fill_coverage_gaps, fuse_rails, speech_coverage
 from backend.app.dubbing.normalize import normalize_segments
 from backend.app.dubbing.units import build_units
 from backend.app.dubbing.display import build_display_cues, write_subtitles
@@ -249,14 +249,38 @@ class ASRStage(PipelineStage):
         from backend.app.dubbing.onset import _speech_probs
 
         packed = _speech_probs(video)
-        segments, moved, dropped = refine_segments(segments, video, packed=packed)
-        logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {total} segments")
         from backend.app.services.audio import probe_duration
+
+        duration = probe_duration(video)
+
+        # Burned-in subtitles ARE the script for reup content: OCR them first and let
+        # ASR fill only the caption-less ranges (original-language scenes, songs).
+        ocr_stats = {"ocr_segments": 0, "ocr_coverage": 0.0}
+        if settings.asr_ocr_subs:
+            from backend.app.dubbing.ocr_subs import detect_band, extract_ocr_segments, ocr_coverage
+
+            try:
+                band = detect_band(video)
+                ocr_segments = extract_ocr_segments(video, band) if band else None
+            except Exception as exc:  # noqa: BLE001 - OCR is optional; ASR stands alone
+                ocr_segments, band = None, None
+                logs.append(f"ocr-subs failed: {exc}")
+            if ocr_segments and len(ocr_segments) >= 5:
+                coverage = ocr_coverage(ocr_segments, duration)
+                ocr_stats = {"ocr_segments": len(ocr_segments), "ocr_coverage": round(coverage, 3)}
+                segments, fuse_stats = fuse_rails(ocr_segments, segments)
+                logs.append(
+                    f"ocr-subs: {len(ocr_segments)} captions ({coverage*100:.0f}% runtime); "
+                    f"kept {fuse_stats['asr_kept']} ASR segments, dropped {fuse_stats['asr_overlapped']} overlapped"
+                )
+
+        segments, moved, dropped = refine_segments(segments, video, packed=packed)
+        logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {len(segments)} segments")
 
         segments, gap_stats = fill_coverage_gaps(
             video=video,
             segments=segments,
-            duration=probe_duration(video),
+            duration=duration,
             worker_url=str(settings.asr_worker_url or ""),
             model=settings.asr_model,
             packed=packed,
@@ -274,6 +298,11 @@ class ASRStage(PipelineStage):
             )
         segments, normalize_metrics = normalize_segments(segments, _translate_agent(settings))
         logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
+        covered, speech_total, ratio = speech_coverage([(s.start, s.end) for s in segments], packed)
+        if speech_total > 0:
+            logs.append(f"coverage: {covered:.0f}/{speech_total:.0f}s of speech texted ({ratio*100:.0f}%)")
+            if ratio < 0.9:
+                logs.append("coverage WARNING: unmatched speech remains")
         units = build_units(segments)
         anchors = [Anchor(id=u.id, start=u.start, end=u.end, source_ids=u.segment_ids, source_zh=u.source_zh) for u in units]
         context.artifacts["segments"] = segments
@@ -286,7 +315,7 @@ class ASRStage(PipelineStage):
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.source_json, anchors_tsv, settings.data_dir)],
-            metrics={"segments": len(segments), "units": len(anchors), **normalize_metrics, **gap_stats},
+            metrics={"segments": len(segments), "units": len(anchors), "speech_coverage": round(ratio, 3), **normalize_metrics, **gap_stats, **ocr_stats},
             logs=logs,
         )
 
