@@ -5,6 +5,7 @@ artifacts and stub the LLM/render boundaries.
 """
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -281,9 +282,13 @@ class DownloadCacheTest(unittest.TestCase):
             root = Path(tmp)
             settings = Settings(root_dir=root, _env_file=None)
             settings.ensure_directories()
-            # a previous job already downloaded this source
+            # a previous job already downloaded this source (a real tiny mp4)
             cached = settings.videos_dir / "src-4863edb7fc33.mp4"
-            cached.write_bytes(b"x" * 2048)
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.3",
+                 "-pix_fmt", "yuv420p", str(cached)],
+                check=True,
+            )
             ctx = PipelineContext(
                 job_id="job2", input_url="https://example.com/v", job_dir=settings.jobs_dir / "job2",
                 settings=settings, config=PipelineConfig(),
@@ -298,5 +303,5 @@ class DownloadCacheTest(unittest.TestCase):
                 result = DownloadStage().run(ctx)
             self.assertTrue(result.metrics["reused_cached_video"])
             self.assertTrue(ctx.artifacts["video"].exists())
-            self.assertEqual(ctx.artifacts["video"].read_bytes(), b"x" * 2048)
+            self.assertEqual(ctx.artifacts["video"].read_bytes(), cached.read_bytes())
             # and the cache was seeded on a fresh download in the normal path

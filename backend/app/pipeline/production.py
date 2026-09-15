@@ -209,7 +209,16 @@ class DownloadStage(PipelineStage):
         # bytes do not change. Keyed by the source video id; hard link when possible.
         source_id = context.source_video_id
         cached = settings.videos_dir / f"src-{source_id}.mp4" if source_id else None
+        from backend.app.services.audio import probe_duration
+
+        cached_duration = None
         if cached is not None and cached.exists() and cached.stat().st_size > 0:
+            try:
+                cached_duration = probe_duration(cached)  # a truncated cache must not ship
+            except RuntimeError:
+                cached.unlink(missing_ok=True)
+                cached = None
+        if cached is not None and cached_duration:
             video = settings.videos_dir / f"{context.job_id}.mp4"
             if not video.exists():
                 try:
@@ -221,12 +230,10 @@ class DownloadStage(PipelineStage):
             artifacts = [_artifact(ArtifactKind.video, video, settings.data_dir)]
             if thumb is not None:
                 artifacts.append(_artifact(ArtifactKind.thumbnail, thumb, settings.data_dir))
-            from backend.app.services.audio import probe_duration
-
             return StageResult(
                 name=self.name,
                 artifacts=artifacts,
-                metrics={"reused_cached_video": True, "duration": probe_duration(video)},
+                metrics={"reused_cached_video": True, "duration": cached_duration},
                 logs=[f"download: reused cached source video {cached.name}"],
             )
         result = _download_source(settings, context.input_url, context.job_id)
