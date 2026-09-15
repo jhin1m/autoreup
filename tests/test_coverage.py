@@ -44,10 +44,10 @@ def test_fuse_rails_prefers_ocr_where_captions_exist():
     from backend.app.dubbing.models import AsrSegment
     from backend.app.dubbing.coverage import fuse_rails
 
-    ocr = [AsrSegment(0, 10.0, 12.0, "", "这是字幕")]
+    ocr = [AsrSegment(0, 10.0, 12.0, "这是字幕")]
     asr = [
-        AsrSegment(0, 10.1, 11.9, "", "这是声音"),   # overlaps OCR -> dropped
-        AsrSegment(1, 20.0, 22.0, "", "どうなってんだ"),  # no caption -> kept (JP scene)
+        AsrSegment(0, 10.1, 11.9, "这是声音"),   # overlaps OCR -> dropped
+        AsrSegment(1, 20.0, 22.0, "どうなってんだ"),  # no caption -> kept (JP scene)
     ]
     merged, stats = fuse_rails(ocr, asr)
     texts = [seg.text_zh for seg in merged]
