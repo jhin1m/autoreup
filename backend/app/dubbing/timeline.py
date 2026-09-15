@@ -128,7 +128,10 @@ def plan_run(
     for index, unit in enumerate(ordered):
         duration = durations.get(unit.id, 0.0) / tempo
         breath_before = breath_for(index)
-        place = cursor + breath_before
+        # A pause may never push the line's start past its picture: cap the breath at
+        # the source start, and when the chain is already behind, continue immediately
+        # (a breath while late only deepens the lag — 0.06-0.6s at every boundary).
+        place = min(cursor + breath_before, max(cursor, unit.start))
         # Rule 3: the voice may run at most ``max_lead`` ahead of the picture. Without
         # this the run packs from its start and a locally-short translation (or a long
         # caption-less stretch) leaves the tail of the run with no voice and no

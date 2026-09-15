@@ -99,6 +99,9 @@ queued → running → succeeded | failed | canceled
 - Display: **1 dòng**, reflow width 40 ký tự; cue được phép vượt tối đa `LINE_SLACK = 8` ký tự để tránh ngắt xấu — **QA gate dùng đúng ngưỡng này** (reflow và gate cùng một nguồn).
 - Không ký tự Hán trong output Việt.
 - Không missing/duplicate source cue coverage; không overlap; gap sau snap ≤ 0.12s.
+- Rail ASR: segment được co về đúng vùng VAD speech chứa nó (bỏ blob nhạc dài), hallucination nhạc bị loại; rail bất biến **sorted, không chồng lấn** sau gap-fill.
+- Display: cue **cuối của mỗi unit giữ tới hết caption nguồn** (clamp để không chồng cue sau) — sub Việt không được biến mất khi hardsub gốc còn trên hình.
+- Voice: **lead budget `max_lead = 0.8s`** so với hình; khi chuỗi đã trễ thì không thêm breath (bắt kịp ngay). Đo bằng `max_early_lead_s` / `max_late_lead_s` / `hold_seconds` trong metrics voiceover.
 
 ## 8. TTS contract
 

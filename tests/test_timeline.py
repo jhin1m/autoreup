@@ -82,6 +82,16 @@ def test_lead_budget_holds_short_voice_back_to_the_picture():
     assert plan.placements[-1].place_start >= 6.1 - TimelineConfig().max_lead - 1e-6
 
 
+def test_late_chain_skips_breaths_to_catch_up():
+    # the first line overruns its window; the next must not add a pause on top — any
+    # breath while the chain is behind only deepens the lag
+    units = _units([(0.0, 2.0), (2.5, 6.0)])
+    plan = plan_run(build_runs(units)[0], units, {0: 2.6, 1: 1.0}, TimelineConfig())
+    first, second = plan.placements
+    assert first.place_start + first.playback_duration > units[1].start
+    assert round(second.place_start - (first.place_start + first.playback_duration), 6) == 0.0
+
+
 def test_summary_reports_metrics_sample():
     units = _units([(0.0, 5.0), (5.0, 10.0)])
     plans = plan_timeline(units, {0: 4.0, 1: 4.0})

@@ -244,6 +244,7 @@ def build_display_cues(
     source window. Falls back to the source window when a clip span isn't available."""
     voice_windows = voice_windows or {}
     cues: list[dict] = []
+    holds: list[tuple[int, float]] = []  # (last cue of a unit, that unit's source end)
     prev_end = 0.0
     for unit in build_timed_units(speech_rows, min_duration, anchors, segments):
         base, top = voice_windows.get(round(unit["start"], 3), (unit["start"], unit["end"]))
@@ -271,10 +272,28 @@ def build_display_cues(
                 }
             )
             prev_end = cue_end
+        holds.append((len(cues) - 1, unit["end"]))
     _enforce_min_duration(cues)
     _apply_lead(cues, lead)
     _close_micro_gaps(cues)
+    _hold_to_source_end(cues, holds)
     return cues
+
+
+def _hold_to_source_end(cues: list[dict], holds: list[tuple[int, float]]) -> None:
+    """Keep a unit's last line up until its source caption leaves the picture.
+
+    The Vietnamese dub is ~0.84x the source length, so a compact line often finishes
+    1-3.5s before its caption run ends (measured: 5 anchors) — the viewer then saw the
+    original caption with no Vietnamese subtitle. Only the LAST line is held (holding
+    the whole unit would drag its text away from the voice), and the hold is clamped so
+    no cue overlaps the next one."""
+    for index, source_end in holds:
+        cue = cues[index]
+        ceiling = cues[index + 1]["start"] if index + 1 < len(cues) else None
+        target = source_end if ceiling is None else min(source_end, ceiling)
+        if target > cue["end"]:
+            cue["end"] = round(target, 3)
 
 
 def _apply_lead(cues: list[dict], lead: float) -> None:

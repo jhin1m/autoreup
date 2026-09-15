@@ -69,3 +69,32 @@ def test_display_cues_split_at_clauses_and_follow_segments():
     assert cues[1]["translated"] == "Câu sau."
     assert cues[1]["start"] >= 13.0
     assert cues[0]["end"] <= cues[1]["start"] + 1e-6
+
+
+def test_display_holds_the_last_line_until_the_source_caption_ends():
+    from backend.app.dubbing.display import build_display_cues
+
+    # a compact line (voice 3s) under a 9s source caption: the subtitle must stay up
+    # while the caption is on screen, not blink off 6s early
+    segments = [AsrSegment(0, 0.0, 9.0, "一整段字幕")]
+    anchor = Anchor(0, 0.0, 9.0, "0-0", "一整段字幕")
+    rows = [SpeechRow(0, 0, 0.0, 9.0, "0-0", "Một câu ngắn.")]
+    cues = build_display_cues(rows, 0.4, [anchor], segments, voice_windows={0.0: (0.0, 3.0)})
+    assert len(cues) == 1
+    assert cues[0]["end"] == 9.0
+
+
+def test_display_hold_never_overlaps_the_next_cue():
+    from backend.app.dubbing.display import build_display_cues
+
+    # unit 0's caption runs to 9s but unit 1's voice starts at 6s: the hold is clamped
+    segments = [AsrSegment(0, 0.0, 9.0, "一二"), AsrSegment(1, 9.0, 12.0, "三四")]
+    anchors = [Anchor(0, 0.0, 9.0, "0-0", "一二"), Anchor(1, 9.0, 12.0, "1-1", "三四")]
+    rows = [
+        SpeechRow(0, 0, 0.0, 9.0, "0-0", "Câu một."),
+        SpeechRow(1, 1, 9.0, 12.0, "1-1", "Câu hai."),
+    ]
+    cues = build_display_cues(rows, 0.4, anchors, segments, voice_windows={0.0: (0.0, 3.0), 9.0: (6.0, 9.5)})
+    assert len(cues) == 2
+    assert cues[0]["end"] == cues[1]["start"] == 6.0  # hold clamped at the next cue
+    assert cues[1]["end"] == 12.0                    # last cue holds to its own caption end
