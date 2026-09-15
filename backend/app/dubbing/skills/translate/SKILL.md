@@ -20,6 +20,11 @@ Nhiệm vụ: dịch toàn bộ `input/units.tsv` sang tiếng Việt và ghi k�
    `|` hay `/` để ngắt.
 7. Nguồn có thể lẫn rác OCR/ASR (chữ watermark như "重生动漫", ký tự lạ) — bỏ qua phần rác,
    KHÔNG dịch nó thành chữ Việt.
+8. ĐỌC VỪA THỜI LƯỢNG: mỗi dòng có `START` và `END` — khoảng `END - START` là thời gian câu đó
+   được nói trên hình. Giọng đọc tự nhiên ~19 ký tự/giây, nên lời Việt NÊN đọc hết trong khoảng
+   đó. Nếu ý dài hơn thời lượng: RÚT GỌN CÁCH NÓI (bỏ từ đệm, gộp ý, dùng từ ngắn) — KHÔNG bỏ
+   sự kiện, KHÔNG viết tắt khó hiểu. Nếu câu quá ngắn so với thời lượng thì thêm vài chữ cho
+   trọn nghĩa, đừng để hụt hơi.
 
 ## Định dạng
 

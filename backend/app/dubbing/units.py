@@ -21,12 +21,13 @@ SENTENCE_ENDINGS = "。！？!?…；;"
 
 @dataclass(slots=True)
 class UnitConfig:
-    # An LLM translates a complete thought, not a fragment: units are whole
-    # sentences/paragraphs (measured on real rails: the old 60-char cap made the
-    # median unit 11 Han chars — i.e. one caption fragment, which is exactly the
-    # "sai context" failure mode). The display/voice still get one row per unit.
-    max_chars: int = 120      # normal sentence size — cut once a unit reaches this
-    hard_max_chars: int = 160  # never let a unit grow past this
+    # Translation CONTEXT no longer depends on unit size: the workspace agent reads the
+    # whole transcript, so units are sized for TIMING instead — a unit's voice must fit
+    # its window (measured: 120/160-char units overflowed by up to 8.4s and forced 13/24
+    # rewrites; 60/90-char units converged to 0 with 0.4s late). Cut on punctuation
+    # first; the cap only bounds the unpunctuated runs.
+    max_chars: int = 60       # normal sentence size — cut once a unit reaches this
+    hard_max_chars: int = 90  # never let a unit grow past this
     min_chars: int = 6        # fragments below this merge forward
     gap_cut: float = 0.45     # a pause this long ends the unit (no punctuation in ASR)
     merge_gap: float = 0.6    # ...but only merge a small fragment across a shorter gap
