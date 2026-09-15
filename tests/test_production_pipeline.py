@@ -4,6 +4,7 @@ No subprocess, no external services: we drive the stages with prebuilt context
 artifacts and stub the LLM/render boundaries.
 """
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -129,6 +130,56 @@ class ProductionPipelineTest(unittest.TestCase):
             self.assertTrue(TranslateStage().hydrate(ctx))
             self.assertEqual([r.text for r in ctx.artifacts["speech_rows"]], ["Lời thoại"])
             self.assertEqual(len(ctx.artifacts["segments"]), 2)
+
+    def test_voiceover_rebuilds_subtitles_from_fitted_rows(self):
+        """The fit loop rewrites rows after QA wrote the cues; the burned subtitles
+        must show the FINAL text — otherwise the screen and the voice disagree."""
+        import backend.app.pipeline.production as prod
+        from backend.app.dubbing.models import AsrSegment
+        from backend.app.dubbing.render import RenderResult, RowTiming
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(root_dir=root, _env_file=None, tts_enabled=True, tts_server_url="http://x")
+            settings.ensure_directories()
+            segments = [AsrSegment(0, 0.0, 2.0, "一"), AsrSegment(1, 2.0, 4.0, "二")]
+            anchors = [Anchor(0, 0.0, 2.0, "0-0", "一"), Anchor(1, 2.0, 4.0, "1-1", "二")]
+            ctx = PipelineContext(
+                job_id="job",
+                input_url="u",
+                job_dir=settings.jobs_dir / "job",
+                settings=settings,
+                config=PipelineConfig(display_max_chars=settings.display_max_chars, min_duration=settings.min_duration),
+                artifacts={"anchors": anchors, "segments": segments, "glossary": [], "video": root / "v.mp4"},
+            )
+            ctx.artifacts["speech_rows"] = [
+                SpeechRow(0, 0, 0.0, 2.0, "0-0", "Lời cũ một"),
+                SpeechRow(1, 1, 2.0, 4.0, "1-1", "Lời cũ hai"),
+            ]
+            QAStage().run(ctx)  # writes the pre-fit subtitles + cue artifacts
+
+            # row 0 overruns its 2s window by 1.35s -> the fit loop must shorten it
+            timings = [
+                RowTiming(0, 0.0, 2.0, 0.0, 2.0, 3.5, 1.0, 1500),
+                RowTiming(1, 2.0, 4.0, 3.5, -1.0, 0.5, 1.0, 0),
+            ]
+            fake_render = RenderResult(
+                voice_track=None, timings=timings,
+                summary={"blocks": 2, "rows": 2}, placements=[], total_duration=4.0,
+            )
+
+            def fake_repair(rows, sources, glossary, overflow, llm, cfg):
+                return [SpeechRow(0, 0, 0.0, 2.0, "0-0", "Lời MỚI một"), rows[1]], 1
+
+            with patch.object(prod, "render", return_value=fake_render), patch.object(
+                prod, "repair", side_effect=fake_repair
+            ), patch.object(prod, "assemble_voice"), patch.object(
+                prod, "_build_capcut_client", return_value=None
+            ), patch.object(prod, "_polish_agent", return_value=None):
+                VoiceoverStage().run(ctx)
+
+            cues = json.loads(Path(ctx.artifacts["subtitle_json"]).read_text())
+            self.assertEqual([c["text"] for c in cues], ["Lời MỚI một", "Lời cũ hai"])
 
     def test_voiceover_skipped_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:

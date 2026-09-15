@@ -567,12 +567,25 @@ class VoiceoverStage(PipelineStage):
             result = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
             logs.append(f"render round {rounds}: {result.summary}")
 
-        # Assemble the final track once, after timings have converged. The display
-        # subtitles were already written by the QA stage from the same rows — their
-        # windows are the captions', so voice timing never rewrites them.
+        # Assemble the final track once, after timings have converged.
         assemble_voice(result, output_audio, work_dir, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)
         context.artifacts["speech_rows"] = speech_rows
         context.artifacts["timings"] = result.timings
+
+        # The fit loop rewrote rows AFTER the QA stage wrote the subtitles: rebuild the
+        # cues from the FINAL text, or the screen shows the pre-fit translation while
+        # the voice reads the post-fit one ("sub không khớp với voice"). The windows are
+        # the captions', so only the text (and its reflow) changes here.
+        if rounds:
+            cues = build_display_cues(
+                speech_rows, segments, settings.min_duration,
+                max_chars=settings.subtitle_max_line_chars, lead=settings.subtitle_lead,
+            )
+            write_subtitles(cues, Path(context.artifacts["subtitle_json"]), Path(context.artifacts["subtitle_srt"]))
+            context.artifacts["display_cues"] = cues
+            logs.append(f"subtitles rebuilt from the fitted rows ({len(cues)} cues)")
+        speech_tsv = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
+        write_tsv(speech_tsv, [r.to_row() for r in speech_rows], SPEECH_FIELDS)
 
         manifest = settings.tts_dir / f"{context.job_id}.tts.json"
         write_json(manifest, {"summary": result.summary, "timings": [asdict(t) for t in result.timings]})
