@@ -80,3 +80,53 @@ class TtsServiceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_capcut_download_retries_transient_disconnects(monkeypatch):
+    """A body-transfer drop must retry, not fail the whole voiceover stage."""
+    import http.client
+from pathlib import Path
+
+    import backend.app.services.capcut_tts as tts
+
+    calls = {"n": 0}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"audio-bytes"
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+        return FakeResponse()
+
+    monkeypatch.setattr(tts.urllib.request, "urlopen", fake_urlopen)
+    client = tts.CapCutTtsClient.__new__(tts.CapCutTtsClient)
+    client.config = tts.CapCutConfig(session_file=Path("/dev/null"), attempts=3, timeout=1.0)
+    assert client._download("https://example.com/a.mp3") == b"audio-bytes"
+    assert calls["n"] == 3
+
+
+def test_capcut_download_gives_up_after_attempts(monkeypatch):
+    import http.client
+
+    import backend.app.services.capcut_tts as tts
+
+    def always_fail(request, timeout=None):
+        raise http.client.RemoteDisconnected("nope")
+
+    monkeypatch.setattr(tts.urllib.request, "urlopen", always_fail)
+    client = tts.CapCutTtsClient.__new__(tts.CapCutTtsClient)
+    client.config = tts.CapCutConfig(session_file=Path("/dev/null"), attempts=2, timeout=1.0)
+    try:
+        client._download("https://example.com/a.mp3")
+        assert False, "expected CapCutTtsError"
+    except tts.CapCutTtsError:
+        pass

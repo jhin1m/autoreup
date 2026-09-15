@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import http.client
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -157,12 +158,32 @@ class CapCutTtsClient:
         raise CapCutTtsError(f"CapCut multi_platform failed after {cfg.attempts} attempts: {last_error}")
 
     def _download(self, url: str) -> bytes:
+        """Fetch one audio file, retrying transient connection drops.
+
+        Measured failure: a single "Remote end closed connection without response"
+        (http.client.RemoteDisconnected raised while reading the body) escaped the
+        post call's retry and failed a whole 403-clip voiceover stage. The download
+        leg needs the same bounded retry as the API call."""
         request = urllib.request.Request(url, headers={"User-Agent": self.config.user_agent, "Accept": "*/*"})
-        with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
-            audio = response.read()
-        if not audio:
-            raise CapCutTtsError("CapCut audio download was empty")
-        return audio
+        last_error: Exception | None = None
+        for attempt in range(1, self.config.attempts + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
+                    audio = response.read()
+                if not audio:
+                    raise CapCutTtsError("CapCut audio download was empty")
+                return audio
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,          # includes RemoteDisconnected/ConnectionResetError
+                http.client.HTTPException,  # IncompleteRead and friends
+                CapCutTtsError,
+            ) as exc:
+                last_error = exc
+                if attempt < self.config.attempts:
+                    time.sleep(0.6 * (attempt + 1))
+        raise CapCutTtsError(f"CapCut audio download failed after {self.config.attempts} attempts: {last_error}")
 
     def synthesize_batch(self, texts: list[str], rate: float = 1.0, volume: float = 10.0) -> list[bytes]:
         """One signed CapCut call for up to ~100 texts, then download each audio.
