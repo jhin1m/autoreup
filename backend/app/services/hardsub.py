@@ -13,7 +13,7 @@ sub video -> mux the dubbed audio. Falls back gracefully if the band isn't found
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,6 +48,12 @@ class HardsubConfig:
     # source-resolution behaviour so hardsub works standalone.
     video_codec_args: tuple[str, ...] = field(default_factory=preferred_video_codec_args)
     scale_filter: str = ""  # empty = keep source size; else scale/pad/fps to a canonical output
+    # The overlay is rendered in THIS space (settings.video_width/height); 0 = source.
+    # Measured bug this fixes: a 3840x2160 source built its overlay at source size with
+    # font 58, then the canonical scale halved it -> captions burned at ~29px, while a
+    # 1080p source got the full 58px. Caption size must not depend on the source size.
+    out_width: int = 0
+    out_height: int = 0
     # Contrast-adaptive sharpening on the picture (NOT the caption overlay, which is
     # already crisp). Douyin sources sit around 1Mbps for 1080p — visibly soft; a
     # light CAS restores perceived detail without unsharp's halos. 0 disables.
@@ -102,6 +108,31 @@ def detect_sub_band(video: Path, config: HardsubConfig) -> tuple[int, int, int, 
     return band_y, band_bottom - band_y, width, height
 
 
+@dataclass(slots=True)
+class OverlayGeometry:
+    out_width: int
+    out_height: int
+    scale: float      # source pixels -> output pixels
+    pad_x: int
+    pad_y: int
+    caption_cy: int   # in OUTPUT pixels
+
+
+def overlay_geometry(src_width: int, src_height: int, band: tuple[int, int, int, int] | None, config: HardsubConfig) -> OverlayGeometry:
+    """Where the caption lives in the OUTPUT frame (matches force_original_aspect_ratio)."""
+    out_width = config.out_width or src_width
+    out_height = config.out_height or src_height
+    scale = min(out_width / max(1, src_width), out_height / max(1, src_height))
+    pad_x = (out_width - round(src_width * scale)) // 2
+    pad_y = (out_height - round(src_height * scale)) // 2
+    if band is not None:
+        _band_y, band_h = band[0], band[1]
+        caption_cy = pad_y + round((band[0] + band_h / 2) * scale)
+    else:
+        caption_cy = out_height - config.margin_v
+    return OverlayGeometry(out_width, out_height, round(scale, 6), pad_x, pad_y, caption_cy)
+
+
 def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: int, caption_cy: int, output: Path, config: HardsubConfig) -> None:
     """Render each cue to a transparent full-frame PNG and concat (held for each cue's
     duration, with transparent gaps) into one alpha overlay video."""
@@ -124,7 +155,9 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
         img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         draw.text((width // 2, baseline_y), text, font=font, anchor="ms",
-                  fill=(255, 255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                  fill=(255, 255, 255, 255),
+                  stroke_width=max(2, round(config.font_size * 0.05)),
+                  stroke_fill=(0, 0, 0, 255))
         img.save(path)
 
     ordered = sorted([c for c in cues if (c.get("text") or "").strip()], key=lambda c: float(c["start"]))
@@ -158,20 +191,27 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    band = detect_sub_band(video, config)
+    import cv2
+
+    cap = cv2.VideoCapture(str(video))
+    src_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+    src_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+    cap.release()
+    geometry = overlay_geometry(src_width, src_height, None, config)
+
+    # The band is detected in SOURCE pixels; pad/blur are tuned for the OUTPUT, so they
+    # are scaled into source space before use (a 4K source needs 2x the pixel pad to
+    # cover the same outline once the frame is scaled down).
+    scale = geometry.scale or 1.0
+    band = detect_sub_band(video, replace(config, band_pad=max(1, round(config.band_pad / scale))))
     if band is not None:
-        band_y, band_h, width, height = band
-        caption_cy = band_y + band_h // 2          # VI sits where the original was
+        band_y, band_h = band[0], band[1]
     else:
-        import cv2
-        cap = cv2.VideoCapture(str(video))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
-        cap.release()
-        caption_cy = height - config.margin_v
+        band_y = band_h = 0
+    geometry = overlay_geometry(src_width, src_height, band, config)
 
     overlay_mov = work_dir / "vi_overlay.mov"
-    _build_overlay_video(cues, work_dir / "cues", width, height, caption_cy, overlay_mov, config)
+    _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, geometry.caption_cy, overlay_mov, config)
 
     has_voice = voice_track is not None and Path(voice_track).exists()
     inputs = ["-i", str(video), "-i", str(overlay_mov)]
@@ -183,8 +223,11 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         # chroma plane is half-res, so its max radius is ~band_h/4 (luma allows
         # ~band_h/2). A fixed radius crashed on short bands (74px -> chroma cap 18).
         # Clamp luma and chroma radii to their planes so any band height is safe.
-        luma_r = max(1, min(config.blur, band_h // 2))
-        chroma_r = max(1, min(config.blur, band_h // 4))
+        # The radius is specified in OUTPUT pixels (like the font), so scale it into
+        # source space: at 4K -> 1080p a 20px output blur needs 40px of source blur.
+        blur_src = max(1, round(config.blur / (geometry.scale or 1.0)))
+        luma_r = max(1, min(blur_src, band_h // 2))
+        chroma_r = max(1, min(blur_src, band_h // 4))
         cover = (
             f"[0:v]split=2[base][t];"
             f"[t]crop=iw:{band_h}:0:{band_y},boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{config.darken:.2f}[bl];"
@@ -192,9 +235,14 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         )
     else:
         cover = "[0:v]copy[cov];"
-    sharpen = f"cas={config.sharpen:.2f}," if config.sharpen > 0 else ""
-    scale = f",{config.scale_filter}" if config.scale_filter else ""
-    video_graph = cover + f"[cov]{sharpen}null[base2];[base2][1:v]overlay=0:0{scale}[vo]"
+    # Order matters: cover the source band in SOURCE space, sharpen + scale to the
+    # canonical output size, THEN overlay the output-space caption PNGs. Overlaying
+    # before the scale is what shrank captions on 4K sources (measured: 58px -> 29px).
+    picture_filters = [part for part in (
+        f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
+        config.scale_filter,
+    ) if part] or ["null"]
+    video_graph = cover + f"[cov]{','.join(picture_filters)}[base2];[base2][1:v]overlay=0:0[vo]"
 
     if has_voice:
         from backend.app.services.audio import dub_mix_filter
@@ -214,4 +262,4 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         str(output),
     ])
-    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues)}
+    return {"covered": band is not None, "band": band, "caption_cy": geometry.caption_cy, "cues": len(cues)}

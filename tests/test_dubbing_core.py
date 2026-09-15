@@ -86,3 +86,20 @@ def test_display_closes_micro_gaps_between_captions():
     ]
     cues = build_display_cues(rows, segments, min_duration=0.4)
     assert cues[0]["end"] == cues[1]["start"] == 2.3  # 0.3s gap closed (no flicker)
+
+
+def test_overlay_geometry_is_source_resolution_independent():
+    from backend.app.services.hardsub import HardsubConfig, overlay_geometry
+
+    config = HardsubConfig(out_width=1920, out_height=1080, font_size=58, margin_v=88)
+    high = overlay_geometry(3840, 2160, (1700, 120, 3840, 2160), config)   # 4K source
+    normal = overlay_geometry(1920, 1080, (850, 60, 1920, 1080), config)   # 1080p source
+    assert (high.out_width, high.out_height) == (1920, 1080) == (normal.out_width, normal.out_height)
+    assert high.scale == 0.5 and normal.scale == 1.0
+    # same caption centre in the OUTPUT for both sources (the band centre maps down)
+    assert abs(high.caption_cy - normal.caption_cy) <= 1
+    # no band -> the configured bottom margin, in output pixels, for any source size
+    assert overlay_geometry(2160, 3840, None, config).caption_cy == 1080 - 88
+    # no canonical output -> the overlay is source-sized again
+    plain = overlay_geometry(3840, 2160, None, HardsubConfig())
+    assert (plain.out_width, plain.out_height, plain.scale) == (3840, 2160, 1.0)

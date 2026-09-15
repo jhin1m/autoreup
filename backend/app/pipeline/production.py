@@ -116,6 +116,7 @@ def _hardsub_config(settings: Settings):
     from backend.app.infrastructure.ffmpeg_encode import video_encode_args, canonical_scale_filter
 
     font = settings.hardsub_font or str(settings.root_dir / "backend" / "app" / "assets" / "fonts" / "Bangers-Regular.ttf")
+    scale_filter = canonical_scale_filter(settings)
     return HardsubConfig(
         font_path=font,
         font_size=settings.hardsub_font_size,
@@ -126,7 +127,11 @@ def _hardsub_config(settings: Settings):
         duck=settings.dub_duck,
         carve_db=settings.dub_carve_db,
         video_codec_args=tuple(video_encode_args(settings)),
-        scale_filter=canonical_scale_filter(settings),
+        scale_filter=scale_filter,
+        # The caption is rendered in the OUTPUT space. Without a canonical scale the
+        # output IS the source, so the overlay must stay source-sized (0 = source).
+        out_width=settings.video_width if scale_filter else 0,
+        out_height=settings.video_height if scale_filter else 0,
         sharpen=settings.video_sharpen,
     )
 
