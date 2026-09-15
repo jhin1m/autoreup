@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from backend.app.services.tts import TtsBlock, build_tts_blocks, cache_key, clean_tts_text, group_tts_blocks, to_provider_scale
 
@@ -85,7 +86,6 @@ if __name__ == "__main__":
 def test_capcut_download_retries_transient_disconnects(monkeypatch):
     """A body-transfer drop must retry, not fail the whole voiceover stage."""
     import http.client
-from pathlib import Path
 
     import backend.app.services.capcut_tts as tts
 
