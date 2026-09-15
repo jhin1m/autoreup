@@ -25,7 +25,9 @@ from backend.app.dubbing.coverage import (
     CoverageConfig,
     dedupe_overlaps,
     fill_coverage_gaps,
+    find_speech_holes,
     fuse_rails,
+    plan_uncovered_asr,
     speech_coverage,
     speech_seconds,
 )
@@ -243,32 +245,21 @@ class ASRStage(PipelineStage):
         settings: Settings = context.settings
         if not settings.asr_worker_url:
             raise RuntimeError("Missing ASR worker URL. Set AUTOREUP_ASR_WORKER_URL.")
-        output_srt = settings.subtitles_dir / f"{context.job_id}.asr.zh.srt"
-        logs = _run_asr(context, output_srt)
-
-        segments = segments_from_srt(output_srt)
-        # Whisper timestamps lead the real words on noisy content (music/SFX) and it
-        # hallucinates lines inside music-only passages — the dub then speaks before
-        # the on-screen character and phantom dialogue appears. Align the rail to
-        # Silero-VAD speech regions (the WhisperX-style fix) before anything trusts it.
-        total = len(segments)
+        logs: list[str] = []
         video = Path(context.artifacts["video"])
-        from backend.app.dubbing.onset import _speech_probs
+        from backend.app.dubbing.onset import _speech_probs, tighten_to_speech
+        from backend.app.services.audio import probe_duration
 
         packed = _speech_probs(video)
         context.artifacts["vad_probs"] = packed
-        from backend.app.dubbing.onset import tighten_to_speech
-
-        segments, tightened = tighten_to_speech(segments, packed)
-        if tightened:
-            logs.append(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(segments)} of {total} left)")
-        from backend.app.services.audio import probe_duration
-
         duration = probe_duration(video)
 
-        # Burned-in subtitles ARE the script for reup content: OCR them first and let
-        # ASR fill only the caption-less ranges (original-language scenes, songs).
-        ocr_stats = {"ocr_segments": 0, "ocr_coverage": 0.0}
+        # Captions first (they ARE the script for reup content): OCR the burned-in
+        # subtitle band. When they cover the video, the whole-video Whisper pass is
+        # redundant — the gap-fill ladder below re-ASRs only the caption-less speech,
+        # which is where the cost of a full pass (minutes per hour of video) is wasted.
+        ocr_stats: dict = {"ocr_segments": 0, "ocr_coverage": 0.0}
+        ocr_segments = None
         if settings.asr_ocr_subs:
             from backend.app.dubbing.ocr_subs import detect_band, extract_ocr_segments, ocr_coverage
 
@@ -281,11 +272,67 @@ class ASRStage(PipelineStage):
             if ocr_segments and len(ocr_segments) >= 5:
                 coverage = ocr_coverage(ocr_segments, duration)
                 ocr_stats = {"ocr_segments": len(ocr_segments), "ocr_coverage": round(coverage, 3)}
-                segments, fuse_stats = fuse_rails(ocr_segments, segments)
+
+        # The ASR's actual job: transcribe the VAD speech the captions do NOT cover.
+        # No captions at all -> that set is all speech -> the plain full pass. With
+        # captions, the cheapest mechanism is chosen by a MEASURED cost model (gluing
+        # the uncovered ranges vs transcribing the whole video; see coverage.py) — the
+        # uncovered set comes from VAD, never from a coverage threshold.
+        if ocr_segments and packed is not None:
+            spans = [(seg.start, seg.end) for seg in ocr_segments]
+            holes = find_speech_holes(spans, packed, min_seconds=0.5, merge_gap=1.2)
+            uncovered_ranges = [(max(0.0, a - 0.2), min(duration, b + 0.2)) for a, b in holes]
+            uncovered = sum(speech_seconds(packed, a, b) for a, b in uncovered_ranges)
+            plan = plan_uncovered_asr(uncovered, len(uncovered_ranges), duration)
+            logs.append(
+                f"asr-plan: {uncovered:.0f}s of speech uncovered in {len(uncovered_ranges)} range(s) -> {plan}"
+            )
+            segments: list[AsrSegment] = list(ocr_segments)
+            if plan == "full":
+                output_srt = settings.subtitles_dir / f"{context.job_id}.asr.zh.srt"
+                logs += _run_asr(context, output_srt)
+                asr_segments = segments_from_srt(output_srt)
+                total = len(asr_segments)
+                asr_segments, tightened = tighten_to_speech(asr_segments, packed)
+                if tightened:
+                    logs.append(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(asr_segments)} of {total} left)")
+                segments, fuse_stats = fuse_rails(segments, asr_segments)
                 logs.append(
-                    f"ocr-subs: {len(ocr_segments)} captions ({coverage*100:.0f}% runtime); "
-                    f"kept {fuse_stats['asr_kept']} ASR segments, dropped {fuse_stats['asr_overlapped']} overlapped"
+                    f"ocr-subs: {len(ocr_segments)} captions; kept {fuse_stats['asr_kept']} ASR segments, "
+                    f"dropped {fuse_stats['asr_overlapped']} overlapped"
                 )
+            elif plan == "glue":
+                try:
+                    from backend.app.dubbing.coverage import clamp_to_ranges, transcribe_ranges
+
+                    recovered = transcribe_ranges(
+                        video, uncovered_ranges, str(settings.asr_worker_url), settings.asr_model,
+                        workers=settings.asr_workers, chunk_seconds=settings.asr_chunk_seconds,
+                        scripts_dir=settings.scripts_dir, python_bin=sys.executable,
+                    )
+                    recovered = clamp_to_ranges(recovered, uncovered_ranges)
+                    segments = sorted([*segments, *recovered], key=lambda seg: (seg.start, seg.end))
+                    segments = [AsrSegment(id=index, start=s.start, end=s.end, text_zh=s.text_zh) for index, s in enumerate(segments)]
+                    logs.append(f"asr-glue: +{len(recovered)} segments from {len(uncovered_ranges)} range(s)")
+                except Exception as exc:  # noqa: BLE001 - best-effort; the ladder follows
+                    logs.append(f"asr-glue failed: {exc}")
+        else:
+            output_srt = settings.subtitles_dir / f"{context.job_id}.asr.zh.srt"
+            logs += _run_asr(context, output_srt)
+            segments = segments_from_srt(output_srt)
+            # Whisper timestamps lead the real words on noisy content (music/SFX) and it
+            # hallucinates lines inside music-only passages — align to VAD before use.
+            total = len(segments)
+            segments, tightened = tighten_to_speech(segments, packed)
+            if tightened:
+                logs.append(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(segments)} of {total} left)")
+
+        if ocr_segments:
+            segments, fuse_stats = fuse_rails(ocr_segments, segments)
+            logs.append(
+                f"ocr-subs: {len(ocr_segments)} captions; "
+                f"kept {fuse_stats['asr_kept']} ASR segments, dropped {fuse_stats['asr_overlapped']} overlapped"
+            )
 
         segments, moved, dropped = refine_segments(segments, video, packed=packed)
         logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {len(segments)} segments")

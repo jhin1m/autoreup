@@ -332,3 +332,132 @@ def fill_coverage_gaps(
     merged = [AsrSegment(id=index, start=s.start, end=s.end, text_zh=s.text_zh) for index, s in enumerate(merged)]
     stats["recovered"] = len(recovered)
     return merged, stats
+
+
+def build_range_map(ranges: list[tuple[float, float]]) -> tuple[list[tuple[float, float, float]], float]:
+    """Concatenated-audio map: [(concat_offset, length, source_start)], total length.
+
+    Transcribing only the uncovered speech means slicing those ranges out of the video
+    and gluing them into ONE audio track (the worker client is efficient on long audio:
+    30s chunks x 8 workers, one attempt each). The client's timestamps are in the glued
+    timeline, so this piecewise map is what converts them back to source time."""
+    spans: list[tuple[float, float, float]] = []
+    offset = 0.0
+    for start, end in ranges:
+        length = max(0.0, end - start)
+        if length <= 0.0:
+            continue
+        spans.append((offset, length, start))
+        offset += length
+    return spans, offset
+
+
+def concat_time_to_source(spans: list[tuple[float, float, float]], t: float) -> float:
+    """Inverse of :func:`build_range_map` (clamped to the range edges)."""
+    if not spans:
+        return max(0.0, t)
+    for offset, length, source_start in spans:
+        if t <= offset + length:
+            return source_start + max(0.0, min(length, t - offset))
+    offset, length, source_start = spans[-1]
+    return source_start + length
+
+
+def concat_filter(ranges: list[tuple[float, float]]) -> str:
+    """ffmpeg filter that extracts and glues the ranges' AUDIO into one track."""
+    parts = []
+    for index, (start, end) in enumerate(ranges):
+        parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=N/SR/TB[a{index}]")
+    joined = "".join(f"[a{index}]" for index in range(len(ranges)))
+    return ";".join(parts) + f";{joined}concat=n={len(ranges)}:v=0:a=1[outa]"
+
+
+# --- how to get the speech the captions don't cover (measured cost model) ----------
+# Measured on real jobs (this machine + worker, 2026-09):
+#   full pass over a 48-min video          680s  -> 0.236s per video-second
+#   glue 369 ranges / 965s of speech      1020s  -> ~1.3s per range + ~0.6s per glued second
+# (A "narration" video whose captions were only the on-screen anime dialogue had 965s
+# of uncaptioned speech: gluing 369 fragments cost MORE than transcribing the video.)
+GLUE_COST_PER_RANGE = 1.3
+GLUE_COST_PER_SECOND = 0.6
+FULL_PASS_COST_RATIO = 0.24
+MIN_BULK_SECONDS = 30.0  # below this the per-hole ladder is the right tool
+
+
+def plan_uncovered_asr(uncovered_seconds: float, range_count: int, duration: float) -> str:
+    """``"none"`` | ``"glue"`` | ``"full"`` — chosen by the measured cost model above."""
+    if uncovered_seconds < MIN_BULK_SECONDS:
+        return "none"  # the gap-fill ladder mops this up directly
+    glue = GLUE_COST_PER_RANGE * range_count + GLUE_COST_PER_SECOND * uncovered_seconds
+    full = FULL_PASS_COST_RATIO * max(0.0, duration)
+    return "glue" if glue < full else "full"
+
+
+def clamp_to_ranges(segments: list[AsrSegment], ranges: list[tuple[float, float]], tolerance: float = 0.3) -> list[AsrSegment]:
+    """Keep each transcribed segment inside the range it belongs to (whisper drifts)."""
+    out: list[AsrSegment] = []
+    for segment in segments:
+        mid = (segment.start + segment.end) / 2
+        target = next((r for r in ranges if r[0] - tolerance <= mid <= r[1] + tolerance), None)
+        if target is None:
+            continue
+        start = max(segment.start, target[0] - tolerance)
+        end = min(segment.end, target[1] + tolerance)
+        if end - start >= 0.2:
+            out.append(AsrSegment(id=0, start=round(start, 3), end=round(end, 3), text_zh=segment.text_zh))
+    for index, segment in enumerate(out):
+        segment.id = index
+    return out
+
+
+def transcribe_ranges(
+    video: Path,
+    ranges: list[tuple[float, float]],
+    worker_url: str,
+    model: str,
+    *,
+    language: str = "auto",
+    workers: int = 8,
+    chunk_seconds: float = 30.0,
+    scripts_dir: Path | None = None,
+    python_bin: str | None = None,
+) -> list[AsrSegment]:
+    """Bulk-transcribe the ranges with the worker client; times mapped back to source."""
+    import sys as _sys
+
+    from .rail import segments_from_srt
+
+    spans, total = build_range_map(ranges)
+    if total <= 0.5:
+        return []
+    with tempfile.TemporaryDirectory() as tmp:
+        glued = Path(tmp) / "uncovered.mp3"
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(video),
+             "-filter_complex", concat_filter(ranges), "-map", "[outa]",
+             "-ac", "1", "-ar", "16000", "-b:a", "64k", str(glued)],
+            check=True,
+        )
+        srt = Path(tmp) / "uncovered.srt"
+        script = (scripts_dir or Path(__file__).resolve().parents[3] / "scripts") / "asr_worker_client.py"
+        subprocess.run(
+            [
+                python_bin or _sys.executable, str(script), str(glued),
+                "--worker-url", worker_url, "--output", str(srt),
+                "--language", language, "--model", model,
+                "--workers", str(workers), "--chunk-seconds", str(chunk_seconds),
+                "--max-chars", "18",
+            ],
+            check=True,
+        )
+        raw = segments_from_srt(srt)
+    return [
+        AsrSegment(
+            id=index,
+            start=round(concat_time_to_source(spans, segment.start), 3),
+            end=round(concat_time_to_source(spans, segment.end), 3),
+            text_zh=segment.text_zh,
+        )
+        for index, segment in enumerate(raw)
+        if segment.text_zh.strip()
+    ]

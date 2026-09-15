@@ -13,10 +13,35 @@ sub video -> mux the dubbed audio. Falls back gracefully if the band isn't found
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from functools import lru_cache
+
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.app.services.audio import run_command
+
+
+@lru_cache(maxsize=1)
+def preferred_video_codec_args() -> tuple[str, ...]:
+    """H.264 encoder args: hardware (VideoToolbox) when the platform has it.
+
+    Encoding dominates the package stage on long videos (measured 10.8 min for 70 min
+    of video with libx264 -veryfast); VideoToolbox runs the same pass several times
+    faster at a fixed high bitrate, which is the right trade for 1080p reup content."""
+    import shutil
+    import subprocess
+    import sys
+
+    if sys.platform == "darwin" and shutil.which("ffmpeg"):
+        try:
+            encoders = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=15
+            ).stdout
+            if "h264_videotoolbox" in encoders:
+                return ("-c:v", "h264_videotoolbox", "-b:v", "8M", "-maxrate", "12M", "-pix_fmt", "yuv420p")
+        except Exception:  # noqa: BLE001 - probe failure just means software encoding
+            pass
+    return ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
 
 
 @dataclass(slots=True)
@@ -32,9 +57,9 @@ class HardsubConfig:
     bed_volume: float = 0.55
     duck: bool = True
     carve_db: float = -3.0
-    # Encoder + canonical geometry (filled from Settings). Defaults keep the old libx264,
+    # Encoder + canonical geometry (filled from Settings). See preferred_video_codec_args:
     # source-resolution behaviour so hardsub works standalone.
-    video_codec_args: tuple[str, ...] = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
+    video_codec_args: tuple[str, ...] = field(default_factory=preferred_video_codec_args)
     scale_filter: str = ""  # empty = keep source size; else scale/pad/fps to a canonical output
     # Contrast-adaptive sharpening on the picture (NOT the caption overlay, which is
     # already crisp). Douyin sources sit around 1Mbps for 1080p — visibly soft; a

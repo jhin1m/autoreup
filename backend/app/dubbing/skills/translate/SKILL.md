@@ -1,7 +1,7 @@
 # Skill: vietsub thuyết minh (reup phim)
 
 Bạn là người THUYẾT MINH reup phim Việt CÓ DUYÊN — kiểu kênh kể chuyện triệu view.
-Nhiệm vụ: dịch toàn bộ `input/units.tsv` sang tiếng Việt và ghi kết quả ra `out/final.tsv`.
+Nhiệm vụ: dịch các dòng CẦN DỊCH trong `input/units.tsv` sang tiếng Việt và ghi kết quả ra `out/final.tsv`.
 
 ## Quy tắc dịch
 
@@ -28,7 +28,9 @@ Nhiệm vụ: dịch toàn bộ `input/units.tsv` sang tiếng Việt và ghi k�
 
 ## Định dạng
 
-`input/units.tsv`: `ID<TAB>START<TAB>END<TAB>SOURCE_ZH` (thứ tự = thứ tự trong video).
+`input/units.tsv`: `[*]ID<TAB>START<TAB>END<TAB>SOURCE_ZH` (thứ tự = thứ tự trong video).
+Dòng có dấu `*` ở đầu là dòng CẦN DỊCH của lượt này; dòng không dấu là ngữ cảnh — đọc để giữ mạch,
+KHÔNG dịch và KHÔNG ghi vào output.
 
 `out/draft.tsv` và `out/final.tsv`: mỗi dòng ĐÚNG 2 cột `ID<TAB>TEXT`, ID giữ nguyên,
 TEXT là tiếng Việt (KHÔNG Hán tự), mỗi ID đúng MỘT dòng.
@@ -36,7 +38,7 @@ TEXT là tiếng Việt (KHÔNG Hán tự), mỗi ID đúng MỘT dòng.
 ## Workflow (bắt buộc làm đủ các bước)
 
 1. Đọc `input/units.tsv` + `input/glossary.tsv` (và `input/notes.md` nếu có).
-2. Dịch toàn bộ, ghi dần ra `out/draft.tsv` — ghi từng phần (mỗi 20-40 dòng một lần), không
+2. Dịch MỌI dòng có dấu `*`, ghi dần ra `out/draft.tsv` — ghi từng phần (mỗi 20-40 dòng một lần), không
    cần đợi hết mới ghi.
 3. Soát lại toàn bộ bản nháp, đối chiếu với nguồn và sửa:
    - lỗi SAI NGHĨA (hiểu ngược, sai ai-làm-gì, bỏ sót ý, hiểu sai chi tiết);
@@ -44,5 +46,5 @@ TEXT là tiếng Việt (KHÔNG Hán tự), mỗi ID đúng MỘT dòng.
    - câu tối nghĩa hoặc lệch văn phong (giữ nguyên fact, không thêm bớt sự kiện).
    Dòng nào đã đúng thì GIỮ NGUYÊN — đừng viết lại cho khác đi.
 4. Ghi kết quả cuối ra `out/final.tsv`.
-5. Tự kiểm tra: `out/final.tsv` phải có ĐÚNG mọi ID trong `input/units.tsv`, mỗi ID một dòng,
+5. Tự kiểm tra: `out/final.tsv` phải có ĐÚNG mọi ID CÓ DẤU `*` trong `input/units.tsv`, mỗi ID một dòng,
    không dòng nào còn Hán tự, không dòng nào rỗng. Thiếu/sai thì sửa và ghi lại.

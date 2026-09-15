@@ -127,3 +127,34 @@ def test_workspace_translate_raises_when_ids_stay_missing(monkeypatch, tmp_path)
         assert False, "expected TranslateError"
     except translate_mod.TranslateError:
         pass
+
+
+def test_translate_bisects_a_short_session_instead_of_retrying(monkeypatch, tmp_path):
+    """A session that cannot finish its part is split in half, recursively."""
+    from backend.app.agents.workspace import WorkspaceRun
+    from backend.app.dubbing.models import Anchor
+
+    units = [Anchor(id=i, start=i * 5.0, end=i * 5.0 + 4.0, source_ids=f"{i}-{i}", source_zh=f"字{i}") for i in range(60)]
+    runs = {"n": 0}
+
+    def fake(workspace, prompt, config, *, timeout=None, resume=False):
+        ws = Path(workspace)
+        ws.mkdir(parents=True, exist_ok=True)
+        runs["n"] += 1
+        # the input file marks the lines this session must translate
+        marked = []
+        for line in (ws / "input" / "units.tsv").read_text().splitlines():
+            if line.startswith("*"):
+                marked.append(line.split("\t")[0].lstrip("*"))
+        (ws / "out").mkdir(exist_ok=True)
+        if len(marked) <= 20:  # only small sessions are "finishable"
+            (ws / "out" / "final.tsv").write_text("\n".join(f"{i}\tLời {i}" for i in marked) + "\n")
+        else:
+            (ws / "out" / "final.tsv").write_text("")
+        return WorkspaceRun(0, "", "", 1.0)
+
+    monkeypatch.setattr(translate_mod, "run_agent_workspace", fake)
+    result = translate(units, [], LLM, tmp_path / "translate", TranslateConfig(part_units=60, min_part_units=25, max_split_depth=3))
+    assert [r.text for r in result.rows] == [f"Lời {i}" for i in range(60)]
+    assert any("bisecting" in log for log in result.logs)
+    assert runs["n"] >= 7  # 1 + 2 + 4 sessions
