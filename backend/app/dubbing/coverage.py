@@ -58,7 +58,9 @@ def speech_fraction(packed, start: float, end: float) -> float:
     if hi <= lo:
         return 0.0
     window = probs[lo:hi]
-    return float((window > 0.5).mean())
+    if not len(window):
+        return 0.0
+    return sum(1 for value in window if value > 0.5) / len(window)
 
 
 def _similar(a: str, b: str) -> float:
