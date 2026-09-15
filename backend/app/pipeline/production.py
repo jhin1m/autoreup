@@ -551,9 +551,17 @@ class VoiceoverStage(PipelineStage):
             window_of[row.sub_id] = round(max(0.1, row.anchor_end - row.anchor_start), 3)
             vad_of[row.sub_id] = round(speech_seconds(packed, row.anchor_start - 0.2, max(limit, row.anchor_end)), 3)
 
+        def _sync_score(candidate) -> tuple[float, float]:
+            """Lower is better: total overflow seconds, then worst lateness."""
+            overflow = sum(t.overflow_ms for t in candidate.timings) / 1000.0
+            late = max((max(0.0, t.place_start - t.source_start) for t in candidate.timings), default=0.0)
+            return (round(overflow, 3), round(late, 3))
+
         result = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
         logs = [f"render round 0: {result.summary}"]
         repair_cfg = RepairConfig()
+        best_score = _sync_score(result)
+        best_state = (speech_rows, result)
         rounds = 0
         while rounds < _VOICEOVER_REPAIR_ROUNDS:
             overflow = {
@@ -585,8 +593,21 @@ class VoiceoverStage(PipelineStage):
             rounds += 1
             if not changed:
                 break
-            result = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
-            logs.append(f"render round {rounds}: {result.summary}")
+            candidate = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
+            # Accept a round only when the MEASURED sync does not get worse: a later
+            # expand that fixes a pause but overflows the next line must not ship
+            # (measured: round 1 hit 0 overflow / 0.22s late, rounds 2-3 turned it into
+            # 10.7s overflow and 15.9s late — the loop kept the worst state).
+            score = _sync_score(candidate)
+            logs.append(f"render round {rounds}: {candidate.summary}")
+            if score <= best_score:
+                best_score, best_state = score, (speech_rows, candidate)
+                logs.append(f"round {rounds} kept (sync score {score})")
+            else:
+                logs.append(f"round {rounds} rejected (sync score {score} > {best_score}); keeping the better render")
+            result = candidate
+        speech_rows, result = best_state
+        logs.append(f"final render kept: sync score {best_score}")
 
         # Assemble the final track once, after timings have converged.
         assemble_voice(result, output_audio, work_dir, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)

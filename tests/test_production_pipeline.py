@@ -198,6 +198,66 @@ class ProductionPipelineTest(unittest.TestCase):
             cues = json.loads(Path(ctx.artifacts["subtitle_json"]).read_text())
             self.assertEqual([c["text"] for c in cues], ["Lời MỚI một", "Lời cũ hai"])
 
+    def test_voiceover_keeps_the_best_measured_round(self):
+        """A later fit round that makes the measured sync WORSE must be rolled back."""
+        import backend.app.pipeline.production as prod
+        from backend.app.agents.workspace import WorkspaceRun  # noqa: F401
+        from backend.app.dubbing.models import AsrSegment
+        from backend.app.dubbing.render import RenderResult, RowTiming
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(root_dir=root, _env_file=None, tts_enabled=True, tts_server_url="http://x")
+            settings.ensure_directories()
+            segments = [AsrSegment(0, 0.0, 1.0, "源一"), AsrSegment(1, 1.0, 2.0, "一"),
+                        AsrSegment(2, 2.0, 3.0, "源二"), AsrSegment(3, 3.0, 4.0, "二")]
+            anchors = [Anchor(0, 0.0, 2.0, "0-1", "源一一"), Anchor(1, 2.0, 4.0, "2-3", "源二二")]
+            ctx = PipelineContext(
+                job_id="job", input_url="u", job_dir=settings.jobs_dir / "job", settings=settings,
+                config=PipelineConfig(display_max_chars=settings.display_max_chars, min_duration=settings.min_duration),
+                artifacts={"anchors": anchors, "segments": segments, "glossary": [], "video": root / "v.mp4"},
+            )
+            ctx.artifacts["speech_rows"] = [
+                SpeechRow(0, 0, 0.0, 2.0, "0-1", "Lời cũ một"),
+                SpeechRow(1, 1, 2.0, 4.0, "2-3", "Lời cũ hai"),
+            ]
+            QAStage().run(ctx)
+
+            # round 0: one row overruns a little; round 1 (after repair): perfect;
+            # round 2 (after an expand): much worse -> the loop must ship round 1
+            renders = [
+                RenderResult(None, timings=[RowTiming(0, 0.0, 2.0, 0.0, 2.0, 2.6, 1.0, 600),
+                                            RowTiming(1, 2.0, 4.0, 2.6, 1.4, 0.5, 1.0, 0)],
+                             summary={"blocks": 2, "rows": 2}, placements=[], total_duration=4.0),
+                RenderResult(None, timings=[RowTiming(0, 0.0, 2.0, 0.0, 2.0, 2.5, 1.0, 100),
+                                            RowTiming(1, 2.0, 4.0, 2.5, 1.5, 0.5, 1.0, 0)],
+                             summary={"blocks": 2, "rows": 2}, placements=[], total_duration=4.0),
+                RenderResult(None, timings=[RowTiming(0, 0.0, 2.0, 0.0, 2.0, 9.0, 1.0, 7000),
+                                            RowTiming(1, 2.0, 4.0, 9.0, -5.0, 0.5, 1.0, 0)],
+                             summary={"blocks": 2, "rows": 2}, placements=[], total_duration=4.0),
+            ]
+            calls = {"n": 0}
+
+            def fake_render(*args, **kwargs):
+                result = renders[min(calls["n"], len(renders) - 1)]
+                calls["n"] += 1
+                return result
+
+            def fake_repair(rows, sources, glossary, overflow, llm, cfg):
+                return rows, 1  # pretend every round changes the text
+
+            with patch.object(prod, "render", side_effect=fake_render), patch.object(
+                prod, "repair", side_effect=fake_repair
+            ), patch.object(prod, "expand", side_effect=fake_repair), patch.object(
+                prod, "assemble_voice"
+            ), patch.object(prod, "_build_capcut_client", return_value=None), patch.object(
+                prod, "_polish_agent", return_value=None
+            ):
+                out = VoiceoverStage().run(ctx)
+            # round 1 kept, not round 2's 7000ms overrun
+            self.assertEqual(max(t.overflow_ms for t in ctx.artifacts["timings"]), 100)
+            self.assertIn("keeping the better render", "\n".join(out.logs))
+
     def test_voiceover_skipped_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _context(Path(tmp))  # tts_enabled defaults to False
