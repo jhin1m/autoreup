@@ -28,9 +28,9 @@ def _context(root: Path) -> PipelineContext:
     settings.ensure_directories()
     anchors = [Anchor(0, 0.0, 2.0, "0-1", "源一"), Anchor(1, 2.0, 4.0, "2-3", "源二")]
     segments = [
-        AsrSegment(0, 0.0, 1.0, "源"),
+        AsrSegment(0, 0.0, 1.0, "源一"),
         AsrSegment(1, 1.0, 2.0, "一"),
-        AsrSegment(2, 2.0, 3.0, "源"),
+        AsrSegment(2, 2.0, 3.0, "源二"),
         AsrSegment(3, 3.0, 4.0, "二"),
     ]
     return PipelineContext(
@@ -59,14 +59,21 @@ class ProductionPipelineTest(unittest.TestCase):
             ctx = _context(Path(tmp))
             segments = ctx.artifacts["segments"]
 
-            def fake_complete(system, user, config):
-                # one Vietnamese line per unit id present in the prompt
-                return "\n".join(f"{a.id}\tLời unit {a.id}" for a in ctx.artifacts["anchors"] if f"{a.id}\t" in user)
+            from backend.app.agents.workspace import WorkspaceRun
 
-            with patch("backend.app.dubbing.translate.complete", side_effect=fake_complete), patch(
-                "backend.app.dubbing.edit.complete", side_effect=lambda system, user, config: ""
-            ):
+            def fake_run(workspace, prompt, config, *, timeout=None, resume=False):
+                # the real agent writes artifacts; the stub does the same
+                ws = Path(workspace)
+                (ws / "out").mkdir(parents=True, exist_ok=True)
+                body = "\n".join(f"{a.id}\tLời unit {a.id}" for a in ctx.artifacts["anchors"])
+                (ws / "out" / "final.tsv").write_text(body + "\n")
+                return WorkspaceRun(0, "", "", 1.0)
+
+            with patch("backend.app.dubbing.translate.run_agent_workspace", side_effect=fake_run):
                 TranslateStage().run(ctx)
+            # the workspace is a real project the agent can inspect/re-run
+            self.assertTrue((ctx.job_dir / "translate" / "SKILL.md").exists())
+            self.assertTrue((ctx.job_dir / "translate" / "input" / "units.tsv").exists())
             rows = ctx.artifacts["speech_rows"]
             # every unit translated, each row exactly on its unit's window
             self.assertEqual([r.anchor_id for r in rows], [a.id for a in ctx.artifacts["anchors"]])
@@ -142,8 +149,9 @@ class ProductionPipelineTest(unittest.TestCase):
             root = Path(tmp)
             settings = Settings(root_dir=root, _env_file=None, tts_enabled=True, tts_server_url="http://x")
             settings.ensure_directories()
-            segments = [AsrSegment(0, 0.0, 2.0, "一"), AsrSegment(1, 2.0, 4.0, "二")]
-            anchors = [Anchor(0, 0.0, 2.0, "0-0", "一"), Anchor(1, 2.0, 4.0, "1-1", "二")]
+            segments = [AsrSegment(0, 0.0, 1.0, "源一"), AsrSegment(1, 1.0, 2.0, "一"),
+                        AsrSegment(2, 2.0, 3.0, "源二"), AsrSegment(3, 3.0, 4.0, "二")]
+            anchors = [Anchor(0, 0.0, 2.0, "0-1", "源一一"), Anchor(1, 2.0, 4.0, "2-3", "源二二")]
             ctx = PipelineContext(
                 job_id="job",
                 input_url="u",
@@ -153,8 +161,8 @@ class ProductionPipelineTest(unittest.TestCase):
                 artifacts={"anchors": anchors, "segments": segments, "glossary": [], "video": root / "v.mp4"},
             )
             ctx.artifacts["speech_rows"] = [
-                SpeechRow(0, 0, 0.0, 2.0, "0-0", "Lời cũ một"),
-                SpeechRow(1, 1, 2.0, 4.0, "1-1", "Lời cũ hai"),
+                SpeechRow(0, 0, 0.0, 2.0, "0-1", "Lời cũ một"),
+                SpeechRow(1, 1, 2.0, 4.0, "2-3", "Lời cũ hai"),
             ]
             # the QA stage gates on unit coverage: both units have a row on their window
             QAStage().run(ctx)  # writes the pre-fit subtitles + cue artifacts
@@ -169,8 +177,14 @@ class ProductionPipelineTest(unittest.TestCase):
                 summary={"blocks": 2, "rows": 2}, placements=[], total_duration=4.0,
             )
 
+            captured = {}
+
             def fake_repair(rows, sources, glossary, overflow, llm, cfg):
-                return [SpeechRow(0, 0, 0.0, 2.0, "0-0", "Lời MỚI một"), rows[1]], 1
+                # the prompt must show each row its OWN unit's source — keying by rail
+                # segment id instead of row id fed the LLM a different line and
+                # produced completely wrong rewrites
+                captured.update(sources)
+                return [SpeechRow(0, 0, 0.0, 2.0, "0-1", "Lời MỚI một"), rows[1]], 1
 
             with patch.object(prod, "render", return_value=fake_render), patch.object(
                 prod, "repair", side_effect=fake_repair
@@ -179,6 +193,8 @@ class ProductionPipelineTest(unittest.TestCase):
             ), patch.object(prod, "_polish_agent", return_value=None):
                 VoiceoverStage().run(ctx)
 
+            self.assertEqual(captured[0], "源一一")  # row 0's own unit source, not segments[0]
+            self.assertEqual(captured[1], "源二二")
             cues = json.loads(Path(ctx.artifacts["subtitle_json"]).read_text())
             self.assertEqual([c["text"] for c in cues], ["Lời MỚI một", "Lời cũ hai"])
 

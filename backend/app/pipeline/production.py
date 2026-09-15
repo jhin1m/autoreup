@@ -412,17 +412,24 @@ class TranslateStage(PipelineStage):
         anchors: list[Anchor] = context.artifacts["anchors"]
         segments: list[AsrSegment] = context.artifacts["segments"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
-        speech_rows = translate(
-            anchors, glossary, _translate_agent(settings),
-            TranslateConfig(notes=context.config.content_notes),
+        result = translate(
+            anchors, glossary, _translate_agent(settings), context.job_dir / "translate",
+            TranslateConfig(
+                notes=context.config.content_notes,
+                timeout=settings.translate_timeout,
+                retries=settings.translate_retries,
+            ),
         )
+        speech_rows = result.rows
         context.artifacts["speech_rows"] = speech_rows
         path = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
         write_tsv(path, [r.to_row() for r in speech_rows], SPEECH_FIELDS)
+        runs = [(run.seconds, run.timed_out) for run in result.runs]
         return StageResult(
             name=self.name,
             artifacts=[_artifact(ArtifactKind.subtitle_json, path, settings.data_dir)],
-            metrics={"speech_rows": len(speech_rows), "captions": len(segments)},
+            metrics={"speech_rows": len(speech_rows), "captions": len(segments), "workspace_runs": len(result.runs)},
+            logs=[f"workspace runs (seconds, timed_out): {runs}"],
         )
 
 
@@ -498,9 +505,21 @@ class VoiceoverStage(PipelineStage):
             raise RuntimeError("Missing TTS server URL. Set AUTOREUP_TTS_SERVER_URL.")
 
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
+        anchors: list[Anchor] = context.artifacts.get("anchors", [])
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
         segments: list[AsrSegment] = context.artifacts.get("segments", [])
-        sources = {s.id: s.text_zh for s in segments}
+        seg_by_id = {s.id: s for s in segments}
+        # The fit-loop prompts show SOURCE_ZH per ROW, so this map is keyed by ROW id.
+        # Keying it by rail segment id fed the LLM a different caption's line and it
+        # rewrote the Vietnamese to match the wrong source ("nội dung dịch sai hoàn toàn").
+        anchor_zh = {a.id: a.source_zh for a in anchors}
+        sources: dict[int, str] = {}
+        for row in speech_rows:
+            lo, _, hi = row.source_ids.partition("-")
+            text = ""
+            if lo.strip().isdigit() and hi.strip().isdigit() and int(lo) <= int(hi):
+                text = "".join(seg_by_id[i].text_zh for i in range(int(lo), int(hi) + 1) if i in seg_by_id)
+            sources[row.sub_id] = text or anchor_zh.get(row.anchor_id, "")
         synth_client = _build_capcut_client(settings)
         render_config = RenderConfig(
             provider_url="capcut-native" if synth_client is not None else settings.tts_server_url,
@@ -544,12 +563,13 @@ class VoiceoverStage(PipelineStage):
             }
             # Underfill = the dub is far shorter than the caption while the SOURCE was
             # actually speaking through it (a real pause is not dropped content).
+            # The budget for "how long should this line be" is the SOURCE SPEECH (VAD):
+            # the dub replaces the performance, not the caption's display time.
             underfull = {
-                t.sub_id: (window_of.get(t.sub_id, 0.0), t.tts_duration)
+                t.sub_id: (vad_of.get(t.sub_id, 0.0), t.tts_duration)
                 for t in result.timings
-                if window_of.get(t.sub_id, 0.0) >= 1.0
-                and t.tts_duration < window_of[t.sub_id] * settings.tts_expand_floor
-                and vad_of.get(t.sub_id, 0.0) >= window_of[t.sub_id] * 0.7
+                if vad_of.get(t.sub_id, 0.0) >= 0.8
+                and t.tts_duration < vad_of[t.sub_id] * settings.tts_expand_floor
             }
             if not overflow and not underfull:
                 break

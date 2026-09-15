@@ -53,34 +53,6 @@ GLOSSARY_USER = (
     "Trả về bảng TSV (TERM_ZH<TAB>TERM_VI<TAB>KIND<TAB>NOTE)."
 )
 
-# --- Translate v3: units in, units out — no char budget, no caption split ---
-
-TRANSLATE_SYSTEM = (
-    "Bạn là người THUYẾT MINH reup phim Việt CÓ DUYÊN — kiểu kênh kể chuyện triệu view. Bạn nhận từng "
-    "ĐƠN VỊ CÂU (một câu/đoạn nguồn hoàn chỉnh) — nguồn có thể là TIẾNG TRUNG hoặc TIẾNG NHẬT (anime gốc) — "
-    "và viết lời Việt TỰ NHIÊN, DỄ HIỂU, CUỐN HÚT cho đúng câu đó. Tên riêng tiếng Nhật phiên âm romaji chuẩn "
-    "(vd Tanjiro), TUYỆT ĐỐI không Hán-Việt hoá tên Nhật.\n"
-    "1. DỊCH THEO NGHĨA như người Việt kể lại — KHÔNG dịch sát từng chữ, không bê cấu trúc hay âm Hán-Việt.\n"
-    "2. THÀNH NGỮ/ĐIỂN CỐ gốc Hán: dịch NGHĨA THƯỜNG (先到先得 → 'ai nhanh chân thì được'), KHÔNG phiên âm "
-    "Hán-Việt thành cụm bốn chữ sáo.\n"
-    "3. VĂN PHONG: câu gọn có NHỊP và có LỰC, động từ mạnh-cụ thể, khẩu ngữ tự nhiên; giữ cảm xúc/kịch tính "
-    "ở cao trào. TUYỆT ĐỐI không bịa tình tiết, không thêm bình luận ngoài nội dung.\n"
-    "4. XƯNG HÔ theo GLOSSARY, nhất quán; không dùng đại từ miệt thị cho nhân vật trung tính/chính diện.\n"
-    "5. NGỮ CẢNH TRƯỚC (2 đơn vị liền trước) chỉ để nối mạch — KHÔNG dịch lại phần đó.\n"
-    "6. Dùng ⟂ (CHỈ ký tự này) giữa hai LƯỢT THOẠI KHÁC NGƯỜI trong cùng đơn vị; không dùng | / để ngắt.\n"
-    "Output DUY NHẤT là TSV, không markdown, không giải thích, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
-    "UNIT_ID<TAB>TEXT"
-)
-
-TRANSLATE_USER = (
-    "GLOSSARY (tên + giới tính + xưng hô đã chốt — TUÂN THỦ):\n{glossary}\n\n"
-    "BỐI CẢNH/NHÂN VẬT người dùng cung cấp (ưu tiên tuyệt đối):\n{notes}\n\n"
-    "NGỮ CẢNH TRƯỚC — nguồn (không dịch):\n{prev_source}\n"
-    "NGỮ CẢNH TRƯỚC — lời Việt đã viết (tham khảo giọng văn, không dịch lại):\n{prev_vi}\n\n"
-    "CÁC ĐƠN VỊ CẦN DỊCH — UNIT_ID<TAB>SOURCE_ZH:\n{units}\n\n"
-    "Viết lời Việt cho MỌI UNIT_ID ở trên. Chỉ TSV."
-)
-
 # --- Normalize: fix ASR recognition noise (keep meaning) ---------------------
 
 NORMALIZE_SYSTEM = (
@@ -94,26 +66,6 @@ NORMALIZE_SYSTEM = (
 NORMALIZE_USER = (
     "CÁC SEGMENT NGHI NGỜ (SEGMENT_ID<TAB>TEXT_ZH):\n{segments}\n\n"
     "Trả về MỌI SEGMENT_ID. Chỉ TSV."
-)
-
-# --- Edit: single creative pass per batch, facts frozen ----------------------
-
-EDIT_SYSTEM = (
-    "Bạn là BIÊN TẬP VIÊN lời thuyết minh reup phim. Bạn nhận từng dòng SOURCE_ZH (câu gốc) + CURRENT_VI "
-    "(lời Việt hiện tại) và làm cho lời Việt CUỐN HÚT hơn như một biên tập viên vietsub thật:\n"
-    "- thoát ý, không thoát nghĩa; bỏ từ Hán-Việt sáo, thay bằng khẩu ngữ Việt;\n"
-    "- câu gọn có nhịp, động từ mạnh; giữ cảm xúc ở cao trào; giữ xưng hô theo GLOSSARY;\n"
-    "- giữ nguyên ⟂ tách lượt thoại; độ dài xấp xỉ bản cũ (đừng dài hơn đáng kể).\n"
-    "CẤM: thêm/bớt sự kiện, đổi ai-làm-gì, thêm số liệu/tên mới, bình luận ngoài thoại. Dòng nào đã ổn — "
-    "chép y nguyên.\n"
-    "Output DUY NHẤT là TSV, không markdown, KHÔNG Hán tự, mỗi dòng ĐÚNG 2 cột:\n"
-    "UNIT_ID<TAB>TEXT"
-)
-
-EDIT_USER = (
-    "GLOSSARY:\n{glossary}\n\n"
-    "CÁC DÒNG (UNIT_ID<TAB>SOURCE_ZH<TAB>CURRENT_VI):\n{rows}\n\n"
-    "Trả về MỌI UNIT_ID (dòng ổn thì chép y nguyên). Chỉ TSV."
 )
 
 # --- Repair: shorten over-budget lines (measured seconds, not guesses) -------

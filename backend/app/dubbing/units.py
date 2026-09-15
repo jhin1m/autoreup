@@ -21,8 +21,12 @@ SENTENCE_ENDINGS = "。！？!?…；;"
 
 @dataclass(slots=True)
 class UnitConfig:
-    max_chars: int = 60       # normal sentence size — cut once a unit reaches this
-    hard_max_chars: int = 90  # never let a unit grow past this
+    # An LLM translates a complete thought, not a fragment: units are whole
+    # sentences/paragraphs (measured on real rails: the old 60-char cap made the
+    # median unit 11 Han chars — i.e. one caption fragment, which is exactly the
+    # "sai context" failure mode). The display/voice still get one row per unit.
+    max_chars: int = 120      # normal sentence size — cut once a unit reaches this
+    hard_max_chars: int = 160  # never let a unit grow past this
     min_chars: int = 6        # fragments below this merge forward
     gap_cut: float = 0.45     # a pause this long ends the unit (no punctuation in ASR)
     merge_gap: float = 0.6    # ...but only merge a small fragment across a shorter gap

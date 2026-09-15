@@ -100,7 +100,8 @@ queued → running → succeeded | failed | canceled
 - Không ký tự Hán trong output Việt.
 - Không missing/duplicate source cue coverage; không overlap; gap sau snap ≤ 0.12s.
 - Rail ASR: segment được co về đúng vùng VAD speech chứa nó (bỏ blob nhạc dài), hallucination nhạc bị loại; rail bất biến **sorted, không chồng lấn** sau gap-fill.
-- **Nghĩa là đơn vị dịch (F1)**: `translate` nhận 1 đơn vị câu (unit) và trả ĐÚNG một dòng Việt tự nhiên cho nó — không bao giờ dịch theo mảnh caption, không đặt ngân sách độ dài trong prompt (áp lực độ dài phải không được làm hỏng câu chữ).
+- **Nghĩa là đơn vị dịch (F1)**: `translate` là **một workspace agent run** — workspace `data/jobs/<job>/translate/` gồm `SKILL.md` + `input/{units,glossary,notes}`, agent đọc toàn bộ transcript, ghi `out/draft.tsv`, tự soát nghĩa rồi ghi `out/final.tsv`. Pipeline **đọc artifact từ đĩa** (không parse prose), và **gate code** mọi dòng đổi giữa draft→final (số/phủ định/glossary/độ dài) — không bao giờ đặt ngân sách độ dài trong prompt.
+- Agent flags (agy): `--add-dir <ws> --dangerously-skip-permissions --sandbox`; timeout workspace phải phủ vòng lặp nội bộ của agent (`translate_timeout`).
 - **Row = unit = clip**: mỗi unit một clip TTS neo vào cửa sổ của unit; timing không nội suy, không pack theo run, không clamp/hold.
 - **Sub = voice, cùng thời điểm (F4)**: khối cue của unit = `[voice_start − lead, max(voice_end, unit_end)]` (clamp theo cue kế) — sub hiện trước voice ~0.12s và phủ trọn cửa sổ caption gốc; text sub dựng lại SAU fit loop nên luôn khớp đúng lời đọc.
 - QA gate: mọi unit có dòng Việt đúng cửa sổ rail (`units_missing_coverage`, `rows_misaligned_with_rail`), không Hán, cue không chồng, 1 dòng/cue.

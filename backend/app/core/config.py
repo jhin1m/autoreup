@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     agent_timeout: float = 300.0
     agent_retries: int = 3
     translate_model: str = "gemini-3.8-flash-low"
+    # One workspace agent run does the whole workflow (read all -> draft -> self-review
+    # -> final); the timeout must cover the agent's internal loop, not one answer.
+    translate_timeout: float = 1200.0
+    translate_retries: int = 2  # follow-up turns for ids the agent left missing
     polish_model: str = "gemini-3.1-pro-high"
     content_genre: str = ""  # optional hint; glossary is extracted data-driven per video
     content_notes: str = ""  # default per-video context for the translator (cast/gender/register)

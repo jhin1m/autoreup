@@ -1,4 +1,5 @@
-import backend.app.dubbing.edit as edit_mod
+from pathlib import Path
+
 import backend.app.dubbing.glossary as glossary_mod
 import backend.app.dubbing.translate as translate_mod
 from backend.app.dubbing.glossary import extract_glossary, format_glossary
@@ -40,43 +41,89 @@ def _rail_and_units():
     return segs, anchors
 
 
-def test_translate_is_one_row_per_unit_on_the_unit_window(monkeypatch):
+def _workspace_writer(texts, *, record=None, omit=()):
+    """Fake agent run: writes out/draft.tsv + out/final.tsv, records the calls."""
+    from backend.app.agents.workspace import WorkspaceRun
+
+    def fake(workspace, prompt, config, *, timeout=None, resume=False):
+        ws = Path(workspace)
+        (ws / "out").mkdir(parents=True, exist_ok=True)
+        body = "\n".join(f"{i}\t{t}" for i, t in texts.items() if i not in omit)
+        (ws / "out" / "draft.tsv").write_text(body + "\n")
+        (ws / "out" / "final.tsv").write_text(body + "\n")
+        if record is not None:
+            record.append({"prompt": prompt, "resume": resume, "timeout": timeout})
+        return WorkspaceRun(0, "", "", 1.0)
+
+    return fake
+
+
+def test_workspace_translate_prepares_inputs_and_gates_edits(monkeypatch, tmp_path):
     segments, anchors = _rail_and_units()
+    calls = []
+    texts = {0: "Lời 0 giữ số 7", 1: "Lời 1 giữ số 7", 2: "Lời 2 giữ số 7"}
+    monkeypatch.setattr(translate_mod, "run_agent_workspace", _workspace_writer(texts, record=calls))
 
-    def fake(system, user, config):
-        # one Vietnamese line per unit id present in the prompt
-        return "\n".join(f"{a.id}\tLời {a.id}" for a in anchors if f"{a.id}\t" in user)
-
-    monkeypatch.setattr(translate_mod, "complete", fake)
-    monkeypatch.setattr(edit_mod, "complete", fake)
-    rows = translate(anchors, [], LLM, TranslateConfig())
+    result = translate(anchors, [], LLM, tmp_path / "translate", TranslateConfig())
+    rows = result.rows
     assert [r.anchor_id for r in rows] == [a.id for a in anchors]
-    assert [r.text for r in rows] == [f"Lời {a.id}" for a in anchors]
-    # the row's window IS the unit's window (the rail owns timing)
     assert [r.anchor_start for r in rows] == [a.start for a in anchors]
-    assert [r.anchor_end for r in rows] == [a.end for a in anchors]
-    assert [r.source_ids for r in rows] == [a.source_ids for a in anchors]
-    assert [r.sub_id for r in rows] == list(range(len(rows)))
+    assert len(calls) == 1 and calls[0]["resume"] is False
+    # the workspace is a real, inspectable project: skill + inputs, artifacts on disk
+    ws = tmp_path / "translate"
+    assert (ws / "SKILL.md").exists()
+    units_tsv = (ws / "input" / "units.tsv").read_text()
+    assert units_tsv.count("\n") == len(anchors)
+    assert "glossary.tsv" in str(list((ws / "input").iterdir()))
 
 
-def test_translate_raises_when_a_unit_has_no_line(monkeypatch):
+def test_workspace_translate_gates_unsafe_edits(monkeypatch, tmp_path):
     segments, anchors = _rail_and_units()
-    # answers only the FIRST unit -> the rest are missing
-    monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "0\tLời 0")
-    monkeypatch.setattr(edit_mod, "complete", lambda s, u, c: "")
-    try:
-        translate(anchors, [], LLM, TranslateConfig())
-        assert False, "expected TranslateError"
-    except translate_mod.TranslateError:
-        pass
+    from backend.app.agents.workspace import WorkspaceRun
+
+    def fake(workspace, prompt, config, *, timeout=None, resume=False):
+        ws = Path(workspace)
+        (ws / "out").mkdir(parents=True, exist_ok=True)
+        (ws / "out" / "draft.tsv").write_text("0\tLời 0 giữ số 7\n1\tLời 1 giữ số 7\n2\tLời 2 giữ số 7\n")
+        # unit 0: same length, keeps the number -> accepted
+        # unit 1: drops the number "7" -> the code gate must reject it
+        (ws / "out" / "final.tsv").write_text("0\tLời 0 sai số 7\n1\tLời 1 sai số\n2\tLời 2 giữ số 7\n")
+        return WorkspaceRun(0, "", "", 1.0)
+
+    monkeypatch.setattr(translate_mod, "run_agent_workspace", fake)
+    rows = translate(anchors, [], LLM, tmp_path / "translate", TranslateConfig()).rows
+    texts = {r.anchor_id: r.text for r in rows}
+    assert texts[0] == "Lời 0 sai số 7"
+    assert texts[1] == "Lời 1 giữ số 7"
 
 
-def test_translate_raises_on_han_leak(monkeypatch):
+def test_workspace_translate_follow_up_turn_for_missing_ids(monkeypatch, tmp_path):
     segments, anchors = _rail_and_units()
-    monkeypatch.setattr(translate_mod, "complete", lambda s, u, c: "\n".join(f"{a.id}\t还有中文" for a in anchors))
-    monkeypatch.setattr(edit_mod, "complete", lambda s, u, c: "")
+    calls = []
+
+    def fake(workspace, prompt, config, *, timeout=None, resume=False):
+        from backend.app.agents.workspace import WorkspaceRun
+
+        ws = Path(workspace)
+        (ws / "out").mkdir(parents=True, exist_ok=True)
+        omit = (2,) if not resume else ()
+        body = "\n".join(f"{i}\tLời {i}" for i in range(3) if i not in omit)
+        (ws / "out" / "final.tsv").write_text(body + "\n")
+        calls.append(resume)
+        return WorkspaceRun(0, "", "", 1.0)
+
+    monkeypatch.setattr(translate_mod, "run_agent_workspace", fake)
+    result = translate(anchors, [], LLM, tmp_path / "translate", TranslateConfig(retries=2))
+    assert [r.text for r in result.rows] == ["Lời 0", "Lời 1", "Lời 2"]
+    assert calls == [False, True]          # one follow-up turn, resume mode
+    assert len(result.runs) == 2
+
+
+def test_workspace_translate_raises_when_ids_stay_missing(monkeypatch, tmp_path):
+    segments, anchors = _rail_and_units()
+    monkeypatch.setattr(translate_mod, "run_agent_workspace", _workspace_writer({0: "Lời 0"}, omit=(1, 2)))
     try:
-        translate(anchors, [], LLM, TranslateConfig())
+        translate(anchors, [], LLM, tmp_path / "translate", TranslateConfig(retries=1))
         assert False, "expected TranslateError"
     except translate_mod.TranslateError:
         pass

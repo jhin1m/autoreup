@@ -41,8 +41,8 @@ _BREAK_BEFORE = {
 
 
 def _chunk_line(text: str, max_chars: int) -> list[str]:
-    """Pro single-line chunking. MIRRORS the rule the translator prompt is told (rule 5
-    in TRANSLATE_SYSTEM, same ``max_caption_chars``): a sentence/clause that fits one
+    """Pro single-line chunking. MIRRORS the rule the translate skill tells (rule 5
+    in the translate skill, same ``max_caption_chars``): a sentence/clause that fits one
     line is kept WHOLE; a longer one breaks at PUNCTUATION first (clause marks), then at
     a connector word, so a two-syllable Vietnamese word is never cut across lines. Only
     a long run with NO punctuation/connector inside falls back to a plain word break —
