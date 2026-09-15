@@ -127,3 +127,39 @@ def test_dedupe_overlaps_keeps_tighter_claim_and_trims_partial():
     assert [s.id for s in out] == [0, 1]
     out = dedupe_overlaps([AsrSegment(0, 0.0, 10.0, "a"), AsrSegment(1, 8.0, 12.0, "b")])
     assert [(s.start, s.end) for s in out] == [(0.0, 8.0), (8.0, 12.0)]
+
+
+def test_range_map_round_trips_source_time():
+    from backend.app.dubbing.coverage import build_range_map, concat_time_to_source
+
+    spans, total = build_range_map([(10.0, 12.0), (20.0, 24.5)])
+    assert total == 6.5
+    assert concat_time_to_source(spans, 0.5) == 10.5
+    assert concat_time_to_source(spans, 2.0) == 12.0     # first range's end
+    assert concat_time_to_source(spans, 3.0) == 21.0     # inside the second range
+    assert concat_time_to_source(spans, 99.0) == 24.5    # clamped to the last edge
+
+
+def test_clamp_to_ranges_drops_segments_outside_and_trims_edges():
+    from backend.app.dubbing.models import AsrSegment
+    from backend.app.dubbing.coverage import clamp_to_ranges
+
+    ranges = [(10.0, 14.0), (20.0, 24.0)]
+    segments = [
+        AsrSegment(0, 9.7, 12.0, "trong"),      # drifts left -> trimmed to the range edge
+        AsrSegment(1, 30.0, 31.0, "ngoài"),     # no range -> dropped
+        AsrSegment(2, 22.0, 24.1, "phải"),      # drifts right -> trimmed
+    ]
+    out = clamp_to_ranges(segments, ranges)
+    assert [s.text_zh for s in out] == ["trong", "phải"]
+    assert out[0].start == 9.7 and out[0].end == 12.0
+    assert out[1].end == 24.1  # already inside + tolerance
+    assert [s.id for s in out] == [0, 1]
+
+
+def test_plan_uncovered_asr_uses_the_measured_cost_model():
+    from backend.app.dubbing.coverage import plan_uncovered_asr
+
+    assert plan_uncovered_asr(12.0, 6, 275.0) == "none"        # few seconds: the ladder
+    assert plan_uncovered_asr(965.0, 369, 2880.0) == "full"    # many fragments: full pass
+    assert plan_uncovered_asr(60.0, 4, 2880.0) == "glue"       # a couple of holes: glue

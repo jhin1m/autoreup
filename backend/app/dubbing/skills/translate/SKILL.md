@@ -37,7 +37,9 @@ TEXT là tiếng Việt (KHÔNG Hán tự), mỗi ID đúng MỘT dòng.
 
 ## Workflow (bắt buộc làm đủ các bước)
 
-1. Đọc `input/units.tsv` + `input/glossary.tsv` (và `input/notes.md` nếu có).
+1. Đọc `input/units.tsv` + `input/glossary.tsv` (và `input/notes.md` nếu có). Nếu `out/final.tsv` đã
+   tồn tại từ lần chạy trước: GIỮ NGUYÊN các dòng đã dịch, chỉ bổ sung/sửa các dòng còn thiếu —
+   đây là resume, đừng làm lại từ đầu.
 2. Dịch MỌI dòng có dấu `*`, ghi dần ra `out/draft.tsv` — ghi từng phần (mỗi 20-40 dòng một lần), không
    cần đợi hết mới ghi.
 3. Soát lại toàn bộ bản nháp, đối chiếu với nguồn và sửa:

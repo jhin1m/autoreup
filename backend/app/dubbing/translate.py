@@ -46,7 +46,7 @@ class TranslateConfig:
     timeout: float = 600.0     # wall-clock budget for ONE session
     retries: int = 1           # follow-up turns inside a session before bisecting
     part_units: int = 100      # measured capacity with ~2x headroom
-    min_part_units: int = 25   # a "part" smaller than this is a unit-level retry
+    min_part_units: int = 5    # anywhere above this a short session is split again
     max_split_depth: int = 3   # bisections per part (effective floor: 100/2^3 units)
     max_parallel: int = 4      # quota-aware cap (see _parallelism)
 

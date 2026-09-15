@@ -13,9 +13,8 @@ sub video -> mux the dubbed audio. Falls back gracefully if the band isn't found
 
 from __future__ import annotations
 
-from functools import lru_cache
-
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from backend.app.services.audio import run_command
@@ -23,24 +22,12 @@ from backend.app.services.audio import run_command
 
 @lru_cache(maxsize=1)
 def preferred_video_codec_args() -> tuple[str, ...]:
-    """H.264 encoder args: hardware (VideoToolbox) when the platform has it.
+    """H.264 encoder args — chosen by MEASUREMENT, not by platform folklore.
 
-    Encoding dominates the package stage on long videos (measured 10.8 min for 70 min
-    of video with libx264 -veryfast); VideoToolbox runs the same pass several times
-    faster at a fixed high bitrate, which is the right trade for 1080p reup content."""
-    import shutil
-    import subprocess
-    import sys
-
-    if sys.platform == "darwin" and shutil.which("ffmpeg"):
-        try:
-            encoders = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=15
-            ).stdout
-            if "h264_videotoolbox" in encoders:
-                return ("-c:v", "h264_videotoolbox", "-b:v", "8M", "-maxrate", "12M", "-pix_fmt", "yuv420p")
-        except Exception:  # noqa: BLE001 - probe failure just means software encoding
-            pass
+    Benchmarked on this machine (60s of 1080p30, 2026-09): libx264 -veryfast -crf 20
+    takes 19.6s, h264_videotoolbox -b:v 8M takes 29.9s — the hardware encoder is
+    SLOWER here, so the software encoder stays the default. (VideoToolbox remains one
+    edit away if a future machine/profile flips that; measure before switching.)"""
     return ("-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
 
 
