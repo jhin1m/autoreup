@@ -269,7 +269,8 @@ class ASRStage(PipelineStage):
         if gap_stats["gaps"]:
             logs.append(
                 f"gap-fill: {gap_stats['filled']}/{gap_stats['gaps']} speech gaps re-ASR'd "
-                f"({gap_stats['seconds']}s) -> +{gap_stats['recovered']} segments, skipped {gap_stats['skipped']} lyric/artifact"
+                f"({gap_stats['seconds']}s) -> +{gap_stats['recovered']} segments, skipped {gap_stats['skipped']} lyric/artifact, "
+                f"unrecovered {gap_stats['unrecovered']}s"
             )
         segments, normalize_metrics = normalize_segments(segments, _translate_agent(settings))
         logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")

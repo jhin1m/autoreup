@@ -28,6 +28,18 @@ from .models import AsrSegment
 from .onset import _speech_probs
 
 
+# Escalation ladder for a gap slice. The first attempt that yields usable rows wins;
+# a music/ending-card slice often needs a forced language or the non-turbo model
+# (measured: turbo returned "oh"/"不然,不然" loops on an ending card where forced-ja
+# and non-turbo both read "ご視聴ありがとうございました").
+_ATTEMPTS: list[dict] = [
+    {"language": "auto"},
+    {"language": "ja"},
+    {"language": "zh"},
+    {"language": "auto", "model": "@cf/openai/whisper"},  # non-turbo: slower, steadier
+]
+
+
 @dataclass(slots=True)
 class CoverageConfig:
     enabled: bool = True
@@ -85,7 +97,21 @@ def filter_recovered(rows: list[dict]) -> tuple[list[dict], int]:
     return kept, skipped
 
 
-def _transcribe_slice(worker_url: str, video: Path, start: float, length: float, language: str, model: str) -> list[dict]:
+def score_rows(rows: list[dict]) -> float:
+    """Prefer longer CJK/kana content and punish repetition loops."""
+    kept, skipped = filter_recovered(rows)
+    chars = sum(len(row["text"]) for row in kept)
+    return float(chars) - 30.0 * (skipped + len(rows) - len(kept))
+
+
+def _transcribe_slice(
+    worker_url: str,
+    video: Path,
+    start: float,
+    length: float,
+    language: str,
+    model: str,
+) -> list[dict]:
     with tempfile.TemporaryDirectory() as tmp:
         audio = Path(tmp) / "slice.mp3"
         subprocess.run(
@@ -125,7 +151,7 @@ def fill_coverage_gaps(
     config: CoverageConfig | None = None,
 ) -> tuple[list[AsrSegment], dict]:
     config = config or CoverageConfig()
-    stats = {"enabled": config.enabled, "gaps": 0, "filled": 0, "recovered": 0, "skipped": 0, "seconds": 0.0}
+    stats = {"enabled": config.enabled, "gaps": 0, "filled": 0, "recovered": 0, "skipped": 0, "seconds": 0.0, "unrecovered": 0.0}
     if not config.enabled or not worker_url:
         return segments, stats
 
@@ -145,12 +171,25 @@ def fill_coverage_gaps(
         cursor = gap_start
         while cursor < gap_end - 1.0:
             length = min(config.slice_seconds, gap_end - cursor)
-            try:
-                rows = _transcribe_slice(worker_url, video, cursor, length, language, model)
-            except Exception:  # noqa: BLE001 - coverage is best-effort; the main rail stands
-                break
-            kept, skipped = filter_recovered(rows)
+            best_rows: list[dict] = []
+            best_score = -1e9
+            for attempt in _ATTEMPTS:
+                try:
+                    rows = _transcribe_slice(
+                        worker_url, video, cursor, length,
+                        attempt.get("language", language), attempt.get("model", model),
+                    )
+                except Exception:  # noqa: BLE001 - coverage is best-effort; the main rail stands
+                    break
+                score = score_rows(rows)
+                if score > best_score:
+                    best_rows, best_score = rows, score
+                if best_score >= 8.0:  # good enough: two-plus CJK characters, no loop
+                    break
+            kept, skipped = filter_recovered(best_rows)
             stats["skipped"] += skipped
+            if not kept:
+                stats["unrecovered"] += round(min(config.slice_seconds, gap_end - cursor), 1)
             recovered.extend(
                 AsrSegment(id=0, start=float(r.get("start", cursor)), end=float(r.get("end", cursor + 1)), text_zh=str(r["text"]))
                 for r in kept
