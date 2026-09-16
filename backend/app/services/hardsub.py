@@ -389,4 +389,4 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         str(output),
     ])
-    return {"covered": band is not None, "band": band, "caption_cy": geometry.caption_cy, "cues": len(cues)}
+    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues)}
