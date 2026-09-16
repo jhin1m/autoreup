@@ -148,3 +148,25 @@ def test_detect_sub_band_prefers_vision_over_the_pixel_heuristic(monkeypatch):
     # Vision unavailable -> the pixel heuristic still runs (None here: the file is fake)
     monkeypatch.setattr(hardsub, "_detect_band_vision", lambda video: None)
     assert hardsub.detect_sub_band(__import__("pathlib").Path("x.mp4"), hardsub.HardsubConfig()) is None
+
+
+def test_hardsub_without_cues_still_covers_and_does_not_crash():
+    """A job whose cues were all dropped must still render (cover applies)."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from backend.app.services.hardsub import HardsubConfig, build_hardsub
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        video = root / "v.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=navy:s=320x240:d=1.5",
+             "-pix_fmt", "yuv420p", str(video)],
+            check=True,
+        )
+        out = root / "out.mp4"
+        summary = build_hardsub(video, [], None, out, root / "work", HardsubConfig())
+        assert out.exists() and out.stat().st_size > 1024
+        assert summary["cues"] == 0

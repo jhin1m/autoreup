@@ -249,6 +249,10 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
         entries.append((png, max(0.05, end - start)))
         cursor = end
 
+    if not entries:
+        # No cues at all (e.g. every caption was dropped): burn a transparent overlay so
+        # the cover still applies — the concat demuxer needs at least one entry.
+        entries = [(blank, 60.0)]
     concat = sub_dir / "concat.txt"
     with concat.open("w", encoding="utf-8") as handle:
         for path, duration in entries:
