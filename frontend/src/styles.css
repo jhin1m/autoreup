@@ -2065,3 +2065,43 @@ select.lib-input { cursor: pointer; }
   justify-content: space-between;
   gap: 10px;
 }
+
+/* thin-region ergonomics: a transparent grab rail around every box */
+.ov-shape {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.ov-shape > * {
+  pointer-events: auto;
+}
+.ov-rail {
+  position: absolute;
+  min-height: 18px;
+  margin-top: -7px;
+  border: 1px dashed transparent;
+}
+.ov-rail:hover {
+  border-color: #f0b23c66;
+}
+.ov-tag {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: #ffe9b199;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+.ov-handle.edge {
+  cursor: ew-resize;
+}
+.ov-nums {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.ov-nums input {
+  width: 100%;
+}

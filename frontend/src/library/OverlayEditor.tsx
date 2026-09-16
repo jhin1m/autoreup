@@ -189,15 +189,27 @@ export function OverlayEditor({
               }}
             />
             {config?.cover.map((region, index) => (
-              <div
-                key={index}
-                className={`ov-box ${index === selected ? "on" : ""} ${region.mode}`}
-                style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` }}
-                onPointerDown={(event) => onPointerDown(event, index, "move")}
-                title={region.label || region.mode}
-              >
+              <div key={index} className="ov-shape">
+                {/* A thin band (2-4% of the frame) is nearly impossible to grab, so every
+                    region gets an extended transparent rail around it: same drag, easy hit. */}
+                <div
+                  className="ov-rail"
+                  style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` }}
+                  onPointerDown={(event) => onPointerDown(event, index, "move")}
+                />
+                <div
+                  className={`ov-box ${index === selected ? "on" : ""} ${region.mode}`}
+                  style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` }}
+                  onPointerDown={(event) => onPointerDown(event, index, "move")}
+                  title={region.label || region.mode}
+                >
+                  <span className="ov-tag">{region.label || region.mode}</span>
+                </div>
                 {index === selected ? (
-                  <span className="ov-handle" onPointerDown={(event) => onPointerDown(event, index, "se")} />
+                  <>
+                    <span className="ov-handle" style={{ left: `calc(${(region.x + region.w) * 100}% - 6px)`, top: `calc(${(region.y + region.h) * 100}% - 6px)` }} onPointerDown={(event) => onPointerDown(event, index, "se")} />
+                    <span className="ov-handle edge" style={{ left: `calc(${(region.x + region.w) * 100}% - 5px)`, top: `${(region.y + region.h / 2) * 100}%` }} onPointerDown={(event) => onPointerDown(event, index, "se")} />
+                  </>
                 ) : null}
               </div>
             ))}
@@ -285,6 +297,39 @@ export function OverlayEditor({
                   <span>Nhãn</span>
                   <input value={active.label} onChange={(event) => patchRegion(selected, { label: event.target.value })} />
                 </label>
+                <div className="ov-nums">
+                  {(["x", "y", "w", "h"] as const).map((key) => (
+                    <label key={key} className="ov-field">
+                      <span>{key.toUpperCase()} %</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                        value={(active[key] * 100).toFixed(1)}
+                        onChange={(event) => patchRegion(selected, { [key]: Math.max(0, Math.min(1, Number(event.target.value) / 100)) })}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="ov-row">
+                  {([["↑", 0, -0.005], ["↓", 0, 0.005], ["←", -0.005, 0], ["→", 0.005, 0]] as const).map(([label, dx, dy]) => (
+                    <button
+                      key={label}
+                      className="ghost"
+                      title="Dịch 0.5% khung hình"
+                      onClick={() => patchRegion(selected, { x: active.x + dx, y: active.y + dy })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button className="ghost" onClick={() => patchRegion(selected, { h: Math.min(1 - active.y, active.h + 0.005) })} title="Cao thêm 0.5%">
+                    Cao +
+                  </button>
+                  <button className="ghost" onClick={() => patchRegion(selected, { h: Math.max(0.02, active.h - 0.005) })} title="Thấp bớt 0.5%">
+                    Cao −
+                  </button>
+                </div>
                 <button className="ghost danger" onClick={() => removeRegion(selected)}>
                   Xoá hộp này
                 </button>
