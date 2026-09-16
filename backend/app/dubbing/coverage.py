@@ -419,6 +419,7 @@ def transcribe_ranges(
     language: str = "auto",
     workers: int = 8,
     chunk_seconds: float = 30.0,
+    backend: str = "auto",
     scripts_dir: Path | None = None,
     python_bin: str | None = None,
 ) -> list[AsrSegment]:
@@ -443,6 +444,7 @@ def transcribe_ranges(
         subprocess.run(
             [
                 python_bin or _sys.executable, str(script), str(glued),
+                "--backend", backend,
                 "--worker-url", worker_url, "--output", str(srt),
                 "--language", language, "--model", model,
                 "--workers", str(workers), "--chunk-seconds", str(chunk_seconds),

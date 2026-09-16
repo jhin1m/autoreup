@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     asr_gap_min_seconds: float = 5.0
     asr_gap_speech_floor: float = 0.10
     asr_ocr_subs: bool = True  # OCR burned-in subtitles as the primary transcript source
+    # auto = mlx-whisper on this machine when installed, else the Cloudflare worker.
+    # (The worker's free tier has a daily neuron cap: measured 4006 "used up your daily
+    # free allocation", which failed every ASR job until the quota reset.)
+    asr_backend: str = "auto"  # auto | local | worker
     cookies_file: str | None = None
     browser_path: str | None = None  # Chrome/Edge binary for the headless Douyin extractor
     node_bin: str = "node"

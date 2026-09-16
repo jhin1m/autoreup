@@ -43,3 +43,24 @@ class ASRWorkerClientContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_local_backend_model_mapping_and_auto_selection():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from scripts import asr_worker_client as client
+
+    # Cloudflare slugs map onto the MLX repos (same weights, local runtime)
+    assert client.local_repo("@cf/openai/whisper-large-v3-turbo") == "mlx-community/whisper-large-v3-turbo"
+    assert client.local_repo("@cf/openai/whisper") == "mlx-community/whisper-large-v3-mlx"
+    assert client.local_repo("mlx-community/whisper-small-mlx") == "mlx-community/whisper-small-mlx"
+    # auto picks local exactly when mlx-whisper is importable
+    expected = "local" if importlib.util.find_spec("mlx_whisper") else "worker"
+    assert client.pick_backend("auto") == expected
+    assert client.pick_backend("worker") == "worker"
+    assert client.pick_backend("local") == "local"

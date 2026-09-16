@@ -1,3 +1,13 @@
+"""ASR client for the pipeline: one CLI, two backends.
+
+``local``  — mlx-whisper on Apple Silicon (same large-v3-turbo weights as the worker,
+             no network, no quota; the local-first default).
+``worker`` — the Cloudflare Workers AI whisper endpoint (portable, but the free tier
+             has a daily neuron allocation: measured 4006 "used up your daily free
+             allocation of 10,000 neurons", which failed every ASR job that day).
+``auto``   — local when mlx-whisper is importable, worker otherwise.
+"""
+
 import argparse
 import base64
 import json
@@ -47,6 +57,40 @@ def call_worker(worker_url: str, audio_path: Path, offset: float, length: float,
     except HTTPError as exc:
         detail = exc.read().decode(errors="replace")
         raise RuntimeError(f"Worker HTTP {exc.code}: {detail}") from exc
+
+
+LOCAL_DEFAULT_REPO = "mlx-community/whisper-large-v3-turbo"
+
+
+def local_repo(model: str) -> str:
+    """Map the pipeline's model names (Cloudflare slugs) onto MLX repos."""
+    if model.startswith("mlx-community/"):
+        return model
+    if "turbo" in model:
+        return LOCAL_DEFAULT_REPO
+    if "large-v3" in model:
+        return "mlx-community/whisper-large-v3-mlx"  # the non-turbo ladder rung
+    return LOCAL_DEFAULT_REPO
+
+
+def transcribe_local(video_path: str, language: str, model: str) -> list[dict]:
+    """Whole-file transcription with mlx-whisper (no chunking needed)."""
+    import mlx_whisper
+
+    with tempfile.TemporaryDirectory() as tmp:
+        audio = Path(tmp) / "audio.wav"
+        subprocess.check_call([
+            "ffmpeg", "-v", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", str(audio),
+        ])
+        result = mlx_whisper.transcribe(
+            str(audio),
+            path_or_hf_repo=local_repo(model),
+            language=None if language in ("", "auto") else language,
+        )
+    return [
+        {"start": float(seg["start"]), "end": float(seg["end"]), "text": str(seg.get("text") or "")}
+        for seg in result.get("segments", [])
+    ]
 
 
 def srt_time(second: float) -> str:
@@ -209,10 +253,19 @@ def write_json(segments: list[dict], output: Path) -> None:
     output.write_text(json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def pick_backend(requested: str) -> str:
+    if requested != "auto":
+        return requested
+    import importlib.util
+
+    return "local" if importlib.util.find_spec("mlx_whisper") else "worker"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("video")
-    parser.add_argument("--worker-url", required=True)
+    parser.add_argument("--backend", choices=("auto", "local", "worker"), default="auto")
+    parser.add_argument("--worker-url", default="")
     parser.add_argument("--output", default=None)
     parser.add_argument("--language", default="zh")
     parser.add_argument("--model", default="@cf/openai/whisper-large-v3-turbo")
@@ -227,27 +280,33 @@ def main() -> None:
     if args.max_duration:
         total = min(total, args.max_duration)
     output = Path(args.output) if args.output else Path("data/subtitles") / f"{Path(args.video).stem}.asr.zh.srt"
-    starts = [i * (args.chunk_seconds - args.overlap) for i in range(math.ceil(total / (args.chunk_seconds - args.overlap)))]
-    starts = [s for s in starts if s < total]
 
-    all_segments = []
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        jobs = []
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            for index, start in enumerate(starts):
-                length = min(args.chunk_seconds, total - start)
-                audio_path = tmp_dir / f"chunk_{index:04}.mp3"
-                extract_audio_chunk(args.video, start, length, audio_path)
-                jobs.append(pool.submit(call_worker, args.worker_url, audio_path, start, length, args.language, args.model))
+    backend = pick_backend(args.backend)
+    if backend == "local":
+        print(f"ASR backend: local ({local_repo(args.model)})")
+        all_segments = transcribe_local(args.video, args.language, args.model)
+    else:
+        if not args.worker_url:
+            raise SystemExit("--worker-url is required for the worker backend")
+        print(f"ASR backend: worker ({args.worker_url})")
+        starts = [i * (args.chunk_seconds - args.overlap) for i in range(math.ceil(total / (args.chunk_seconds - args.overlap)))]
+        starts = [s for s in starts if s < total]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            jobs = []
+            with ThreadPoolExecutor(max_workers=args.workers) as pool:
+                for index, start in enumerate(starts):
+                    length = min(args.chunk_seconds, total - start)
+                    audio_path = tmp_dir / f"chunk_{index:04}.mp3"
+                    extract_audio_chunk(args.video, start, length, audio_path)
+                    jobs.append(pool.submit(call_worker, args.worker_url, audio_path, start, length, args.language, args.model))
 
-            results = []
-            for idx, job in enumerate(as_completed(jobs), 1):
-                result = job.result()
-                results.append(result)
-                print(f"ASR {idx}/{len(jobs)}")
-
-    all_segments = trim_chunk_overlaps(results, total, args.overlap)
+                results = []
+                for idx, job in enumerate(as_completed(jobs), 1):
+                    result = job.result()
+                    results.append(result)
+                    print(f"ASR {idx}/{len(jobs)}")
+        all_segments = trim_chunk_overlaps(results, total, args.overlap)
     deduped = dedupe_overlaps(all_segments)
     cues = normalize_cues(deduped, max_chars=args.max_chars)
     write_srt(cues, output)

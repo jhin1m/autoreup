@@ -353,6 +353,7 @@ class ASRStage(PipelineStage):
                     recovered = transcribe_ranges(
                         video, uncovered_ranges, str(settings.asr_worker_url), settings.asr_model,
                         workers=settings.asr_workers, chunk_seconds=settings.asr_chunk_seconds,
+                        backend=settings.asr_backend,
                         scripts_dir=settings.scripts_dir, python_bin=sys.executable,
                     )
                     recovered = clamp_to_ranges(recovered, uncovered_ranges)
@@ -833,7 +834,8 @@ def _run_asr(context: PipelineContext, output_srt: Path) -> list[str]:
     script = settings.scripts_dir / "asr_worker_client.py"
     command = [
         sys.executable, str(script), str(context.artifacts["video"]),
-        "--worker-url", str(settings.asr_worker_url),
+        "--backend", str(settings.asr_backend),
+        "--worker-url", str(settings.asr_worker_url or ""),
         "--output", str(output_srt),
         "--language", "auto",  # dialogue may be Chinese OR Japanese (mixed anime audio)
         "--model", str(settings.asr_model),
