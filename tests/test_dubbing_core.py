@@ -103,3 +103,33 @@ def test_overlay_geometry_is_source_resolution_independent():
     # no canonical output -> the overlay is source-sized again
     plain = overlay_geometry(3840, 2160, None, HardsubConfig())
     assert (plain.out_width, plain.out_height, plain.scale) == (3840, 2160, 1.0)
+
+
+def test_overlay_config_roundtrip_and_normalization():
+    from backend.app.services.overlay import CoverRegion, OverlayConfig
+
+    config = OverlayConfig.from_json({
+        "caption_mode": "manual",
+        "caption_y": 0.9,
+        "caption_scale": 1.3,
+        "cover": [
+            {"x": -0.1, "y": 0.9, "w": 1.4, "h": 0.2, "mode": "nope", "strength": 5, "label": "band"},
+        ],
+    })
+    payload = config.to_json()
+    region = payload["cover"][0]
+    assert region["x"] == 0.0 and region["y"] == 0.9          # clamped into the frame
+    assert region["w"] == 1.0 and region["h"] == 0.1          # width capped at 1 - x
+    assert region["mode"] == "blur"                            # unknown mode falls back
+    assert region["strength"] == 1.0                           # clamped to 0..1
+    assert OverlayConfig.from_json(payload).to_json() == payload  # stable round-trip
+
+
+def test_overlay_caption_position_follows_band_or_manual():
+    from backend.app.services.overlay import CoverRegion, OverlayConfig
+
+    band = OverlayConfig(cover=[CoverRegion(0.0, 0.88, 1.0, 0.1, "blur", 1.0, "band")])
+    assert band.caption_cy_fraction() == 0.93                  # centre of the labelled band
+    manual = OverlayConfig(caption_mode="manual", caption_y=0.8)
+    assert manual.caption_cy_fraction() == 0.8
+    assert OverlayConfig().caption_cy_fraction() is None       # nothing to derive -> detector

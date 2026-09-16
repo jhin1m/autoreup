@@ -111,7 +111,14 @@ def _agent_config(settings: Settings, model: str) -> AgentConfig:
     )
 
 
-def _hardsub_config(settings: Settings):
+def _load_overlay(context: PipelineContext):
+    """The job's editable overlay (caption position + cover regions), or None."""
+    from backend.app.services.overlay import load_overlay
+
+    return load_overlay(context.job_dir, context.job_id)
+
+
+def _hardsub_config(settings: Settings, overlay=None):
     from backend.app.services.hardsub import HardsubConfig
     from backend.app.infrastructure.ffmpeg_encode import video_encode_args, canonical_scale_filter
 
@@ -133,6 +140,7 @@ def _hardsub_config(settings: Settings):
         out_width=settings.video_width if scale_filter else 0,
         out_height=settings.video_height if scale_filter else 0,
         sharpen=settings.video_sharpen,
+        overlay=overlay,
     )
 
 
@@ -750,7 +758,7 @@ class PackageStage(PipelineStage):
             bed_volume=settings.dub_bed_volume,
         duck=settings.dub_duck,
         carve_db=settings.dub_carve_db,
-            hardsub_config=_hardsub_config(settings),
+            hardsub_config=_hardsub_config(settings, _load_overlay(context)),
         )
         return StageResult(name=self.name, artifacts=artifacts, logs=logs)
 

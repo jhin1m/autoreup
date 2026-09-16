@@ -14,6 +14,7 @@ sub video -> mux the dubbed audio. Falls back gracefully if the band isn't found
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -54,6 +55,9 @@ class HardsubConfig:
     # 1080p source got the full 58px. Caption size must not depend on the source size.
     out_width: int = 0
     out_height: int = 0
+    # Editable per-job overlay (caption position + cover regions). None = the legacy
+    # auto behaviour (detect the band, cover it, caption at its centre).
+    overlay: object = None
     # Contrast-adaptive sharpening on the picture (NOT the caption overlay, which is
     # already crisp). Douyin sources sit around 1Mbps for 1080p — visibly soft; a
     # light CAS restores perceived detail without unsharp's halos. 0 disables.
@@ -133,6 +137,59 @@ def overlay_geometry(src_width: int, src_height: int, band: tuple[int, int, int,
     return OverlayGeometry(out_width, out_height, round(scale, 6), pad_x, pad_y, caption_cy)
 
 
+def render_caption_png(text: str, path: Path, width: int, height: int, baseline_y: int, font, config: HardsubConfig) -> None:
+    """One full-frame transparent PNG with the caption on its fixed baseline."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.text((width // 2, baseline_y), text, font=font, anchor="ms",
+              fill=(255, 255, 255, 255),
+              stroke_width=max(2, round(config.font_size * 0.05)),
+              stroke_fill=(0, 0, 0, 255))
+    img.save(path)
+
+
+def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubConfig, caption: str = "") -> None:
+    """Render ONE frame with the cover regions + caption applied (editor preview).
+
+    Same picture chain as the real render (cover -> sharpen -> canonical scale ->
+    output-space caption), so what the editor sees is what the package will burn."""
+    import cv2
+    from PIL import ImageFont
+
+    cap = cv2.VideoCapture(str(video))
+    src_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+    src_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+    cap.release()
+    band = detect_sub_band(video, config)
+    geometry = overlay_geometry(src_width, src_height, band, config)
+    fraction = config.overlay.caption_cy_fraction() if getattr(config, "overlay", None) is not None else None
+    caption_cy = round(fraction * geometry.out_height) if fraction is not None else geometry.caption_cy
+
+    outputs = ["-map", "[vo]", "-frames:v", "1", "-q:v", "3", "-y", "-v", "error", str(output)]
+    if not caption.strip():
+        # no caption at this instant: just the covered, scaled frame
+        regions = _cover_regions(band, config, src_width, src_height)
+        cover = _build_cover_chain(regions, config, geometry.scale or 1.0, src_width, src_height)
+        filters = [part for part in (f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "", config.scale_filter) if part] or ["null"]
+        graph = cover + f"[cov]{','.join(filters)}[vo]"
+        run_command(["ffmpeg", "-ss", f"{max(0.0, t):.3f}", "-i", str(video), "-filter_complex", graph, *outputs])
+        return
+
+    font = ImageFont.truetype(config.font_path, config.font_size)
+    ascent, descent = font.getmetrics()
+    baseline_y = caption_cy + (ascent - descent) // 2
+    with tempfile.TemporaryDirectory() as tmp:
+        png = Path(tmp) / "caption.png"
+        render_caption_png(caption, png, geometry.out_width, geometry.out_height, baseline_y, font, config)
+        regions = _cover_regions(band, config, src_width, src_height)
+        cover = _build_cover_chain(regions, config, geometry.scale or 1.0, src_width, src_height)
+        filters = [part for part in (f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "", config.scale_filter) if part] or ["null"]
+        graph = cover + f"[cov]{','.join(filters)}[base2];[base2][1:v]overlay=0:0[vo]"
+        run_command(["ffmpeg", "-ss", f"{max(0.0, t):.3f}", "-i", str(video), "-i", str(png), "-filter_complex", graph, *outputs])
+
+
 def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: int, caption_cy: int, output: Path, config: HardsubConfig) -> None:
     """Render each cue to a transparent full-frame PNG and concat (held for each cue's
     duration, with transparent gaps) into one alpha overlay video."""
@@ -152,13 +209,7 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     baseline_y = caption_cy + (ascent - descent) // 2  # center the fixed line-box on the band
 
     def render(text: str, path: Path) -> None:
-        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.text((width // 2, baseline_y), text, font=font, anchor="ms",
-                  fill=(255, 255, 255, 255),
-                  stroke_width=max(2, round(config.font_size * 0.05)),
-                  stroke_fill=(0, 0, 0, 255))
-        img.save(path)
+        render_caption_png(text, path, width, height, baseline_y, font, config)
 
     ordered = sorted([c for c in cues if (c.get("text") or "").strip()], key=lambda c: float(c["start"]))
     entries: list[tuple[Path, float]] = []
@@ -184,6 +235,53 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     ])
 
 
+def _cover_regions(band, config: HardsubConfig, src_width: int, src_height: int) -> list[tuple[int, int, int, int, str, float]]:
+    """Cover regions in SOURCE pixels: (x, y, w, h, mode, strength).
+
+    The editable overlay wins; otherwise the legacy single detected band does."""
+    overlay = getattr(config, "overlay", None)
+    if overlay is not None:
+        regions = []
+        for region in overlay.cover:
+            x = int(region.x * src_width)
+            y = int(region.y * src_height)
+            w = max(2, int(region.w * src_width)) - (int(region.w * src_width) % 2)
+            h = max(2, int(region.h * src_height)) - (int(region.h * src_height) % 2)
+            regions.append((x, y, min(w, src_width - x), min(h, src_height - y), region.mode, region.strength))
+        return regions
+    if band is not None:
+        return [(0, band[0], src_width, band[1], "blur", 1.0)]
+    return []
+
+
+def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], config: HardsubConfig, scale: float, src_width: int, src_height: int) -> str:
+    """ffmpeg chain: apply every cover region to the incoming frame in turn."""
+    if not regions:
+        return "[0:v]copy[cov];"
+    parts = ["[0:v]null[v0]"]
+    for index, (x, y, w, h, mode, strength) in enumerate(regions):
+        label = f"v{index + 1}"
+        if mode == "solid":
+            box = f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1.0:t=fill"
+            parts.append(f"[v{index}]{box}[{label}]")
+            continue
+        blur_src = max(1, round(config.blur * max(0.2, strength) / max(0.2, scale)))
+        # yuv420p planes: luma allows ~h/2, chroma (half-res) ~h/4. Clamp to both so a
+        # short band can never crash the filter graph (74px band -> chroma cap 18).
+        luma_r = max(1, min(blur_src, h // 2))
+        chroma_r = max(1, min(blur_src, h // 4))
+        if mode == "darken":
+            box = f"boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{min(1.0, config.darken * strength):.2f}"
+        else:
+            box = f"boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{min(1.0, config.darken * 0.35 * strength):.2f}"
+        parts.append(
+            f"[v{index}]split=2[b{index}][t{index}];"
+            f"[t{index}]crop={w}:{h}:{x}:{y},{box}[c{index}];"
+            f"[b{index}][c{index}]overlay={x}:{y}[{label}]"
+        )
+    return ";".join(parts) + ";[v" + str(len(regions)) + "]null[cov];"
+
+
 def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, output: Path, work_dir: Path, config: HardsubConfig | None = None) -> dict:
     """Produce a hardsubbed MP4: cover the original sub band, burn the VI sub, mux the
     dubbed audio (original as a quiet bed under the VI voice). Returns a small summary."""
@@ -199,6 +297,14 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     cap.release()
     geometry = overlay_geometry(src_width, src_height, None, config)
 
+    # Editable overlay: draw the caption where the user put it, independent of the
+    # detector. Fractions -> output pixels (config.out_* or the source size).
+    overlay_caption_cy: int | None = None
+    if config.overlay is not None:
+        fraction = config.overlay.caption_cy_fraction()
+        if fraction is not None:
+            overlay_caption_cy = round(fraction * geometry.out_height)
+
     # The band is detected in SOURCE pixels; pad/blur are tuned for the OUTPUT, so they
     # are scaled into source space before use (a 4K source needs 2x the pixel pad to
     # cover the same outline once the frame is scaled down).
@@ -211,30 +317,16 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     geometry = overlay_geometry(src_width, src_height, band, config)
 
     overlay_mov = work_dir / "vi_overlay.mov"
-    _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, geometry.caption_cy, overlay_mov, config)
+    caption_cy = overlay_caption_cy if overlay_caption_cy is not None else geometry.caption_cy
+    _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, caption_cy, overlay_mov, config)
 
     has_voice = voice_track is not None and Path(voice_track).exists()
     inputs = ["-i", str(video), "-i", str(overlay_mov)]
     if has_voice:
         inputs += ["-i", str(voice_track)]
 
-    if band is not None:
-        # boxblur radius must fit the smallest plane it touches. For yuv420p the
-        # chroma plane is half-res, so its max radius is ~band_h/4 (luma allows
-        # ~band_h/2). A fixed radius crashed on short bands (74px -> chroma cap 18).
-        # Clamp luma and chroma radii to their planes so any band height is safe.
-        # The radius is specified in OUTPUT pixels (like the font), so scale it into
-        # source space: at 4K -> 1080p a 20px output blur needs 40px of source blur.
-        blur_src = max(1, round(config.blur / (geometry.scale or 1.0)))
-        luma_r = max(1, min(blur_src, band_h // 2))
-        chroma_r = max(1, min(blur_src, band_h // 4))
-        cover = (
-            f"[0:v]split=2[base][t];"
-            f"[t]crop=iw:{band_h}:0:{band_y},boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{config.darken:.2f}[bl];"
-            f"[base][bl]overlay=0:{band_y}[cov];"
-        )
-    else:
-        cover = "[0:v]copy[cov];"
+    regions = _cover_regions(band, config, src_width, src_height)
+    cover = _build_cover_chain(regions, config, geometry.scale or 1.0, src_width, src_height)
     # Order matters: cover the source band in SOURCE space, sharpen + scale to the
     # canonical output size, THEN overlay the output-space caption PNGs. Overlaying
     # before the scale is what shrank captions on 4K sources (measured: 58px -> 29px).

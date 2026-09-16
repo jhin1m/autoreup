@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
+import { OverlayEditor } from "./OverlayEditor";
 import type { Artifact, Episode, JobManifest, SubtitleCue } from "../types";
 import { STAGE_VI, dubErrorVi, formatDuration, latestArtifact } from "../util";
 
@@ -57,6 +58,7 @@ export function Preview({
   const [cues, setCues] = useState<Cue[]>([]);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [artIndex, setArtIndex] = useState(0);
+  const [editor, setEditor] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const activeRowRef = useRef<HTMLLIElement | null>(null);
 
@@ -194,11 +196,32 @@ export function Preview({
           )}
           {fellBackToSource ? <span className="mono tiny amber">Thiếu file lồng tiếng — đang phát bản gốc</span> : null}
           <div className="pv-right">
+            {isDubbed && dubArt ? (
+              <a className="ghost" href={api.artifactUrl(episode.dub_job_id ?? "", "hardsub_mp4")} download>
+                Tải video
+              </a>
+            ) : null}
+            {isDubbed && job ? (
+              <button className="ghost" onClick={() => setEditor(true)} disabled={!srcArt}>
+                Khung che & vị trí sub
+              </button>
+            ) : null}
             <button className="primary" onClick={onRedub}>{isDubbed ? "Làm lại" : "Dịch tập này"}</button>
             {isDubbed ? <button className="ghost danger" onClick={onDelete}>Xóa bản dịch</button> : null}
           </div>
         </div>
       </div>
+      {editor && job && srcArt ? (
+        <OverlayEditor
+          jobId={job.job_id}
+          videoPath={`/media/${srcArt.path}`}
+          cues={cues}
+          onClose={() => setEditor(false)}
+          onRepack={() => {
+            api.fetchJob(job.job_id).then(setJob).catch(() => {});
+          }}
+        />
+      ) : null}
     </div>
   );
 }

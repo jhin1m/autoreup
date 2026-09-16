@@ -228,3 +228,58 @@ export async function getExport(exportId: string): Promise<Export> {
 export async function deleteExport(exportId: string): Promise<void> {
   await ok(await fetch(`${LIB}/exports/${exportId}`, { method: "DELETE" }), "Không xóa được bản ghép");
 }
+
+
+/* ---------- overlay editor (caption position + cover boxes) ---------- */
+
+export type CoverRegion = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  mode: string;
+  strength: number;
+  label: string;
+};
+
+export type OverlayConfig = {
+  caption_mode: string;
+  caption_y: number | null;
+  caption_scale: number;
+  cover: CoverRegion[];
+};
+
+export async function fetchOverlay(jobId: string): Promise<OverlayConfig> {
+  const response = await ok(await fetch(`/api/v1/jobs/${jobId}/overlay`), "Không tải được khung che");
+  return (await response.json()) as OverlayConfig;
+}
+
+export async function saveOverlay(jobId: string, config: OverlayConfig): Promise<OverlayConfig> {
+  const response = await ok(
+    await fetch(`/api/v1/jobs/${jobId}/overlay`, { method: "PUT", headers: jsonHeaders, body: JSON.stringify(config) }),
+    "Không lưu được khung che",
+  );
+  return (await response.json()) as OverlayConfig;
+}
+
+export async function previewOverlayFrame(jobId: string, config: OverlayConfig, t: number, text: string): Promise<string> {
+  const response = await ok(
+    await fetch(`/api/v1/jobs/${jobId}/overlay/frame?t=${encodeURIComponent(t)}&text=${encodeURIComponent(text)}`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify(config),
+    }),
+    "Không dựng được ảnh xem thử",
+  );
+  return URL.createObjectURL(await response.blob());
+}
+
+export async function repackJob(jobId: string): Promise<JobManifest> {
+  const response = await ok(await fetch(`/api/v1/jobs/${jobId}/repack`, { method: "POST" }), "Không render lại được");
+  return ((await response.json()) as JobResponse).job;
+}
+
+/** Direct download URL for a job artifact (hardsub_mp4, subtitle_srt, …). */
+export function artifactUrl(jobId: string, kind: string): string {
+  return `/api/v1/jobs/${jobId}/artifacts/${kind}`;
+}
