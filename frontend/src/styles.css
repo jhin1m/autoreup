@@ -1963,26 +1963,6 @@ select.lib-input { cursor: pointer; }
   border: 1px solid #00000066;
   cursor: nwse-resize;
 }
-.ov-caption-line {
-  position: absolute;
-  left: 6%;
-  width: 88%;
-  height: 2px;
-  background: #7cffb2cc;
-  box-shadow: 0 0 8px #7cffb299;
-  pointer-events: none;
-}
-.ov-caption-hint {
-  position: absolute;
-  left: 50%;
-  bottom: 6px;
-  transform: translateX(-50%);
-  margin: 0;
-  max-width: 90%;
-  font-size: 13px;
-  color: #ffffffdd;
-  text-shadow: 0 1px 3px #000;
-}
 .ov-side {
   display: grid;
   gap: 12px;
@@ -2124,4 +2104,31 @@ select.lib-input { cursor: pointer; }
 .ov-scrub {
   flex: 1;
   accent-color: var(--amber);
+}
+
+/* caption preview: the real Vietnamese line at its real position (drag it) */
+.ov-caption {
+  position: absolute;
+  left: 4%;
+  width: 92%;
+  transform: translateY(-50%);
+  display: flex;
+  justify-content: center;
+  cursor: ns-resize;
+  user-select: none;
+}
+.ov-caption-text {
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #00000055;
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 0 #000, 0 -1px 0 #000, 1px 0 0 #000, -1px 0 0 #000;
+}
+.ov-caption:hover .ov-caption-text {
+  outline: 1px dashed #7cffb2aa;
 }

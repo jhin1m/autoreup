@@ -254,6 +254,7 @@ export type OverlayFrame = {
   source: { width: number; height: number };
   scale: number;
   pad: { x: number; y: number };
+  font_size?: number;
   duration: number;
 };
 

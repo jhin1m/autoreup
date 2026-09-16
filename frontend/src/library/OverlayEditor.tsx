@@ -9,7 +9,7 @@ const MODES: { id: string; label: string }[] = [
   { id: "solid", label: "Đen đặc" },
 ];
 
-type Handle = "move" | "se" | null;
+type Handle = "move" | "se" | "caption" | null;
 
 /** WYSIWYG editor for the package overlay: drag boxes over the paused frame to hide
  *  the original subtitle band / a channel logo, and place the Vietnamese caption.
@@ -35,9 +35,12 @@ export function OverlayEditor({
   const [selected, setSelected] = useState(-1);
   const [t, setT] = useState(1);
   const [playing, setPlaying] = useState(false);
+  const [canvasWidth, setCanvasWidth] = useState(0);
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState("");
   const drag = useRef<{ handle: Handle; startX: number; startY: number; box: CoverRegion } | null>(null);
+  const pointer = useRef({ x: 0, y: 0 });
+  const raf = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -55,6 +58,16 @@ export function OverlayEditor({
   // output aspect ratio, the video letterboxes inside it, and every box/caption
   // fraction is measured against the canvas — the same space the render uses.
   const outAspect = frame ? frame.out.width / frame.out.height : 16 / 9;
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver((entries) => setCanvasWidth(entries[0]?.contentRect.width ?? 0));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [frame]);
+  // caption font in on-screen pixels = rendered font x (canvas width / output width)
+  const captionFontPx =
+    frame && canvasWidth > 0 ? ((frame.font_size ?? 58) * (config?.caption_scale ?? 1) * canvasWidth) / frame.out.width : 16;
 
   const captionText = useMemo(() => {
     const cue = cues.find((item) => item.start <= t && t < item.end);
@@ -106,22 +119,61 @@ export function OverlayEditor({
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
   }
 
+  /** One state commit per animation frame: pointermove fires far faster than the
+   *  browser paints, and a React render per move made dragging feel sticky. */
   function onPointerMove(event: React.PointerEvent) {
+    pointer.current = { x: event.clientX, y: event.clientY };
+    if (raf.current !== null) return;
+    raf.current = requestAnimationFrame(() => {
+      raf.current = null;
+      applyDrag();
+    });
+  }
+
+  function applyDrag() {
     const state = drag.current;
     const rect = canvasRef.current?.getBoundingClientRect();
-    if (!state || !rect || !config) return;
-    const dx = (event.clientX - state.startX) / rect.width;
-    const dy = (event.clientY - state.startY) / rect.height;
-    const box = state.box;
+    if (!state || !rect) return;
+    const dx = (pointer.current.x - state.startX) / rect.width;
+    const dy = (pointer.current.y - state.startY) / rect.height;
     if (state.handle === "move") {
-      const x = Math.min(Math.max(box.x + dx, 0), 1 - box.w);
-      const y = Math.min(Math.max(box.y + dy, 0), 1 - box.h);
-      patchRegion(selected, { x: round4(x), y: round4(y) });
+      const box = state.box;
+      const x = round4(Math.min(Math.max(box.x + dx, 0), 1 - box.w));
+      const y = round4(Math.min(Math.max(box.y + dy, 0), 1 - box.h));
+      patchRegion(selected, { x, y });
+    } else if (state.handle === "caption") {
+      patch({ caption_mode: "manual", caption_y: round4(Math.min(Math.max(state.box.y + dy, 0.05), 0.97)) });
     } else {
-      const w = Math.min(Math.max(box.w + dx, 0.02), 1 - box.x);
-      const h = Math.min(Math.max(box.h + dy, 0.02), 1 - box.y);
-      patchRegion(selected, { w: round4(w), h: round4(h) });
+      const box = state.box;
+      const w = round4(Math.min(Math.max(box.w + dx, 0.02), 1 - box.x));
+      const h = round4(Math.min(Math.max(box.h + dy, 0.02), 1 - box.y));
+      patchRegion(selected, { w, h });
     }
+  }
+
+  function endDrag() {
+    drag.current = null;
+    if (raf.current !== null) {
+      cancelAnimationFrame(raf.current);
+      raf.current = null;
+    }
+  }
+
+  /** The caption preview sits where the render will burn it: the band region's centre
+   *  in band mode, the manual fraction otherwise. */
+  const captionFraction = (() => {
+    if (!config) return 0.88;
+    if (config.caption_mode === "manual") return config.caption_y ?? 0.88;
+    const band = config.cover.find((region) => region.label === "band");
+    return band ? band.y + band.h / 2 : 0.88;
+  })();
+
+  function startCaptionDrag(event: React.PointerEvent) {
+    if (!config) return;
+    event.stopPropagation();
+    event.preventDefault();
+    drag.current = { handle: "caption", startX: event.clientX, startY: event.clientY, box: { x: 0, y: captionFraction, w: 1, h: 0.06, mode: "blur", strength: 1, label: "caption" } };
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
   }
 
   const active = selected >= 0 && config ? config.cover[selected] : undefined;
@@ -190,7 +242,8 @@ export function OverlayEditor({
             ref={canvasRef}
             style={{ aspectRatio: `${outAspect}` }}
             onPointerMove={onPointerMove}
-            onPointerUp={() => (drag.current = null)}
+            onPointerUp={endDrag}
+            onPointerLeave={endDrag}
           >
             <video
               ref={videoRef}
@@ -242,12 +295,15 @@ export function OverlayEditor({
                 ) : null}
               </div>
             ))}
+            {/* the caption follows the frame: drag it (or the band box) and it moves */}
             <div
-              className="ov-caption-line"
-              style={{ top: `${((config?.caption_y ?? 0.88) * 100).toFixed(2)}%`, opacity: config?.caption_mode === "manual" ? 1 : 0.45 }}
-              title="Vị trí phụ đề Việt"
-            />
-            {captionText ? <p className="ov-caption-hint">{captionText}</p> : null}
+              className="ov-caption"
+              style={{ top: `${(captionFraction * 100).toFixed(2)}%`, fontSize: `${captionFontPx.toFixed(1)}px` }}
+              onPointerDown={startCaptionDrag}
+              title="Kéo để đặt vị trí phụ đề Việt"
+            >
+              <span className="ov-caption-text">{captionText || "(không có phụ đề ở giây này)"}</span>
+            </div>
           </div>
 
           <aside className="ov-side">

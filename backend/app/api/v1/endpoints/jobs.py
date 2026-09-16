@@ -161,6 +161,7 @@ def _frame_info(video: Path) -> dict:
         "source": {"width": width, "height": height},
         "scale": geometry.scale,
         "pad": {"x": geometry.pad_x, "y": geometry.pad_y},
+        "font_size": config.font_size,
         "duration": duration,
     }
 
