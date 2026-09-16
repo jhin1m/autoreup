@@ -133,3 +133,18 @@ def test_overlay_caption_position_follows_band_or_manual():
     manual = OverlayConfig(caption_mode="manual", caption_y=0.8)
     assert manual.caption_cy_fraction() == 0.8
     assert OverlayConfig().caption_cy_fraction() is None       # nothing to derive -> detector
+
+
+def test_detect_sub_band_prefers_vision_over_the_pixel_heuristic(monkeypatch):
+    """One detector for the rail and the cover: Vision wins, pixels are the fallback.
+
+    Measured on a real episode: Vision found (893, 144, 1920, 1080) while the pixel
+    heuristic returned None, so the package left the original subs visible."""
+    import backend.app.services.hardsub as hardsub
+
+    monkeypatch.setattr(hardsub, "_detect_band_vision", lambda video: (893, 144, 1920, 1080))
+    assert hardsub.detect_sub_band(__import__("pathlib").Path("x.mp4"), hardsub.HardsubConfig()) == (893, 144, 1920, 1080)
+
+    # Vision unavailable -> the pixel heuristic still runs (None here: the file is fake)
+    monkeypatch.setattr(hardsub, "_detect_band_vision", lambda video: None)
+    assert hardsub.detect_sub_band(__import__("pathlib").Path("x.mp4"), hardsub.HardsubConfig()) is None

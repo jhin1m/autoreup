@@ -64,12 +64,32 @@ class HardsubConfig:
     sharpen: float = 0.35
 
 
+def _detect_band_vision(video: Path) -> tuple[int, int, int, int] | None:
+    """macOS Vision band finder — the SAME detector the transcript rail uses.
+
+    Measured divergence: on a real episode Vision found the band at (893, 144, 1920,
+    1080) and 159 captions, while the pixel heuristic below returned None — so the
+    package left the original Chinese subtitles fully visible. One detector for both
+    jobs, with the pixel heuristic only as the non-macOS fallback."""
+    try:
+        from backend.app.dubbing.ocr_subs import detect_band as vision_band
+    except Exception:  # noqa: BLE001 - absent on non-macOS / missing deps
+        return None
+    try:
+        return vision_band(video)
+    except Exception:  # noqa: BLE001 - Vision hiccups must not break packaging
+        return None
+
+
 def detect_sub_band(video: Path, config: HardsubConfig) -> tuple[int, int, int, int] | None:
     """Return (band_y, band_h, width, height) of the original subtitle, or None.
 
-    A row is 'subtitle' in a frame if it has a wide enough run of bright pixels that
-    sit next to a dark outline, in the centre 64%. The band is the rows where that
-    recurs across many sample frames."""
+    Vision first — the same detector the transcript rail uses — then the cv2 heuristic
+    for non-macOS. The pixel heuristic alone missed a real episode's band (159 captions
+    were OCR'd from it), which left the original subtitles uncovered."""
+    vision = _detect_band_vision(video)
+    if vision is not None:
+        return vision
     import cv2  # local import: cv2 is only needed for hardsub
     import numpy as np
 
