@@ -38,6 +38,20 @@ function StageProgress({ ep }: { ep: Episode }) {
   );
 }
 
+type JobStage = { name: string; status: string };
+
+/** Compact live progress for a job that is running again (e.g. a package re-render):
+ *  the editor must never look like nothing happened. */
+function LiveProgress({ stages }: { stages: JobStage[] }) {
+  const running = stages.find((stage) => stage.status === "running") ?? stages[stages.length - 1];
+  const done = stages.filter((stage) => stage.status === "succeeded").length;
+  return (
+    <p className="pv-live mono tiny" role="status" aria-live="polite">
+      <span className="pv-spin" aria-hidden /> Đang chạy {done}/{stages.length} · {STAGE_VI[running?.name ?? ""] ?? running?.name ?? "bắt đầu"}
+    </p>
+  );
+}
+
 /** Watch/inspect one episode — the only "studio" surface. A dubbed episode plays its
  *  local video (original/dubbed toggle) next to a synced subtitle list: the active cue
  *  is highlighted and kept in view, clicking a row seeks the player. */
@@ -70,6 +84,17 @@ export function Preview({
     api.fetchJob(episode.dub_job_id).then(setJob).catch((err) => setError(String(err)));
   }, [episode.dub_job_id]);
 
+  // While a (re)render is running, poll the manifest so the progress strip and the
+  // finished video actually update — the repack button used to look like a no-op.
+  const running = job ? job.stages.some((stage) => stage.status === "running") || job.state === "queued" : false;
+  useEffect(() => {
+    if (!episode.dub_job_id || !running) return;
+    const timer = setInterval(() => {
+      api.fetchJob(episode.dub_job_id!).then(setJob).catch(() => {});
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [episode.dub_job_id, running]);
+
   useEffect(() => {
     setArtIndex(0);
   }, [episode.dub_job_id, job, dubbed]);
@@ -100,6 +125,9 @@ export function Preview({
   // (a stale manifest artifact is dropped server-side; a broken file may still 404).
   const candidates = (dubbed ? [dubArt, srcArt] : [srcArt]).filter((artifact): artifact is Artifact => Boolean(artifact));
   const art = candidates[Math.min(artIndex, Math.max(0, candidates.length - 1))];
+  // A re-render writes the same path with new bytes: version the URL by size so the
+  // player actually reloads it instead of replaying the browser cache.
+  const versioned = art ? `${art.path}?v=${art.size_bytes ?? art.created_at ?? ""}` : "";
   const isDubbed = episode.dub_state === "dubbed";
   const fellBackToSource = dubbed && !!dubArt && artIndex > 0;
   const showSubs = isDubbed && dubbed && !!dubArt && cues.length > 0 && !fellBackToSource;
@@ -136,6 +164,7 @@ export function Preview({
           <button className="link" onClick={onClose}>Đóng</button>
         </div>
 
+        {running && job ? <LiveProgress stages={job.stages as JobStage[]} /> : null}
         <div className={`pv-body ${showSubs ? "with-subs" : ""}`}>
           <div className="pv-screen">
             {isDubbed && art ? (
@@ -145,7 +174,7 @@ export function Preview({
                 controls
                 autoPlay
                 playsInline
-                src={`/media/${art.path}`}
+                src={`/media/${versioned}`}
                 onTimeUpdate={handleTimeUpdate}
                 onError={() => setArtIndex((index) => (index + 1 < candidates.length ? index + 1 : index))}
               />

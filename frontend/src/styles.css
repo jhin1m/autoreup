@@ -2132,3 +2132,25 @@ select.lib-input { cursor: pointer; }
 .ov-caption:hover .ov-caption-text {
   outline: 1px dashed #7cffb2aa;
 }
+
+/* live job progress (re-renders included) */
+.pv-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--amber);
+}
+.pv-spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--amber-soft);
+  border-top-color: var(--amber);
+  animation: pv-spin 0.8s linear infinite;
+}
+@keyframes pv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

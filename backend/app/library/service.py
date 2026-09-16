@@ -400,9 +400,14 @@ class LibraryService:
             shutil.rmtree(work, ignore_errors=True)
 
     def _reconcile(self, series_id: str) -> None:
-        """Refresh each translating episode's dub_state from its job's current state."""
+        """Refresh each episode's dub_state from its job's CURRENT state.
+
+        Includes finished episodes: a package re-render (the editor's "Render lại video")
+        runs the same job again, so a cached 'dubbed' episode must go back to
+        'translating' — otherwise the UI shows nothing while the render runs and never
+        polls for the result."""
         for ep in self.store.list_episodes(series_id):
-            if not ep.dub_job_id or ep.dub_state in {DubState.dubbed, DubState.failed}:
+            if not ep.dub_job_id:
                 continue
             try:
                 manifest = self.jobs.get(ep.dub_job_id)
