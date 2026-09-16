@@ -68,8 +68,10 @@ def local_repo(model: str) -> str:
         return model
     if "turbo" in model:
         return LOCAL_DEFAULT_REPO
-    if "large-v3" in model:
-        return "mlx-community/whisper-large-v3-mlx"  # the non-turbo ladder rung
+    # the non-turbo ladder rung: '@cf/openai/whisper' (plain whisper) or an explicit
+    # large-v3 slug
+    if "large-v3" in model or model.rstrip("/").endswith("/whisper"):
+        return "mlx-community/whisper-large-v3-mlx"
     return LOCAL_DEFAULT_REPO
 
 
