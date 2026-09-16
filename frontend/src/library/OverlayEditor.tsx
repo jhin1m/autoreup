@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
-import type { CoverRegion, OverlayConfig } from "../api";
+import type { CoverRegion, OverlayConfig, OverlayFrame } from "../api";
 import { useToast } from "../toast";
 
 const MODES: { id: string; label: string }[] = [
@@ -31,8 +31,10 @@ export function OverlayEditor({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<OverlayConfig | null>(null);
+  const [frame, setFrame] = useState<OverlayFrame | null>(null);
   const [selected, setSelected] = useState(-1);
   const [t, setT] = useState(1);
+  const [playing, setPlaying] = useState(false);
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState("");
   const drag = useRef<{ handle: Handle; startX: number; startY: number; box: CoverRegion } | null>(null);
@@ -40,12 +42,19 @@ export function OverlayEditor({
   useEffect(() => {
     api
       .fetchOverlay(jobId)
-      .then((cfg) => {
+      .then((state) => {
+        const { frame: info, ...cfg } = state;
+        setFrame(info ?? null);
         setConfig(cfg);
         setSelected(cfg.cover.length ? 0 : -1);
       })
       .catch(() => setConfig({ caption_mode: "band", caption_y: null, caption_scale: 1, cover: [] }));
   }, [jobId]);
+
+  // The video is only a moving picture inside the OUTPUT frame: the canvas carries the
+  // output aspect ratio, the video letterboxes inside it, and every box/caption
+  // fraction is measured against the canvas — the same space the render uses.
+  const outAspect = frame ? frame.out.width / frame.out.height : 16 / 9;
 
   const captionText = useMemo(() => {
     const cue = cues.find((item) => item.start <= t && t < item.end);
@@ -176,10 +185,16 @@ export function OverlayEditor({
         </div>
 
         <div className="ov-body">
-          <div className="ov-canvas" ref={canvasRef} onPointerMove={onPointerMove} onPointerUp={() => (drag.current = null)}>
+          <div
+            className="ov-canvas"
+            ref={canvasRef}
+            style={{ aspectRatio: `${outAspect}` }}
+            onPointerMove={onPointerMove}
+            onPointerUp={() => (drag.current = null)}
+          >
             <video
               ref={videoRef}
-              src={`${videoPath}#t=${t.toFixed(2)}`}
+              src={videoPath}
               muted
               playsInline
               preload="metadata"
@@ -187,7 +202,21 @@ export function OverlayEditor({
                 const video = videoRef.current;
                 if (video) video.currentTime = t;
               }}
+              onTimeUpdate={(event) => {
+                if (playing) setT(event.currentTarget.currentTime);
+              }}
             />
+            {frame && Math.abs(frame.source.width / frame.source.height - outAspect) > 0.01 ? (
+              <div
+                className="ov-source-area"
+                style={
+                  frame.source.width / frame.source.height > outAspect
+                    ? { left: 0, width: "100%", top: `${(frame.pad.y / frame.out.height) * 100}%`, height: `${(frame.source.height * frame.scale / frame.out.height) * 100}%` }
+                    : { top: 0, height: "100%", left: `${(frame.pad.x / frame.out.width) * 100}%`, width: `${(frame.source.width * frame.scale / frame.out.width) * 100}%` }
+                }
+                title="Vùng hình gốc (ngoài là viền đen)"
+              />
+            ) : null}
             {config?.cover.map((region, index) => (
               <div key={index} className="ov-shape">
                 {/* A thin band (2-4% of the frame) is nearly impossible to grab, so every
@@ -222,22 +251,47 @@ export function OverlayEditor({
           </div>
 
           <aside className="ov-side">
-            <label className="ov-field">
-              <span>Thời điểm xem (giây)</span>
-              <input
-                type="number"
-                min={0}
-                step={0.5}
-                value={t}
-                onChange={(event) => {
-                  const next = Math.max(0, Number(event.target.value) || 0);
-                  setT(next);
-                  const video = videoRef.current;
-                  if (video) video.currentTime = next;
-                  setPreview("");
-                }}
-              />
-            </label>
+            <div className="ov-group">
+              <p className="mono tiny">
+                Khung xem {frame ? `${frame.out.width}×${frame.out.height}` : ""} · nguồn{" "}
+                {frame ? `${frame.source.width}×${frame.source.height}` : "?"}
+              </p>
+              <div className="ov-row">
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    const video = videoRef.current;
+                    if (!video) return;
+                    if (playing) {
+                      video.pause();
+                      setPlaying(false);
+                    } else {
+                      setPreview("");
+                      void video.play();
+                      setPlaying(true);
+                    }
+                  }}
+                >
+                  {playing ? "⏸ Dừng" : "▶ Chạy"}
+                </button>
+                <input
+                  className="ov-scrub"
+                  type="range"
+                  min={0}
+                  max={frame?.duration || 1}
+                  step={0.1}
+                  value={t}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setT(next);
+                    const video = videoRef.current;
+                    if (video) video.currentTime = next;
+                    setPreview("");
+                  }}
+                />
+                <span className="mono tiny">{formatTime(t)}</span>
+              </div>
+            </div>
 
             <div className="ov-group">
               <p className="mono tiny">Hộp che ({config?.cover.length ?? 0})</p>
@@ -395,6 +449,13 @@ export function OverlayEditor({
       </div>
     </div>
   );
+}
+
+function formatTime(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function round4(value: number): number {

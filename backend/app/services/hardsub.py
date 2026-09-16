@@ -173,8 +173,9 @@ def render_caption_png(text: str, path: Path, width: int, height: int, baseline_
 def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubConfig, caption: str = "") -> None:
     """Render ONE frame with the cover regions + caption applied (editor preview).
 
-    Same picture chain as the real render (cover -> sharpen -> canonical scale ->
-    output-space caption), so what the editor sees is what the package will burn."""
+    Identical chain and space as the real render — scale/pad to the canonical output,
+    then cover + caption in OUTPUT coordinates — so the editor's frame is exactly what
+    the package will burn (this is what makes the preview trustworthy)."""
     import cv2
     from PIL import ImageFont
 
@@ -187,27 +188,32 @@ def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubCon
     fraction = config.overlay.caption_cy_fraction() if getattr(config, "overlay", None) is not None else None
     caption_cy = round(fraction * geometry.out_height) if fraction is not None else geometry.caption_cy
 
-    outputs = ["-map", "[vo]", "-frames:v", "1", "-q:v", "3", "-y", "-v", "error", str(output)]
-    if not caption.strip():
-        # no caption at this instant: just the covered, scaled frame
-        regions = _cover_regions(band, config, src_width, src_height)
-        cover = _build_cover_chain(regions, config, geometry.scale or 1.0, src_width, src_height)
-        filters = [part for part in (f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "", config.scale_filter) if part] or ["null"]
-        graph = cover + f"[cov]{','.join(filters)}[vo]"
-        run_command(["ffmpeg", "-ss", f"{max(0.0, t):.3f}", "-i", str(video), "-filter_complex", graph, *outputs])
-        return
+    regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
+    cover = _build_cover_chain(regions, config)
+    filters = [part for part in (
+        config.scale_filter,
+        f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
+    ) if part] or ["null"]
+    graph = f"[0:v]{','.join(filters)}[scaled];" + cover.replace("[0:v]", "[scaled]")
 
-    font = ImageFont.truetype(config.font_path, config.font_size)
-    ascent, descent = font.getmetrics()
-    baseline_y = caption_cy + (ascent - descent) // 2
-    with tempfile.TemporaryDirectory() as tmp:
-        png = Path(tmp) / "caption.png"
-        render_caption_png(caption, png, geometry.out_width, geometry.out_height, baseline_y, font, config)
-        regions = _cover_regions(band, config, src_width, src_height)
-        cover = _build_cover_chain(regions, config, geometry.scale or 1.0, src_width, src_height)
-        filters = [part for part in (f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "", config.scale_filter) if part] or ["null"]
-        graph = cover + f"[cov]{','.join(filters)}[base2];[base2][1:v]overlay=0:0[vo]"
-        run_command(["ffmpeg", "-ss", f"{max(0.0, t):.3f}", "-i", str(video), "-i", str(png), "-filter_complex", graph, *outputs])
+    inputs = ["-ss", f"{max(0.0, t):.3f}", "-i", str(video)]
+    if caption.strip():
+        with tempfile.TemporaryDirectory() as tmp:
+            font = ImageFont.truetype(config.font_path, config.font_size)
+            ascent, descent = font.getmetrics()
+            png = Path(tmp) / "caption.png"
+            render_caption_png(caption, png, geometry.out_width, geometry.out_height,
+                               caption_cy + (ascent - descent) // 2, font, config)
+            graph += "[cov][1:v]overlay=0:0[vo]"
+            run_command([
+                "ffmpeg", "-y", "-v", "error", *inputs, "-i", str(png),
+                "-filter_complex", graph, "-map", "[vo]", "-frames:v", "1", "-q:v", "3", str(output),
+            ])
+        return
+    run_command([
+        "ffmpeg", "-y", "-v", "error", *inputs,
+        "-filter_complex", graph, "-map", "[cov]", "-frames:v", "1", "-q:v", "3", str(output),
+    ])
 
 
 def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: int, caption_cy: int, output: Path, config: HardsubConfig) -> None:
@@ -255,26 +261,35 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     ])
 
 
-def _cover_regions(band, config: HardsubConfig, src_width: int, src_height: int) -> list[tuple[int, int, int, int, str, float]]:
-    """Cover regions in SOURCE pixels: (x, y, w, h, mode, strength).
+def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int, geom: "OverlayGeometry | None" = None) -> list[tuple[int, int, int, int, str, float]]:
+    """Cover regions in OUTPUT pixels: (x, y, w, h, mode, strength).
 
-    The editable overlay wins; otherwise the legacy single detected band does."""
+    The cover lives in the SAME space as the caption (the canonical output frame), so
+    an editor preview of the output cannot disagree with the render — for a portrait
+    source the padding is part of the frame and boxes are positioned inside it, exactly
+    as the UI draws them. The editable overlay wins; otherwise the legacy detected band
+    is mapped from source pixels into the output frame."""
     overlay = getattr(config, "overlay", None)
     if overlay is not None:
         regions = []
         for region in overlay.cover:
-            x = int(region.x * src_width)
-            y = int(region.y * src_height)
-            w = max(2, int(region.w * src_width)) - (int(region.w * src_width) % 2)
-            h = max(2, int(region.h * src_height)) - (int(region.h * src_height) % 2)
-            regions.append((x, y, min(w, src_width - x), min(h, src_height - y), region.mode, region.strength))
+            x = int(region.x * out_width)
+            y = int(region.y * out_height)
+            w = max(2, int(region.w * out_width)) - (int(region.w * out_width) % 2)
+            h = max(2, int(region.h * out_height)) - (int(region.h * out_height) % 2)
+            regions.append((x, y, min(w, out_width - x), min(h, out_height - y), region.mode, region.strength))
         return regions
+    if band is not None and geom is not None:
+        scale = geom.scale or 1.0
+        by = max(0, int(band[0] * scale) + geom.pad_y)
+        bh = max(2, int(band[1] * scale))
+        return [(0, by, out_width, min(bh, out_height - by), "blur", 1.0)]
     if band is not None:
-        return [(0, band[0], src_width, band[1], "blur", 1.0)]
+        return [(0, band[0], out_width, band[1], "blur", 1.0)]
     return []
 
 
-def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], config: HardsubConfig, scale: float, src_width: int, src_height: int) -> str:
+def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], config: HardsubConfig) -> str:
     """ffmpeg chain: apply every cover region to the incoming frame in turn."""
     if not regions:
         return "[0:v]copy[cov];"
@@ -285,7 +300,7 @@ def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], con
             box = f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1.0:t=fill"
             parts.append(f"[v{index}]{box}[{label}]")
             continue
-        blur_src = max(1, round(config.blur * max(0.2, strength) / max(0.2, scale)))
+        blur_src = max(1, round(config.blur * max(0.2, strength)))
         # yuv420p planes: luma allows ~h/2, chroma (half-res) ~h/4. Clamp to both so a
         # short band can never crash the filter graph (74px band -> chroma cap 18).
         luma_r = max(1, min(blur_src, h // 2))
@@ -345,16 +360,16 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     if has_voice:
         inputs += ["-i", str(voice_track)]
 
-    regions = _cover_regions(band, config, src_width, src_height)
-    cover = _build_cover_chain(regions, config, geometry.scale or 1.0, src_width, src_height)
-    # Order matters: cover the source band in SOURCE space, sharpen + scale to the
-    # canonical output size, THEN overlay the output-space caption PNGs. Overlaying
-    # before the scale is what shrank captions on 4K sources (measured: 58px -> 29px).
+    regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
+    cover = _build_cover_chain(regions, config)
+    # Order: scale/pad to the canonical OUTPUT first, then cover + caption in that space.
+    # Everything the editor draws is output-space, so what it shows is what gets burned
+    # (and a 4K source can no longer shrink the caption — measured 58px -> 29px before).
     picture_filters = [part for part in (
-        f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
         config.scale_filter,
+        f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
     ) if part] or ["null"]
-    video_graph = cover + f"[cov]{','.join(picture_filters)}[base2];[base2][1:v]overlay=0:0[vo]"
+    video_graph = f"[0:v]{','.join(picture_filters)}[scaled];" + cover.replace("[0:v]", "[scaled]") + f"[cov][1:v]overlay=0:0[vo]"
 
     if has_voice:
         from backend.app.services.audio import dub_mix_filter

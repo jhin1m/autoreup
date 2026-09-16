@@ -133,14 +133,46 @@ def _overlay_context(job_id: str):
     return service.settings.jobs_dir / job_id, video
 
 
+def _frame_info(video: Path) -> dict:
+    """Output frame geometry for the editor: aspect, letterbox padding, duration.
+
+    The editor MUST preview the output frame, not the raw source: for a portrait (or
+    any non-canonical) source the render pads to the canonical size, and a box drawn on
+    the raw frame would land somewhere else in the final video."""
+    import cv2
+
+    from backend.app.api.deps import get_job_service
+    from backend.app.pipeline.production import _hardsub_config
+    from backend.app.services.audio import probe_duration
+    from backend.app.services.hardsub import overlay_geometry
+
+    config = _hardsub_config(get_job_service().settings)
+    cap = cv2.VideoCapture(str(video))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+    cap.release()
+    geometry = overlay_geometry(width, height, None, config)
+    try:
+        duration = round(probe_duration(video), 3)
+    except RuntimeError:
+        duration = 0.0
+    return {
+        "out": {"width": geometry.out_width, "height": geometry.out_height},
+        "source": {"width": width, "height": height},
+        "scale": geometry.scale,
+        "pad": {"x": geometry.pad_x, "y": geometry.pad_y},
+        "duration": duration,
+    }
+
+
 @router.get("/{job_id}/overlay")
 def get_overlay(job_id: str) -> dict:
-    """The job's overlay: the saved config, or the detector's default for a fresh job."""
+    """The job's overlay: the saved config (or the detector's default) + frame geometry."""
     from backend.app.services.overlay import default_overlay, load_overlay
 
     job_dir, video = _overlay_context(job_id)
     config = load_overlay(job_dir, job_id) or default_overlay(video)
-    return config.to_json()
+    return {**config.to_json(), "frame": _frame_info(video)}
 
 
 @router.put("/{job_id}/overlay")

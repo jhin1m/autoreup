@@ -249,17 +249,27 @@ export type OverlayConfig = {
   cover: CoverRegion[];
 };
 
-export async function fetchOverlay(jobId: string): Promise<OverlayConfig> {
+export type OverlayFrame = {
+  out: { width: number; height: number };
+  source: { width: number; height: number };
+  scale: number;
+  pad: { x: number; y: number };
+  duration: number;
+};
+
+export type OverlayState = OverlayConfig & { frame?: OverlayFrame };
+
+export async function fetchOverlay(jobId: string): Promise<OverlayState> {
   const response = await ok(await fetch(`/api/v1/jobs/${jobId}/overlay`), "Không tải được khung che");
-  return (await response.json()) as OverlayConfig;
+  return (await response.json()) as OverlayState;
 }
 
-export async function saveOverlay(jobId: string, config: OverlayConfig): Promise<OverlayConfig> {
+export async function saveOverlay(jobId: string, config: OverlayConfig): Promise<OverlayState> {
   const response = await ok(
     await fetch(`/api/v1/jobs/${jobId}/overlay`, { method: "PUT", headers: jsonHeaders, body: JSON.stringify(config) }),
     "Không lưu được khung che",
   );
-  return (await response.json()) as OverlayConfig;
+  return (await response.json()) as OverlayState;
 }
 
 export async function previewOverlayFrame(jobId: string, config: OverlayConfig, t: number, text: string): Promise<string> {

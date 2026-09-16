@@ -115,6 +115,7 @@ Voice tuning (BV421 'Nguồn nhỏ ngọt ngào', đã A/B chọn):
 - mastering: compressor chậm (ratio 1.6, attack 20ms, release 240ms, makeup 1.2), presence 3.2k +1.2, air 10k +1.0, lowpass 15k;
 - mix với âm gốc: bed **0.55**, **sidechain duck 6:1** (attack 25ms/release 420ms), **carve 2.5kHz −3dB** — nhạc/SFX nở lại khi ngừng thoại, tiếng gốc chỉ bị hạ lúc có thoại;
 - timeline mỗi unit neo vào cửa sổ của nó: `start = max(voice trước kết thúc, unit.start - lead)`; voice chỉ được **tăng tốc** (≤ `tempo_ceiling 1.18`), chỉ vừa đủ để khớp, không bao giờ làm chậm; không thêm gap giữa clip (crossfade lo click).
+- **Overlay (che + vị trí sub) là dữ liệu của job, ở không gian OUTPUT**: `data/jobs/<job>/overlay.json` (phân số 0..1) gồm các vùng che (blur/darken/solid + cường độ) và vị trí/cỡ sub; render scale/pad về khung canonical TRƯỚC rồi mới che + đặt sub — nên preview trong UI (đúng khung output, có thanh tua) luôn trùng bản burn; không có overlay thì dùng band dò tự động (Vision trước, heuristic pixel là fallback).
 - fit loop chấm bằng SỐ ĐO: `voice > free_time (tới hình kế) + 0.4s` → rút gọn; `voice < 0.65 × VAD speech` **và** nguồn đang nói (`vad ≥ 0.8s`) → hoàn thiện; lặp tới hội tụ (≤3 vòng). Không dùng ngân sách ký tự để đoán.
 
 
