@@ -293,6 +293,14 @@ def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int,
     return []
 
 
+def _blur_radii(blur: int, w: int, h: int) -> tuple[int, int]:
+    """boxblur radii that fit the cropped box: ffmpeg wants radius < side/2 on every
+    plane, yuv420p chroma is half size, and an odd crop snaps down to even — an 80px
+    band caps luma at 39 and chroma at 19 (h//4 = 20 crashed the whole render)."""
+    half = min(w, h) // 2
+    return max(0, min(blur, half - 1)), max(0, min(blur, (half - 1) // 2))
+
+
 def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], config: HardsubConfig) -> str:
     """ffmpeg chain: apply every cover region to the incoming frame in turn."""
     if not regions:
@@ -304,11 +312,7 @@ def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], con
             box = f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1.0:t=fill"
             parts.append(f"[v{index}]{box}[{label}]")
             continue
-        blur_src = max(1, round(config.blur * max(0.2, strength)))
-        # yuv420p planes: luma allows ~h/2, chroma (half-res) ~h/4. Clamp to both so a
-        # short band can never crash the filter graph (74px band -> chroma cap 18).
-        luma_r = max(1, min(blur_src, h // 2))
-        chroma_r = max(1, min(blur_src, h // 4))
+        luma_r, chroma_r = _blur_radii(max(1, round(config.blur * max(0.2, strength))), w, h)
         if mode == "darken":
             box = f"boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{min(1.0, config.darken * strength):.2f}"
         else:

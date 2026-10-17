@@ -157,7 +157,19 @@ export function Preview({
   const canResume = !isDubbed && !isRunning && Boolean(episode.dub_job_id);
   const [stopping, setStopping] = useState(false);
   useEffect(() => setStopping(false), [episode.dub_state]);
+  // Dubbed but the final video was never rendered (or the render failed): say so and
+  // offer the render instead of silently playing the original without voice or subs.
+  const missingRender = isDubbed && !!job && !dubArt;
   const fellBackToSource = dubbed && !!dubArt && artIndex > 0;
+
+  async function rerender() {
+    if (!job) return;
+    try {
+      setJob(await api.repackJob(job.job_id));
+    } catch (err) {
+      setError(String(err));
+    }
+  }
   const showSubs = isDubbed && dubbed && !!dubArt && cues.length > 0 && !fellBackToSource;
 
   function handleTimeUpdate(event: React.SyntheticEvent<HTMLVideoElement>) {
@@ -195,7 +207,19 @@ export function Preview({
         {running && job ? <LiveProgress stages={job.stages as JobStage[]} /> : null}
         <div className={`pv-body ${showSubs ? "with-subs" : ""}`}>
           <div className="pv-screen">
-            {isDubbed && art ? (
+            {missingRender ? (
+              <div className="pv-empty">
+                {running ? (
+                  <p>Đang ghép video lồng tiếng (giọng đọc + phụ đề)… Tập dài có thể mất vài phút.</p>
+                ) : (
+                  <>
+                    <p>Đã dịch và đọc giọng xong, nhưng chưa có video thành phẩm — bước ghép video chưa chạy hoặc bị lỗi.</p>
+                    {error ? <p className="pv-err" title={error}>⚠ {dubErrorVi(error)}</p> : null}
+                    <button className="primary" onClick={rerender}>Ghép video</button>
+                  </>
+                )}
+              </div>
+            ) : isDubbed && art ? (
               <video
                 key={art.path}
                 ref={videoRef}
@@ -259,8 +283,13 @@ export function Preview({
               </a>
             ) : null}
             {isDubbed && job ? (
-              <button className="ghost" onClick={() => setEditor(true)} disabled={!srcArt}>
-                Khung che & vị trí sub
+              <button
+                className="ghost"
+                onClick={() => setEditor(true)}
+                disabled={!srcArt || running}
+                title="Che chữ Trung có sẵn trong video và chọn chỗ đặt phụ đề Việt"
+              >
+                Chỉnh phụ đề trên video
               </button>
             ) : null}
             {isRunning ? (
