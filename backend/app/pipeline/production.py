@@ -247,7 +247,7 @@ class ASRStage(PipelineStage):
         logs: list[str] = []
 
         def note(line: str) -> None:
-            note(line)
+            logs.append(line)
             context.log(line)
 
         video = Path(context.artifacts["video"])
