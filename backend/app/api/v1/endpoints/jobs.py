@@ -71,7 +71,7 @@ async def job_events(job_id: str) -> StreamingResponse:
             if payload != last_payload:
                 yield f"data: {payload}\n\n"
                 last_payload = payload
-            if manifest.state in {JobState.succeeded, JobState.failed, JobState.canceled}:
+            if manifest.state in {JobState.succeeded, JobState.failed, JobState.canceled, JobState.review}:
                 return
             await asyncio.sleep(1)
 
@@ -229,13 +229,11 @@ def overlay_frame(job_id: str, payload: OverlayIn, t: float = 1.0, text: str = "
 
 @router.post("/{job_id}/repack", response_model=JobResponse)
 def repack_job(job_id: str) -> JobResponse:
-    """Re-run the pipeline from the package stage (picks up the saved overlay)."""
+    """Approve the render and run the package stage (picks up the saved overlay)."""
     service = get_job_service()
     try:
-        manifest = service.get(job_id)
+        return JobResponse(job=service.approve_render(job_id))
     except JobNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
-    if manifest.state == JobState.running:
-        raise HTTPException(status_code=409, detail="Job đang chạy.")
-    service.start_background(job_id)
-    return JobResponse(job=service.get(job_id))
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail="Job đang chạy.") from exc

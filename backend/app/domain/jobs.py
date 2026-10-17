@@ -12,6 +12,9 @@ class JobState(StrEnum):
     succeeded = "succeeded"
     failed = "failed"
     canceled = "canceled"
+    # Everything before the render is done; the package stage waits for the user to
+    # review the cover boxes, caption, font and quality, then start it (POST /repack).
+    review = "review"
 
 
 class StageStatus(StrEnum):
@@ -86,6 +89,9 @@ class JobManifest(BaseModel):
     # reports — "step" label, "done"/"total"/"unit" counts, download bytes/speed/eta,
     # the last "logs" lines}. Cleared when the stage ends.
     progress: dict | None = None
+    # Set once the user approved the render in the editor; until then the pipeline
+    # stops before the package stage in the ``review`` state.
+    render_approved: bool = False
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

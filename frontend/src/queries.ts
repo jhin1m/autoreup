@@ -54,7 +54,7 @@ export const useExports = (id: string) =>
 
 // ----- mutations ------------------------------------------------------------
 /** Invalidate everything under a series (detail counts + episodes + exports). */
-function useSeriesInvalidator() {
+export function useSeriesInvalidator() {
   const qc = useQueryClient();
   return (seriesId?: string) => {
     qc.invalidateQueries({ queryKey: ["series"] });

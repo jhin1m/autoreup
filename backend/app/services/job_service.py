@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
-from backend.app.domain.jobs import JobInput, JobManifest, JobState, PipelineConfig, StageRecord, StageStatus
+from backend.app.domain.jobs import JobInput, JobManifest, JobState, PipelineConfig, StageName, StageRecord, StageStatus
 from backend.app.pipeline.production import ProductionPipeline
 from backend.app.settings import SettingsStore, strip_secrets
 from backend.app.studio.providers import extract_url
@@ -273,6 +273,10 @@ class JobService:
                 # already in flight (ffmpeg/LLM) finishes first, then we bail.
                 if self._take_cancel(job_id):
                     return self._mark_canceled(manifest)
+                # The render burns the overlay into the deliverable: never pick the
+                # cover boxes / caption / quality for the user — wait for their review.
+                if stage.name == StageName.package and not manifest.render_approved:
+                    return self._mark_review(manifest)
                 record = StageRecord(name=stage.name, status=StageStatus.running, started_at=datetime.now(timezone.utc))
                 manifest.stages.append(record)
                 context.reset_live()
@@ -341,7 +345,7 @@ class JobService:
         The running thread owns the state transition (to ``canceled``); here we only
         record the request so a forced delete never races the pipeline thread."""
         manifest = self.get(job_id)
-        if manifest.state in {JobState.succeeded, JobState.failed, JobState.canceled}:
+        if manifest.state in {JobState.succeeded, JobState.failed, JobState.canceled, JobState.review}:
             return manifest
         with self._lock:
             self._cancel_requested.add(job_id)
@@ -366,6 +370,30 @@ class JobService:
         manifest.progress = None
         manifest.touch()
         self.save(manifest)
+
+    def _mark_review(self, manifest: JobManifest) -> None:
+        manifest.state = JobState.review
+        manifest.progress = None
+        manifest.touch()
+        self.save(manifest)
+
+    def approve_render(self, job_id: str) -> JobManifest:
+        """The user reviewed the overlay: run (or re-run) the package stage with it."""
+        lock = self._job_lock(job_id)
+        if not lock.acquire(blocking=False):
+            raise JobBusyError(job_id)  # a worker or the prefetcher owns the job
+        try:
+            manifest = self.get(job_id)
+            if manifest.state == JobState.running:
+                raise JobBusyError(job_id)
+            if not manifest.render_approved:
+                manifest.render_approved = True
+                manifest.touch()
+                self.save(manifest)
+        finally:
+            lock.release()
+        self.start_background(job_id)
+        return self.get(job_id)
 
     def delete(self, job_id: str) -> None:
         """Remove a job and all its artifacts. Refuses while it is still running."""

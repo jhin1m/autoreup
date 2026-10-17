@@ -22,6 +22,7 @@ class DubState(StrEnum):
 
     none = "none"            # not translated yet
     translating = "translating"
+    review = "review"        # dubbed, waiting for the user to review and start the render
     dubbed = "dubbed"
     failed = "failed"
 

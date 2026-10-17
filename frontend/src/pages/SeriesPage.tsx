@@ -15,6 +15,7 @@ import {
   useRenderExport,
   useScanSeries,
   useSeries,
+  useSeriesInvalidator,
   useSuggestExport,
   useTranslate,
   useTranslateTitles,
@@ -45,6 +46,7 @@ export function SeriesPage() {
   const deleteDub = useDeleteEpisodeDub(id);
   const createExport = useCreateExport(id);
   const deleteSeries = useDeleteSeries();
+  const invalidate = useSeriesInvalidator();
   const dubbed = episodes.filter((e) => e.dub_state === "dubbed" && e.dub_job_id);
   const translating = episodes.filter((e) => e.dub_state === "translating");
 
@@ -131,6 +133,7 @@ export function SeriesPage() {
           episode={episodes.find((e) => e.id === preview.id) ?? preview}
           onClose={() => setPreview(null)}
           onRedub={() => { setPreview(null); doTranslate([preview.id]); }}
+          onRender={() => invalidate(id)}
           onStop={async () => {
             const jobId = (episodes.find((e) => e.id === preview.id) ?? preview).dub_job_id;
             if (!jobId) return;

@@ -11,19 +11,23 @@ const MODES: { id: string; label: string }[] = [
 
 type Handle = "move" | "se" | "caption" | null;
 
-/** WYSIWYG editor for the package overlay: drag boxes over the paused frame to hide
- *  the original subtitle band / a channel logo, and place the Vietnamese caption.
+/** WYSIWYG review of the render: drag boxes over the paused frame to hide the original
+ *  subtitle band / a channel logo, place the Vietnamese caption, pick font and quality,
+ *  then start the render. The pipeline waits here before an episode's first render.
  *  Everything is stored as fractions of the frame, so it survives any resolution. */
 export function OverlayEditor({
   jobId,
   videoPath,
   cues,
+  firstRender,
   onClose,
   onRepack,
 }: {
   jobId: string;
   videoPath: string;
   cues: { start: number; end: number; text: string }[];
+  /** The episode has never been rendered (the dub waits for this review). */
+  firstRender: boolean;
   onClose: () => void;
   onRepack: () => void;
 }) {
@@ -249,7 +253,7 @@ export function OverlayEditor({
     try {
       await save();
       await api.repackJob(jobId);
-      toast("Đang render lại video…", "success");
+      toast(firstRender ? "Đang render video…" : "Đang render lại video…", "success");
       onRepack();
       onClose();
     } catch (error) {
@@ -263,14 +267,14 @@ export function OverlayEditor({
     <div className="ov-scrim" onClick={onClose}>
       <div className="ov-panel" onClick={(event) => event.stopPropagation()}>
         <div className="ov-head">
-          <p>Chỉnh phụ đề trên video</p>
+          <p>{firstRender ? "Duyệt & render video" : "Chỉnh & render lại video"}</p>
           <button className="link" onClick={onClose}>
             Đóng
           </button>
         </div>
         <p className="ov-hint tiny">
-          Kéo hộp mờ đè lên chữ Trung có sẵn trong video (hoặc logo) để che đi, rồi kéo dòng phụ đề Việt tới chỗ muốn đặt.
-          Bấm “Xem thử khung hình” để xem đúng như bản xuất, chọn chất lượng video, xong bấm “Render lại video” để áp dụng cho cả tập.
+          Kéo hộp mờ đè lên chữ Trung có sẵn trong video (hoặc logo) để che đi, rồi kéo dòng phụ đề Việt tới chỗ muốn đặt và chọn font, cỡ chữ.
+          Bấm “Xem thử khung hình” để xem đúng như bản xuất, chọn chất lượng video, xong bấm “{firstRender ? "Render video" : "Render lại video"}” để áp dụng cho cả tập.
         </p>
 
         <div className="ov-body">
@@ -577,7 +581,7 @@ export function OverlayEditor({
               {busy === "save" ? "Đang lưu…" : "Lưu"}
             </button>
             <button className="primary" onClick={repack} disabled={!!busy}>
-              {busy === "repack" ? "Đang gửi…" : "Render lại video"}
+              {busy === "repack" ? "Đang gửi…" : firstRender ? "Render video" : "Render lại video"}
             </button>
           </div>
         </div>

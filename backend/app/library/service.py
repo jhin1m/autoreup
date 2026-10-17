@@ -33,6 +33,7 @@ _CHANNEL_SCAN_LIMIT = 500
 _JOB_TO_DUB = {
     JobState.queued: DubState.translating,
     JobState.running: DubState.translating,
+    JobState.review: DubState.review,
     JobState.succeeded: DubState.dubbed,
     JobState.failed: DubState.failed,
     JobState.canceled: DubState.none,

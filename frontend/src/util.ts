@@ -26,6 +26,7 @@ export function formatDuration(seconds: number | null | undefined): string {
 export const DUB_STATE_VI: Record<DubState, string> = {
   none: "Chưa dịch",
   translating: "Đang dịch",
+  review: "Chờ duyệt render",
   dubbed: "Đã dịch",
   failed: "Lỗi",
 };

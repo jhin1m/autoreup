@@ -82,12 +82,15 @@ export function Preview({
   onRedub,
   onDelete,
   onStop,
+  onRender,
 }: {
   episode: Episode;
   onClose: () => void;
   onRedub: () => void;
   onDelete: () => void;
   onStop: () => Promise<void>;
+  /** A render was started from the editor: refresh the episode list. */
+  onRender: () => void;
 }) {
   const [job, setJob] = useState<JobManifest | null>(null);
   const [dubbed, setDubbed] = useState(true);
@@ -153,8 +156,10 @@ export function Preview({
   const versioned = art ? `${art.path}?v=${art.size_bytes ?? art.created_at ?? ""}` : "";
   const isDubbed = episode.dub_state === "dubbed";
   const isRunning = episode.dub_state === "translating";
+  // Translated and voiced; the render waits for the user to review the overlay.
+  const isReview = episode.dub_state === "review";
   // A failed or stopped dub resumes in place: finished steps and translated parts stay.
-  const canResume = !isDubbed && !isRunning && Boolean(episode.dub_job_id);
+  const canResume = !isDubbed && !isReview && !isRunning && Boolean(episode.dub_job_id);
   const [stopping, setStopping] = useState(false);
   useEffect(() => setStopping(false), [episode.dub_state]);
   // Dubbed but the final video was never rendered (or the render failed): say so and
@@ -216,6 +221,18 @@ export function Preview({
                     <p>Đã dịch và đọc giọng xong, nhưng chưa có video thành phẩm — bước ghép video chưa chạy hoặc bị lỗi.</p>
                     {error ? <p className="pv-err" title={error}>⚠ {dubErrorVi(error)}</p> : null}
                     <button className="primary" onClick={rerender}>Ghép video</button>
+                  </>
+                )}
+              </div>
+            ) : isReview ? (
+              <div className="pv-empty">
+                {running ? (
+                  <p>Đang render video (giọng đọc + phụ đề)… Tập dài có thể mất vài phút.</p>
+                ) : (
+                  <>
+                    <p>Đã dịch và lồng tiếng xong — video chưa được render.</p>
+                    <p className="tiny">Duyệt trước khi render: che chữ gốc/logo, đặt vị trí phụ đề Việt, chọn font, cỡ chữ và chất lượng video.</p>
+                    <button className="primary" onClick={() => setEditor(true)} disabled={!srcArt}>Duyệt &amp; render</button>
                   </>
                 )}
               </div>
@@ -282,14 +299,14 @@ export function Preview({
                 Tải video
               </a>
             ) : null}
-            {isDubbed && job ? (
+            {(isDubbed || isReview) && job ? (
               <button
-                className="ghost"
+                className={isReview ? "primary" : "ghost"}
                 onClick={() => setEditor(true)}
                 disabled={!srcArt || running}
-                title="Che chữ Trung có sẵn trong video và chọn chỗ đặt phụ đề Việt"
+                title="Che chữ gốc/logo, đặt phụ đề Việt, chọn font và chất lượng rồi render video"
               >
-                Chỉnh phụ đề trên video
+                {isReview ? "Duyệt & render" : "Chỉnh & render lại"}
               </button>
             ) : null}
             {isRunning ? (
@@ -302,9 +319,11 @@ export function Preview({
                 {stopping ? "Đang dừng…" : "Dừng"}
               </button>
             ) : (
-              <button className="primary" onClick={onRedub}>{isDubbed ? "Làm lại" : canResume ? "Dịch tiếp" : "Dịch tập này"}</button>
+              <button className={isReview ? "ghost" : "primary"} onClick={onRedub}>
+                {isDubbed || isReview ? "Làm lại" : canResume ? "Dịch tiếp" : "Dịch tập này"}
+              </button>
             )}
-            {isDubbed ? <button className="ghost danger" onClick={onDelete}>Xóa bản dịch</button> : null}
+            {isDubbed || isReview ? <button className="ghost danger" onClick={onDelete}>Xóa bản dịch</button> : null}
           </div>
         </div>
       </div>
@@ -313,9 +332,11 @@ export function Preview({
           jobId={job.job_id}
           videoPath={`/media/${srcArt.path}`}
           cues={cues}
+          firstRender={isReview}
           onClose={() => setEditor(false)}
           onRepack={() => {
             api.fetchJob(job.job_id).then(setJob).catch(() => {});
+            onRender();
           }}
         />
       ) : null}

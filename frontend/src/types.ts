@@ -1,4 +1,4 @@
-export type JobState = "queued" | "running" | "succeeded" | "failed" | "canceled";
+export type JobState = "queued" | "running" | "succeeded" | "failed" | "canceled" | "review";
 export type StageStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
 
 export type Artifact = {
@@ -73,7 +73,7 @@ export type SourceVideo = {
 
 /* ---------- library ---------- */
 
-export type DubState = "none" | "translating" | "dubbed" | "failed";
+export type DubState = "none" | "translating" | "review" | "dubbed" | "failed";
 export type ExportState = "draft" | "rendering" | "done" | "failed";
 
 export type SeriesSource = {
