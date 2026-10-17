@@ -9,7 +9,7 @@ export const keys = {
   providers: ["providers"] as const,
   appSettings: ["app-settings"] as const,
   models: (connection: string) => ["app-settings", "models", connection] as const,
-  voices: (connection: string) => ["app-settings", "voices", connection] as const,
+  voices: (connection: string, type = "") => ["app-settings", "voices", connection, type] as const,
   seriesList: (q: string) => ["series", { q }] as const,
   series: (id: string) => ["series", id] as const,
   episodes: (id: string) => ["series", id, "episodes"] as const,
@@ -24,8 +24,8 @@ export const useAppSettings = () => useQuery({ queryKey: keys.appSettings, query
 export const useConnectionModels = (connection: string) =>
   useQuery({ queryKey: keys.models(connection), queryFn: () => api.listConnectionModels(connection), enabled: !!connection });
 
-export const useTtsVoices = (connection: string) =>
-  useQuery({ queryKey: keys.voices(connection), queryFn: () => api.listTtsVoices(connection), enabled: !!connection, retry: false });
+export const useTtsVoices = (connection: string, type = "") =>
+  useQuery({ queryKey: keys.voices(connection, type), queryFn: () => api.listTtsVoices(connection, type), enabled: !!connection, retry: false });
 
 export const useSeriesList = (q: string) =>
   useQuery({ queryKey: keys.seriesList(q), queryFn: () => api.listSeries(q) });

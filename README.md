@@ -71,7 +71,7 @@ Toạ độ lưu dạng phân số (0..1) nên không phụ thuộc độ phân 
 
 Env `AUTOREUP_*` (xem [`.env.example`](.env.example) và `docs/SPEC.md` §12) là cấu hình khởi đầu.
 **⚙ Cài đặt** trong UI: tab *Kết nối* (agent CLI, LLM API OpenAI-compatible/Gemini, CapCut, máy chủ TTS, Edge, OpenAI-compatible/Gemini/ElevenLabs TTS…), *Tác vụ* (kết nối + model riêng cho
-dịch / thuật ngữ / chuẩn hoá / sửa độ dài / đặt tên, OCR), *Giọng đọc & ASR* (chọn engine/giọng/model, nút *Nghe thử*; Edge TTS cần `edge-tts` trong `requirements.txt`). Khi đã lưu, `.autoreup-private/settings.json`
+dịch / thuật ngữ / chuẩn hoá / sửa độ dài / đặt tên, OCR), *Giọng đọc & ASR* (chọn engine/giọng/model, nút *Nghe thử*; Edge TTS cần `edge-tts` trong `requirements.txt`; **VieNeu (máy này)** chạy VieNeu-TTS v3 Turbo ngay trên máy (ONNX/CPU, ~1.2 GB RAM, WAV 48 kHz, 25 giọng Việt), lần đầu tải model ~1.2 GB vào cache HuggingFace rồi hardlink sang `data/models/vieneu/`). Khi đã lưu, `.autoreup-private/settings.json`
 đè env (chưa lưu lần nào → chạy y hệt env); job mới dùng ngay, job đang có giữ cấu hình lúc tạo.
 Cookie provider nhập từ UI, lưu ở `.autoreup-private/cookies/`; secret (API key, mật khẩu) chỉ ở `settings.json`
 (chmod 600) — không bao giờ được serve hay trả về qua API.

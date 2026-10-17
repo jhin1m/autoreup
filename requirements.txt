@@ -18,6 +18,10 @@ gmssl==3.2.2
 # Edge read-aloud TTS engine (services/tts_engines.py), imported only when a
 # connection of type "edge" synthesizes.
 edge-tts==7.3.1  # 7.2.x gets HTTP 403 from the Edge endpoint
+# Local VieNeu-TTS engine (services/tts_engines.py, ONNX/CPU), imported only when a
+# "vieneu" connection synthesizes or is checked. Pinned: the engine wraps its artifact
+# fetch and lists its preset voices statically.
+vieneu==3.8.3
 
 # Optional: local ASR backends (Apple Silicon only). Without them the pipeline uses the
 # Cloudflare worker (AUTOREUP_ASR_BACKEND=worker). Install separately:

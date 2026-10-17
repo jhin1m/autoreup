@@ -124,13 +124,18 @@ Mọi engine (`backend/app/services/tts_engines.py`) cùng giao thức: `synthes
 | `capcut` | native; không có session → `base_url` (HTTP) | `BV421_vivn_streaming` | — |
 | `http_tts` | `POST /v2/synthesize` | như trên | — |
 | `edge` | gói `edge-tts` (import lười) | `vi-VN-HoaiMyNeural` | — |
+| `vieneu` | gói `vieneu` (VieNeu-TTS v3 Turbo, ONNX/CPU trên máy này, 1 model/process) → WAV 48kHz; câu chỉ có ký hiệu → 0.3s im lặng | `Thiện Minh` | — |
 | `openai_compat` | `POST {base_url}/audio/speech` (mp3) | `nova` | bắt buộc |
 | `gemini` | `generateContent` modality AUDIO → PCM 24kHz bọc WAV | `Kore` | bắt buộc (vd. model `*-tts`) |
 | `elevenlabs` | `POST /v1/text-to-speech/{voice}?output_format=mp3_44100_128` | bắt buộc (voice id) | mặc định `eleven_flash_v2_5` |
 
 Khoá cache clip thô = `cache_id` + giọng + text; `cache_id`: capcut `capcut-native`, http = `base_url`
-(cache cũ vẫn dùng được), loại khác `<loại>:<model>`. Thiếu thứ engine cần (api_key, model, voice…) → stage
+(cache cũ vẫn dùng được), vieneu `vieneu:v3turbo`, loại khác `<loại>:<model>`. Thiếu thứ engine cần (api_key, model, voice…) → stage
 báo lỗi rõ.
+
+`vieneu`: onnxruntime ≥1.24 từ chối `.onnx` có `.data` ngoài thư mục của nó, mà shared blob store của HF hub
+để mỗi file một thư mục → engine hardlink file model từ cache HF sang `data/models/vieneu/` (khác ổ → copy),
+nên `vieneu` ghim đúng bản. Danh sách giọng tĩnh (`VIENEU_VOICES`) — chỉ synth và nút Kiểm tra mới tải model.
 
 Voice tuning (BV421 'Nguồn nhỏ ngọt ngào', đã A/B chọn):
 - text mode **`expressive`**: giữ sắc thái dấu câu (`,` = lấy hơi, `.` = xuống giọng, `…` = ngắt kịch tính, `! ?` = lên giọng) — gom mọi dấu thành một dấu phẩy nghe máy móc;
@@ -196,7 +201,7 @@ DELETE /providers/{platform}/cookies
 # Settings (secret luôn trả về dạng mask "••••" + 4 ký tự cuối)
 GET    /settings                               # connections + tasks
 PUT    /settings                               # lưu toàn bộ; secret rỗng/mask = giữ cũ; tham chiếu sai → 400
-POST   /settings/connections/{id}/test         # kiểm tra nhanh (lệnh có tồn tại, server có trả lời; edge/elevenlabs: liệt kê giọng) → {ok, message}
+POST   /settings/connections/{id}/test         # kiểm tra nhanh (lệnh có tồn tại, server có trả lời; edge/elevenlabs: liệt kê giọng; vieneu: tải model) → {ok, message}
 GET    /settings/connections/{id}/models       # {models: []} (CLI agent: model nhập tay)
 GET    /settings/tts/voices?connection=        # {voices: [{id, name}]} (edge: giọng tiếng Việt; elevenlabs: giọng của tài khoản); lỗi engine → 502
 POST   /settings/tts/preview {connection, voice?, model?, text?}  # nghe thử → bytes audio/mpeg hoặc audio/wav; lỗi → 502 + detail
@@ -246,7 +251,7 @@ Màn hình (React + Vite, serve bởi FastAPI):
     Antigravity (agy) / Claude Code (claude) / Codex CLI (codex) — gói đăng ký, nút Kiểm tra / Gemini API (key + model) / OpenAI-compatible (địa chỉ API +
     key + model) / Lệnh CLI tuỳ chỉnh (chỉ hiện khi đã có). Nâng cao: model + mức nghĩ riêng từng bước con
     (mặc định "giống Dịch"), thư mục HOME, lệnh chạy (agy/claude/codex), mẫu lệnh CLI.
-  - **Giọng đọc** — bật lồng tiếng; dịch vụ CapCut / Edge TTS / OpenAI-compatible / Gemini / ElevenLabs /
+  - **Giọng đọc** — bật lồng tiếng; dịch vụ CapCut / VieNeu (máy này) / Edge TTS / OpenAI-compatible / Gemini / ElevenLabs /
     Máy chủ HTTP, chỉ hiện field của dịch vụ đã chọn (CapCut: email + mật khẩu; API: key, model giọng đọc
     cho OpenAI/Gemini); Giọng (danh sách `GET /settings/tts/voices`) + **▶ Nghe thử** (`POST /settings/tts/preview`,
     cần lưu trước). Nâng cao: tốc độ sau tổng hợp, máy chủ HTTP dự phòng của CapCut, model ElevenLabs.
@@ -289,7 +294,7 @@ Limits:   MAX_CHARS, DISPLAY_MAX_CHARS, DISPLAY_MAX_LINES, MAX_CPS, TARGET_CPS,
 Provider cookies nhập từ UI lưu tại `.autoreup-private/cookies/` (ngoài thư mục media được serve).
 
 **Settings JSON đè env**: `.autoreup-private/settings.json` (chmod 600, ghi atomic, không serve) giữ
-`connections` (agy · claude_code · codex · command · openai_compat · gemini · elevenlabs · capcut · edge · http_tts; id
+`connections` (agy · claude_code · codex · command · openai_compat · gemini · elevenlabs · capcut · edge · http_tts · vieneu; id
 `^[a-z0-9][a-z0-9_-]{0,39}$`) và `tasks` (translate, glossary, normalize, repair, naming, ocr, tts, asr).
 Không có file → seed từ env, hành vi y hệt chỉ-env: kết nối `agent` (AGENT_*), `capcut` (TTS_NATIVE, kèm
 TTS_SERVER_URL làm HTTP dự phòng) hoặc `tts-server`; translate/glossary/normalize/naming = TRANSLATE_MODEL,

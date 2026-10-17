@@ -15,7 +15,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import os
 import re
+import shutil
+import threading
 import time
 import wave
 from urllib.parse import quote
@@ -41,6 +44,7 @@ DEFAULT_VOICES = {
     "edge": "vi-VN-HoaiMyNeural",
     "openai_compat": "nova",
     "gemini": "Kore",
+    "vieneu": "Thiện Minh",
 }
 # CapCut's "Tiếng Việt" tone panel (``/artist/v1/panel/get_panel_info``): speaker →
 # (title, effect_id). multi_platform needs the matching effect_id/resource_id (the same
@@ -78,6 +82,25 @@ GEMINI_VOICES = [{"id": v, "name": f"{v} — {style}"} for v, style in (
     ("Achird", "Friendly"), ("Zubenelgenubi", "Casual"), ("Vindemiatrix", "Gentle"), ("Sadachbia", "Lively"),
     ("Sadaltager", "Knowledgeable"), ("Sulafat", "Warm"),
 )]
+
+# VieNeu-TTS v3 Turbo presets (vieneu==3.8.3 ``list_preset_voices()``): listing them must
+# not load the 1.2 GB model. ⭐ = the voices VieNeu itself recommends.
+VIENEU_VOICES = [{"id": v, "name": f"{v} — {desc}"} for v, desc in (
+    ("Thiện Minh", "Nam · Bắc · Kể chuyện ⭐"), ("Adam bựa", "Nam · Bắc · Tự nhiên ⭐"),
+    ("Trúc Ly", "Nữ · Bắc · Tự nhiên ⭐"), ("Mai Anh", "Nữ · Bắc · Tin tức ⭐"),
+    ("Hải Đăng", "Nam · Bắc · Tự nhiên ⭐"), ("Thùy Dung", "Nữ · Nam · Tin tức ⭐"),
+    ("Thiền Tâm Đức", "Nam · Bắc · Kể chuyện ⭐"), ("Ngọc Huyền", "Nữ · Bắc · Tự nhiên ⭐"),
+    ("Quang Sơn", "Nam · Trung · Tự nhiên ⭐"), ("Ngọc Trân", "Nữ · Trung · Tự nhiên ⭐"),
+    ("Minh Đức", "Nam · Bắc · Tin tức"), ("Phạm Tuyên", "Nam · Bắc · Tự nhiên"),
+    ("Thái Sơn", "Nam · Nam · Kể chuyện"), ("Xuân Vĩnh", "Nam · Bắc · Tự nhiên"),
+    ("Thanh Bình", "Nam · Bắc · Kể chuyện"), ("Ngọc Linh", "Nữ · Bắc · Kể chuyện"),
+    ("Đoan Trang", "Nữ · Bắc · Tự nhiên"), ("Thục Đoan", "Nữ · Nam · Kể chuyện"),
+    ("Minh Triết", "Nam · Nam · Tin tức"), ("Mỹ Duyên", "Nữ · Nam · Đọc truyện"),
+    ("Quỳnh Anh", "Nữ · Bắc · Đọc truyện"), ("Đức Trí", "Nam · Nam · Đọc truyện"),
+    ("Kim Thanh", "Nữ · Nam · Đọc truyện"), ("Adam", "Nam · Nam · Tự nhiên"),
+    ("Quốc Tuấn", "Nam · Bắc · Tự nhiên"),
+)]
+_VIENEU_SILENCE_SECONDS = 0.3  # a symbols-only cue ("♪", "*") — VieNeu has nothing to say
 
 _TIMEOUT = 60.0     # one sentence of speech; Gemini TTS can take several seconds
 _ATTEMPTS = 3
@@ -366,6 +389,110 @@ class ElevenLabsEngine:
         return _audio("elevenlabs", response.content)
 
 
+class _MaterializedFetch:
+    """Wraps VieNeu's artifact fetch so it returns a real folder of hardlinks instead of a HF
+    snapshot folder: onnxruntime ≥1.24 refuses an ``.onnx`` whose external ``.data`` resolves
+    outside the model's folder, and the HF hub's shared blob store gives every file its own
+    folder. Hardlinks cost no disk; ``copy2`` only when ``root`` sits on another volume."""
+
+    def __init__(self, original: Callable[..., Path], root: Path):
+        self.original = original
+        self.root = root
+
+    def __call__(self, repo: str, files: list[str], subfolder: str | None) -> Path:
+        snapshot = Path(self.original(repo, files, subfolder))
+        target = self.root / repo.replace("/", "--") / (subfolder or "")
+        target.mkdir(parents=True, exist_ok=True)
+        for source in snapshot.iterdir():
+            if not source.is_file():
+                continue
+            blob, link = source.resolve(), target / source.name
+            if link.exists() and (os.path.samefile(link, blob) or _same_copy(link, blob)):
+                continue
+            link.unlink(missing_ok=True)  # the hub moved on to a newer blob
+            try:
+                os.link(blob, link)
+            except OSError:
+                shutil.copy2(blob, link)
+        return target
+
+
+def _same_copy(a: Path, b: Path) -> bool:
+    sa, sb = a.stat(), b.stat()
+    return sa.st_size == sb.st_size and sa.st_mtime_ns == sb.st_mtime_ns
+
+
+_VIENEU_LOCK = threading.Lock()
+_vieneu: object | None = None
+
+
+def load_vieneu(env: Settings) -> None:
+    """Load (first time: download) the local VieNeu model — the settings "Kiểm tra" button."""
+    _vieneu_model(_vieneu_dir(env))
+
+
+def _vieneu_model(models_dir: Path):
+    """VieNeu-TTS v3 Turbo on ONNX/CPU, loaded once per process (~6 s, ~1.2 GB RAM)."""
+    global _vieneu
+    with _VIENEU_LOCK:
+        if _vieneu is None:
+            try:
+                from vieneu import Vieneu
+                from vieneu._v3_turbo_engine.onnx_runtime_lite import OnnxV3LiteEngine
+            except ImportError as exc:
+                raise TtsEngineError("vieneu: thiếu package vieneu (pip install -r requirements.txt)") from exc
+            fetch = getattr(OnnxV3LiteEngine.__dict__.get("_fetch"), "__func__", None)
+            if fetch is None:
+                raise TtsEngineError("vieneu: phiên bản vieneu không hỗ trợ (cần vieneu==3.8.3 trong requirements.txt)")
+            if not isinstance(fetch, _MaterializedFetch):
+                OnnxV3LiteEngine._fetch = staticmethod(_MaterializedFetch(fetch, models_dir))
+            try:
+                _vieneu = Vieneu(backend="onnx")
+            except Exception as exc:  # noqa: BLE001 - download / onnxruntime errors of every kind
+                raise TtsEngineError(f"vieneu: không tải được model: {type(exc).__name__}: {exc}") from exc
+        return _vieneu
+
+
+@dataclass
+class VieNeuEngine:
+    """VieNeu-TTS on this machine → 48 kHz WAV. Clips run one after another: the model
+    serializes inference itself and already spreads one clip over the CPU cores."""
+
+    voice: str
+    models_dir: Path
+    cache_id: str = "vieneu:v3turbo"
+
+    def __post_init__(self) -> None:
+        self.voice = self.voice.strip() or DEFAULT_VOICES["vieneu"]
+
+    def synthesize_batch(self, texts: list[str]) -> list[bytes]:
+        if not texts:
+            return []
+        import numpy as np
+
+        model = _vieneu_model(self.models_dir)
+        clips: list[bytes | None] = []
+        for text in texts:
+            if not any(ch.isalnum() for ch in text):
+                clips.append(pcm_to_wav(b"\0\0" * int(model.sample_rate * _VIENEU_SILENCE_SECONDS), model.sample_rate))
+                continue
+            try:
+                # numpy on macOS Accelerate flags spurious matmul overflow/invalid warnings
+                # inside VieNeu's sampler — the audio is fine; keep them out of job logs.
+                with np.errstate(all="ignore"):
+                    audio = np.asarray(model.infer(text, voice=self.voice), dtype=np.float32).reshape(-1)
+                pcm = _audio("vieneu", (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+            except Exception as exc:  # noqa: BLE001 - re-raised with the clips already made
+                message = f"{exc} — câu: {text[:80]!r}" if isinstance(exc, TtsEngineError) else f"vieneu: {type(exc).__name__}: {exc} — câu: {text[:80]!r}"
+                raise TtsEngineError(message, partial=clips + [None] * (len(texts) - len(clips))) from exc
+            clips.append(pcm_to_wav(pcm, model.sample_rate))
+        return clips  # type: ignore[return-value]
+
+
+def _vieneu_dir(env: Settings) -> Path:
+    return env.data_dir / "models" / "vieneu"
+
+
 def build_capcut_client(settings: Settings, conn: Connection, voice: str):
     """Native in-process CapCut TTS client, or None to fall back to the HTTP server.
 
@@ -461,6 +588,8 @@ def build_engine(
         return _http_engine(conn, voice, env)
     if conn.type == "edge":
         return EdgeEngine(voice, workers=remote)
+    if conn.type == "vieneu":
+        return VieNeuEngine(voice, _vieneu_dir(env))
     if conn.type == "openai_compat":
         if not conn.base_url.strip():
             raise TtsEngineError(f"TTS {conn.id}: thiếu base_url")
@@ -491,6 +620,8 @@ def list_voices(conn: Connection, env: Settings) -> list[dict]:
         return OPENAI_VOICES
     if conn.type == "gemini":
         return GEMINI_VOICES
+    if conn.type == "vieneu":
+        return VIENEU_VOICES
     if conn.type == "edge":
         edge_tts = _edge_module()
         try:
@@ -535,9 +666,12 @@ __all__ = [
     "OpenAiTtsEngine",
     "TtsEngine",
     "TtsEngineError",
+    "VIENEU_VOICES",
+    "VieNeuEngine",
     "audio_media_type",
     "build_capcut_client",
     "build_engine",
     "list_voices",
+    "load_vieneu",
     "pcm_to_wav",
 ]

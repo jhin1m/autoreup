@@ -24,6 +24,7 @@ export const SERVICE_NAMES: Record<ConnectionType, string> = {
   capcut: "CapCut",
   edge: "Edge TTS",
   http_tts: "Máy chủ giọng đọc HTTP",
+  vieneu: "VieNeu TTS",
 };
 
 export const firstOfType = (settings: AppSettings, type: ConnectionType): Connection | undefined =>
@@ -122,6 +123,9 @@ export const usesChatService = (settings: AppSettings, connId: string): boolean 
   CHAT_TASKS.some((task) => settings.tasks[task].connection === connId);
 
 // ----- Giọng đọc -------------------------------------------------------------------
+/** Voice services with nothing to fill in: voices + preview work before saving. */
+export const KEYLESS_TTS: ConnectionType[] = ["edge", "vieneu"];
+
 export const ttsService = (settings: AppSettings): ConnectionType | "" =>
   connectionOf(settings, settings.tasks.tts.connection)?.type ?? "";
 

@@ -119,16 +119,18 @@ export async function listConnectionModels(id: string): Promise<string[]> {
   return ((await response.json()) as { models: string[] }).models;
 }
 
-export async function listTtsVoices(connection: string): Promise<TtsVoice[]> {
+export async function listTtsVoices(connection: string, type = ""): Promise<TtsVoice[]> {
+  const query = new URLSearchParams({ connection, ...(type ? { type } : {}) });
   const response = await ok(
-    await fetch(`/api/v1/settings/tts/voices?connection=${encodeURIComponent(connection)}`),
+    await fetch(`/api/v1/settings/tts/voices?${query}`),
     "Không tải được danh sách giọng",
   );
   return ((await response.json()) as { voices: TtsVoice[] }).voices;
 }
 
-/** Synthesize a short sample with the (saved) connection and the draft voice/model. */
-export async function previewTts(body: { connection: string; voice: string; model: string }): Promise<Blob> {
+/** Synthesize a short sample with the (saved) connection and the draft voice/model;
+ *  a keyless `type` (edge, vieneu) needs no saved connection. */
+export async function previewTts(body: { connection: string; voice: string; model: string; type?: string }): Promise<Blob> {
   const response = await fetch("/api/v1/settings/tts/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

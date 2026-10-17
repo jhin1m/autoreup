@@ -156,6 +156,133 @@ def test_edge_engine_without_package_fails_loudly(monkeypatch):
         engines.EdgeEngine(voice="x").synthesize_batch(["a"])
 
 
+# ---- vieneu (local) ---------------------------------------------------------------
+
+
+def _fake_vieneu(monkeypatch, calls: list, fail_on: str = ""):
+    """``vieneu`` + its ONNX engine module, faked; the loaded-model singleton is reset."""
+    import numpy as np
+
+    class Model:
+        sample_rate = 48_000
+
+        def infer(self, text, voice=None):
+            calls.append((text, voice))
+            if text == fail_on:
+                raise RuntimeError("boom")
+            return np.full(480, 0.5, dtype=np.float32)
+
+        def list_preset_voices(self):
+            return [("⭐ Thiện Minh — Nam · Bắc · Phong cách kể chuyện", "Thiện Minh"), ("Ngọc Linh — Nữ · Bắc", "Ngọc Linh")]
+
+    class OnnxV3LiteEngine:
+        @staticmethod
+        def _fetch(repo, files, subfolder):
+            return Path("/nonexistent")
+
+    package = types.ModuleType("vieneu")
+    package.Vieneu = lambda **kw: calls.append(("load", kw)) or Model()
+    lite = types.ModuleType("vieneu._v3_turbo_engine.onnx_runtime_lite")
+    lite.OnnxV3LiteEngine = OnnxV3LiteEngine
+    monkeypatch.setitem(sys.modules, "vieneu", package)
+    monkeypatch.setitem(sys.modules, "vieneu._v3_turbo_engine", types.ModuleType("vieneu._v3_turbo_engine"))
+    monkeypatch.setitem(sys.modules, "vieneu._v3_turbo_engine.onnx_runtime_lite", lite)
+    monkeypatch.setattr(engines, "_vieneu", None)
+    return OnnxV3LiteEngine
+
+
+def test_vieneu_engine_returns_48k_wav_with_default_voice_and_loads_once(monkeypatch, tmp_path):
+    calls: list = []
+    lite = _fake_vieneu(monkeypatch, calls)
+    engine = engines.VieNeuEngine(voice="", models_dir=tmp_path)
+    clips = engine.synthesize_batch(["một", "hai"])
+    engine.synthesize_batch(["ba"])
+    assert engine.voice == "Thiện Minh" and engine.cache_id == "vieneu:v3turbo"
+    assert [c for c in calls if c[0] == "load"] == [("load", {"backend": "onnx"})]
+    assert [c for c in calls if c[0] != "load"] == [("một", "Thiện Minh"), ("hai", "Thiện Minh"), ("ba", "Thiện Minh")]
+    with wave.open(io.BytesIO(clips[0])) as wav:
+        assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth(), wav.getnframes()) == (48_000, 1, 2, 480)
+    fetch = lite.__dict__["_fetch"].__func__
+    assert isinstance(fetch, engines._MaterializedFetch) and fetch.root == tmp_path
+
+
+def test_vieneu_engine_keeps_the_clips_made_before_a_failure(monkeypatch, tmp_path):
+    _fake_vieneu(monkeypatch, [], fail_on="hai")
+    with pytest.raises(engines.TtsEngineError, match="vieneu: RuntimeError: boom") as err:
+        engines.VieNeuEngine(voice="Ngọc Linh", models_dir=tmp_path).synthesize_batch(["một", "hai", "ba"])
+    assert err.value.partial[0].startswith(b"RIFF") and err.value.partial[1:] == [None, None]
+
+
+def test_vieneu_without_package_fails_loudly(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "vieneu", None)
+    monkeypatch.setattr(engines, "_vieneu", None)
+    with pytest.raises(engines.TtsEngineError, match="thiếu package vieneu"):
+        engines.VieNeuEngine(voice="x", models_dir=tmp_path).synthesize_batch(["a"])
+
+
+def test_vieneu_routes_and_lists_voices_without_loading_the_model(monkeypatch, tmp_path):
+    calls: list = []
+    _fake_vieneu(monkeypatch, calls)
+    env = _env(tmp_path)
+    conn = Connection(id="vn", type="vieneu")
+    engine = engines.build_engine(TtsTask(), conn, env)
+    assert isinstance(engine, engines.VieNeuEngine) and engine.voice == "Thiện Minh"
+    assert engine.models_dir == env.data_dir / "models" / "vieneu"
+    voices = engines.list_voices(conn, env)
+    assert len(voices) == 25 and voices[0]["id"] == engines.DEFAULT_VOICES["vieneu"]
+    assert {"Ngọc Linh", "Quỳnh Anh"} <= {v["id"] for v in voices}
+    assert calls == []  # listing never loads the model
+
+
+def test_vieneu_symbols_only_text_is_short_silence_not_an_error(monkeypatch, tmp_path):
+    calls: list = []
+    _fake_vieneu(monkeypatch, calls)
+    clip, spoken = engines.VieNeuEngine(voice="", models_dir=tmp_path).synthesize_batch(["♪ ~ *", "Chào"])
+    with wave.open(io.BytesIO(clip)) as wav:
+        assert wav.getnframes() == int(48_000 * 0.3) and set(wav.readframes(wav.getnframes())) == {0}
+    assert spoken.startswith(b"RIFF") and [c[0] for c in calls if c[0] != "load"] == ["Chào"]
+
+
+def test_vieneu_model_load_failure_is_an_engine_error(monkeypatch, tmp_path):
+    _fake_vieneu(monkeypatch, [])
+
+    def broken(**_kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sys.modules["vieneu"], "Vieneu", broken)
+    with pytest.raises(engines.TtsEngineError, match="không tải được model: OSError: disk full"):
+        engines.load_vieneu(_env(tmp_path))
+    assert engines._vieneu is None  # the next call retries
+
+
+def test_materialized_fetch_hardlinks_split_blobs_into_one_folder(tmp_path):
+    """HF shared blobs put model.onnx and its model.data in different folders; onnxruntime
+    only accepts them side by side."""
+    snapshot = tmp_path / "hub" / "snapshots" / "rev" / "onnx"
+    snapshot.mkdir(parents=True)
+    blobs = {}
+    for name, shard in (("model.onnx", "aa"), ("model.data", "bb")):
+        blob = tmp_path / "hub" / "blobs" / shard / name.replace(".", "_")
+        blob.parent.mkdir(parents=True)
+        blob.write_bytes(name.encode())
+        (snapshot / name).symlink_to(blob)
+        blobs[name] = blob
+    seen: list = []
+    fetch = engines._MaterializedFetch(lambda *args: seen.append(args) or snapshot, tmp_path / "models")
+
+    folder = fetch("org/repo", ["model.onnx"], "onnx")
+    assert folder == tmp_path / "models" / "org--repo" / "onnx" and seen == [("org/repo", ["model.onnx"], "onnx")]
+    for name, blob in blobs.items():
+        assert not (folder / name).is_symlink() and (folder / name).samefile(blob)
+
+    newer = tmp_path / "hub" / "blobs" / "cc" / "model_data"
+    newer.parent.mkdir(parents=True)
+    newer.write_bytes(b"v2")
+    (snapshot / "model.data").unlink()
+    (snapshot / "model.data").symlink_to(newer)
+    assert fetch("org/repo", [], "onnx") == folder and (folder / "model.data").read_bytes() == b"v2"
+
+
 # ---- build_engine -----------------------------------------------------------------
 
 
@@ -379,3 +506,26 @@ def test_preview_returns_audio_and_reports_engine_errors(api, monkeypatch):
     monkeypatch.setattr(settings_endpoint, "build_engine", failing)
     bad = client.post("/api/v1/settings/tts/preview", json={"connection": "gm"})
     assert bad.status_code == 502 and "model sai" in bad.json()["detail"]
+
+
+def test_keyless_voice_services_list_and_preview_before_saving(api, monkeypatch):
+    """VieNeu / Edge have nothing to configure: the Voice tab works on the unsaved draft."""
+    client, _store = api
+    voices = client.get("/api/v1/settings/tts/voices", params={"connection": "c-new", "type": "vieneu"}).json()["voices"]
+    assert len(voices) == 25 and voices[0]["id"] == "Thiện Minh"
+    captured = {}
+
+    class Fake:
+        def synthesize_batch(self, texts):
+            return [engines.pcm_to_wav(b"\0\0" * 10, 48_000)]
+
+    def fake_build(task, conn, env, **_kw):
+        captured["conn"], captured["voice"] = conn, task.voice
+        return Fake()
+
+    monkeypatch.setattr(settings_endpoint, "build_engine", fake_build)
+    response = client.post("/api/v1/settings/tts/preview", json={"connection": "c-new", "type": "vieneu", "voice": "Ngọc Linh"})
+    assert response.status_code == 200 and response.headers["content-type"] == "audio/wav"
+    assert (captured["conn"].id, captured["conn"].type, captured["voice"]) == ("c-new", "vieneu", "Ngọc Linh")
+    # a service that needs a key still needs its saved connection
+    assert client.get("/api/v1/settings/tts/voices", params={"connection": "c-new", "type": "gemini"}).status_code == 404

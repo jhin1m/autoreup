@@ -12,14 +12,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ConnectionType = Literal["agy", "claude_code", "codex", "command", "openai_compat", "gemini", "elevenlabs", "capcut", "edge", "http_tts"]
+ConnectionType = Literal["agy", "claude_code", "codex", "command", "openai_compat", "gemini", "elevenlabs", "capcut", "edge", "http_tts", "vieneu"]
 
 # What each connection type can do. ASR backends (local mlx / Cloudflare worker) stay
 # their own task fields — they are not connections.
 CAPABILITIES: dict[str, set[str]] = {
     "chat": {"agy", "claude_code", "codex", "command", "openai_compat", "gemini"},
     "vision": {"openai_compat", "gemini"},
-    "tts": {"capcut", "http_tts", "edge", "openai_compat", "gemini", "elevenlabs"},
+    "tts": {"capcut", "http_tts", "edge", "openai_compat", "gemini", "elevenlabs", "vieneu"},
 }
 # Subscription CLI agents: the binary run when a connection leaves ``bin`` blank.
 CLI_BINS: dict[str, str] = {"agy": "agy", "claude_code": "claude", "codex": "codex"}

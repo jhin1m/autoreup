@@ -4,10 +4,11 @@ import { useTtsVoices } from "../queries";
 import { useToast } from "../toast";
 import type { ConnectionType } from "../types";
 import { Advanced, CheckButton, Field, isSaved, ModelField, SecretField, Section, TextField, type TabProps } from "./fields";
-import { connectionOf, patchConnection, setTtsService, ttsService, usesChatService } from "./model";
+import { connectionOf, KEYLESS_TTS, patchConnection, setTtsService, ttsService, usesChatService } from "./model";
 
 const SERVICES: { type: ConnectionType; title: string; description: string }[] = [
   { type: "capcut", title: "CapCut", description: "Giọng tiếng Việt tự nhiên của CapCut — đăng nhập bằng tài khoản CapCut." },
+  { type: "vieneu", title: "VieNeu (máy này)", description: "Giọng tiếng Việt chạy ngay trên máy này, miễn phí, không cần mạng sau lần tải model đầu (~1.2 GB)." },
   { type: "edge", title: "Edge TTS (miễn phí)", description: "Giọng Microsoft Edge, miễn phí, không cần tài khoản." },
   { type: "openai_compat", title: "OpenAI-compatible", description: "API giọng đọc chuẩn OpenAI (dùng key đã nhập)." },
   { type: "gemini", title: "Gemini", description: "Giọng đọc của Gemini (dùng key Gemini đã nhập)." },
@@ -20,7 +21,8 @@ export function VoiceTab({ draft, setDraft, saved }: TabProps) {
   const tts = draft.tasks.tts;
   const service = ttsService(draft);
   const conn = connectionOf(draft, tts.connection);
-  const ready = isSaved(saved, conn);
+  const keyless = !!service && KEYLESS_TTS.includes(service);
+  const ready = isSaved(saved, conn) || keyless;
   const setTts = (change: Partial<typeof tts>) => setDraft({ ...draft, tasks: { ...draft.tasks, tts: { ...tts, ...change } } });
   const patch = (change: Parameters<typeof patchConnection>[2]) => conn && setDraft(patchConnection(draft, conn.id, change));
   const info = SERVICES.find((item) => item.type === service);
@@ -59,7 +61,7 @@ export function VoiceTab({ draft, setDraft, saved }: TabProps) {
           <ModelField label="Model giọng đọc" conn={conn} saved={saved} value={tts.model} required
             placeholder={service === "gemini" ? "model *-tts" : "vd. tts-1"} onChange={(model) => setTts({ model })} />
         ) : null}
-        {service ? <VoicePicker draft={draft} setDraft={setDraft} saved={saved} ready={ready} /> : null}
+        {service ? <VoicePicker draft={draft} setDraft={setDraft} saved={saved} ready={ready} keylessType={keyless ? service : ""} /> : null}
         {service ? <CheckButton key={conn?.id} conn={conn} saved={saved} /> : null}
       </Section>
       <Advanced>
@@ -80,9 +82,9 @@ export function VoiceTab({ draft, setDraft, saved }: TabProps) {
 }
 
 /** Voice list with a ▶ per voice: a sample is synthesized once per voice, then replayed. */
-function VoicePicker({ draft, setDraft, ready }: TabProps & { ready: boolean }) {
+function VoicePicker({ draft, setDraft, ready, keylessType }: TabProps & { ready: boolean; keylessType: string }) {
   const tts = draft.tasks.tts;
-  const { data: voices = [], isError } = useTtsVoices(ready ? tts.connection : "");
+  const { data: voices = [], isError } = useTtsVoices(ready ? tts.connection : "", keylessType);
   const { toast } = useToast();
   const [sample, setSample] = useState<{ voice: string; phase: "load" | "play" } | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
@@ -103,8 +105,8 @@ function VoicePicker({ draft, setDraft, ready }: TabProps & { ready: boolean }) 
     if (sample?.voice === voice && sample.phase === "play") return setSample(null);
     setSample({ voice, phase: "load" });
     try {
-      const key = `${tts.connection}|${tts.model}|${voice}`;
-      const blob = samples.current.get(key) ?? (await api.previewTts({ connection: tts.connection, voice, model: tts.model }));
+      const key = `${tts.connection}|${keylessType}|${tts.model}|${voice}`;
+      const blob = samples.current.get(key) ?? (await api.previewTts({ connection: tts.connection, voice, model: tts.model, type: keylessType }));
       samples.current.set(key, blob);
       const player = new Audio(URL.createObjectURL(blob));
       audio.current = player;

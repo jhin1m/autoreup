@@ -10,12 +10,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Response
 from pydantic import BaseModel, ValidationError
 
 from backend.app.agents import AgentError, api_llm
 from backend.app.core.config import get_settings
-from backend.app.services.tts_engines import TtsEngineError, audio_media_type, build_engine, list_voices as engine_voices
+from backend.app.services.tts_engines import TtsEngineError, audio_media_type, build_engine, list_voices as engine_voices, load_vieneu
 from backend.app.settings import CLI_BINS, Connection, SettingsFileError, SettingsStore, TtsTask, agent_for
 
 router = APIRouter()
@@ -35,6 +35,17 @@ def _connection(store: SettingsStore, connection_id: str) -> Connection:
     if conn is None:
         raise HTTPException(status_code=404, detail=f"không có kết nối {connection_id!r}")
     return conn
+
+
+# Voice services with nothing to configure: the Voice tab lists + previews them straight
+# from the draft, before the new connection is saved.
+_KEYLESS_TTS = ("edge", "vieneu")
+
+
+def _tts_connection(store: SettingsStore, connection_id: str, kind: str) -> Connection:
+    if kind in _KEYLESS_TTS:
+        return Connection(id=connection_id or kind, type=kind)
+    return _connection(store, connection_id)
 
 
 @router.get("")
@@ -85,9 +96,9 @@ def list_models(connection_id: str) -> dict:
 
 
 @router.get("/tts/voices")
-def list_voices(connection: str) -> dict:
+def list_voices(connection: str = "", kind: str = Query("", alias="type")) -> dict:
     store = get_settings_store()
-    conn = _connection(store, connection)
+    conn = _tts_connection(store, connection, kind)
     try:
         return {"voices": engine_voices(conn, store.env)}
     except TtsEngineError as exc:
@@ -96,9 +107,10 @@ def list_voices(connection: str) -> dict:
 
 class TtsPreview(BaseModel):
     """An unsaved draft is previewable: voice/model come from the request, the connection
-    (with its real secrets) from the store."""
+    (with its real secrets) from the store — or, for a keyless ``type``, from nothing."""
 
-    connection: str
+    connection: str = ""
+    type: str = ""
     voice: str = ""
     model: str = ""
     text: str = ""
@@ -107,7 +119,7 @@ class TtsPreview(BaseModel):
 @router.post("/tts/preview")
 def preview_tts(payload: TtsPreview) -> Response:
     store = get_settings_store()
-    conn = _connection(store, payload.connection)
+    conn = _tts_connection(store, payload.connection, payload.type)
     text = payload.text.strip()[:500] or _PREVIEW_TEXT
     try:
         engine = build_engine(TtsTask(connection=conn.id, voice=payload.voice, model=payload.model), conn, store.env)
@@ -133,7 +145,7 @@ def _codex_models(conn: Connection) -> list[str]:
 
 
 def _probe(conn: Connection, store: SettingsStore) -> tuple[bool, str]:
-    """Cheap reachability check — never runs a model or synthesizes audio."""
+    """Cheap reachability check — never synthesizes audio (vieneu: loads the local model)."""
     if conn.type in api_llm.API_PROVIDERS:
         # listing models proves the endpoint answers AND the key is accepted
         try:
@@ -165,6 +177,12 @@ def _probe(conn: Connection, store: SettingsStore) -> tuple[bool, str]:
         if not conn.base_url:
             return False, "thiếu base_url"
         return _probe_http(conn.base_url)
+    if conn.type == "vieneu":
+        try:
+            load_vieneu(store.env)
+        except TtsEngineError as exc:
+            return False, str(exc)
+        return True, "đã tải model VieNeu trên máy này"
     if conn.type in ("edge", "elevenlabs"):
         # listing voices proves the package/endpoint works and (elevenlabs) the key is accepted
         try:
