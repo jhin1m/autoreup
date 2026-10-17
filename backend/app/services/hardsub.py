@@ -261,7 +261,7 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
 
     run_command([
         "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat),
-        "-vsync", "vfr", "-c:v", "qtrle", "-pix_fmt", "argb", str(output),
+        "-fps_mode", "vfr", "-c:v", "qtrle", "-pix_fmt", "argb", str(output),
     ])
 
 
