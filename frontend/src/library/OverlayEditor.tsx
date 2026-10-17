@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
-import type { CoverRegion, OverlayConfig, OverlayFrame } from "../api";
+import type { CoverRegion, FontInfo, OverlayConfig, OverlayEncode, OverlayFrame } from "../api";
 import { useToast } from "../toast";
 
 const MODES: { id: string; label: string }[] = [
@@ -41,6 +41,41 @@ export function OverlayEditor({
   const drag = useRef<{ handle: Handle; startX: number; startY: number; box: CoverRegion } | null>(null);
   const pointer = useRef({ x: 0, y: 0 });
   const raf = useRef<number | null>(null);
+  const [fonts, setFonts] = useState<FontInfo[]>([]);
+  const [defaultFont, setDefaultFont] = useState("");
+  const [captionFamily, setCaptionFamily] = useState("");
+
+  useEffect(() => {
+    api
+      .fetchFonts()
+      .then((list) => {
+        setFonts(list.fonts);
+        setDefaultFont(list.default);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Draw the on-canvas caption in the font the render will burn.
+  const fontPath = config?.font || defaultFont;
+  useEffect(() => {
+    if (!fontPath) return;
+    let cancelled = false;
+    const family = `ov-${fontPath.replace(/[^a-z0-9]/gi, "")}`;
+    const face = new FontFace(family, `url(${api.fontFileUrl(fontPath)})`);
+    face
+      .load()
+      .then((loaded) => {
+        if (cancelled) return;
+        document.fonts.add(loaded);
+        setCaptionFamily(family);
+      })
+      .catch(() => {
+        if (!cancelled) setCaptionFamily("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fontPath]);
 
   useEffect(() => {
     api
@@ -228,13 +263,15 @@ export function OverlayEditor({
     <div className="ov-scrim" onClick={onClose}>
       <div className="ov-panel" onClick={(event) => event.stopPropagation()}>
         <div className="ov-head">
-          <p>
-            Khung che & vị trí phụ đề <span className="mono tiny">job {jobId}</span>
-          </p>
+          <p>Chỉnh phụ đề trên video</p>
           <button className="link" onClick={onClose}>
             Đóng
           </button>
         </div>
+        <p className="ov-hint tiny">
+          Kéo hộp mờ đè lên chữ Trung có sẵn trong video (hoặc logo) để che đi, rồi kéo dòng phụ đề Việt tới chỗ muốn đặt.
+          Bấm “Xem thử khung hình” để xem đúng như bản xuất, chọn chất lượng video, xong bấm “Render lại video” để áp dụng cho cả tập.
+        </p>
 
         <div className="ov-body">
           <div
@@ -285,7 +322,7 @@ export function OverlayEditor({
                   onPointerDown={(event) => onPointerDown(event, index, "move")}
                   title={region.label || region.mode}
                 >
-                  <span className="ov-tag">{region.label || region.mode}</span>
+                  <span className="ov-tag">{regionName(region)}</span>
                 </div>
                 {index === selected ? (
                   <>
@@ -298,7 +335,11 @@ export function OverlayEditor({
             {/* the caption follows the frame: drag it (or the band box) and it moves */}
             <div
               className="ov-caption"
-              style={{ top: `${(captionFraction * 100).toFixed(2)}%`, fontSize: `${captionFontPx.toFixed(1)}px` }}
+              style={{
+                top: `${(captionFraction * 100).toFixed(2)}%`,
+                fontSize: `${captionFontPx.toFixed(1)}px`,
+                fontFamily: captionFamily ? `"${captionFamily}", sans-serif` : undefined,
+              }}
               onPointerDown={startCaptionDrag}
               title="Kéo để đặt vị trí phụ đề Việt"
             >
@@ -350,7 +391,7 @@ export function OverlayEditor({
             </div>
 
             <div className="ov-group">
-              <p className="mono tiny">Hộp che ({config?.cover.length ?? 0})</p>
+              <p className="mono tiny">Vùng che chữ gốc ({config?.cover.length ?? 0})</p>
               {config?.cover.map((region, index) => (
                 <button
                   key={index}
@@ -360,7 +401,7 @@ export function OverlayEditor({
                   title="Nháy đúp để xoá"
                 >
                   <span className={`dot ${region.mode}`} />
-                  {region.label || region.mode}
+                  {regionName(region)}
                   <span className="mono tiny">
                     {Math.round(region.x * 100)}%,{Math.round(region.y * 100)}% · {Math.round(region.w * 100)}×{Math.round(region.h * 100)}
                   </span>
@@ -374,7 +415,7 @@ export function OverlayEditor({
                   + Vùng chữ
                 </button>
                 <button className="ghost" onClick={() => addRegion("band", "blur")}>
-                  + Band phụ đề
+                  + Phụ đề gốc
                 </button>
               </div>
             </div>
@@ -449,8 +490,12 @@ export function OverlayEditor({
             <div className="ov-group">
               <p className="mono tiny">Phụ đề Việt</p>
               <div className="seg-toggle">
-                <button className={config?.caption_mode === "band" ? "on" : ""} onClick={() => patch({ caption_mode: "band" })}>
-                  Theo band gốc
+                <button
+                  className={config?.caption_mode === "band" ? "on" : ""}
+                  onClick={() => patch({ caption_mode: "band" })}
+                  title="Đặt phụ đề Việt đúng chỗ phụ đề gốc đã bị che"
+                >
+                  Đè lên phụ đề gốc
                 </button>
                 <button className={config?.caption_mode === "manual" ? "on" : ""} onClick={() => patch({ caption_mode: "manual" })}>
                   Tự đặt
@@ -466,6 +511,24 @@ export function OverlayEditor({
                   value={config?.caption_y ?? 0.88}
                   onChange={(event) => patch({ caption_y: Number(event.target.value), caption_mode: "manual" })}
                 />
+              </label>
+              <label className="ov-field">
+                <span>Font chữ</span>
+                <select value={config?.font ?? ""} onChange={(event) => patch({ font: event.target.value })}>
+                  <option value="">Mặc định ({fontName(fonts, defaultFont)})</option>
+                  {(["app", "user", "system"] as const).map((source) => {
+                    const group = fonts.filter((font) => font.source === source);
+                    return group.length ? (
+                      <optgroup key={source} label={FONT_SOURCES[source]}>
+                        {group.map((font) => (
+                          <option key={font.path} value={font.path}>
+                            {font.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null;
+                  })}
+                </select>
               </label>
               <label className="ov-field">
                 <span>Cỡ chữ ×{(config?.caption_scale ?? 1).toFixed(2)}</span>
@@ -494,6 +557,18 @@ export function OverlayEditor({
             {busy === "preview" ? "Đang dựng…" : "Xem thử khung hình"}
           </button>
           <div className="pv-right">
+            {frame?.encode ? (
+              <label className="ov-quality">
+                <span className="mono tiny">Chất lượng video</span>
+                <select value={config?.bitrate ?? ""} onChange={(event) => patch({ bitrate: event.target.value })}>
+                  {bitrateChoices(frame.encode, config?.bitrate ?? "").map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label} · {formatKbps(choice.rate)} · ~{formatSize(choice.rate, frame.encode!, frame.duration)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <button className="ghost" onClick={save} disabled={!!busy}>
               {busy === "save" ? "Đang lưu…" : "Lưu"}
             </button>
@@ -505,6 +580,55 @@ export function OverlayEditor({
       </div>
     </div>
   );
+}
+
+type BitrateChoice = { value: string; label: string; rate: number };
+
+const FIXED_BITRATES = ["1500k", "2500k", "4M", "8M"];
+
+/** "" = the app setting; "source" = the source's quality (its codec's rate x H.264's
+ *  overhead); fixed rates above it; the source's exact rate for the curious. */
+function bitrateChoices(encode: OverlayEncode, current: string): BitrateChoice[] {
+  const codec = encode.source_codec ? encode.source_codec.toUpperCase() : "?";
+  const choices: BitrateChoice[] = [
+    { value: "", label: encode.default === "source" ? "Theo chất lượng gốc (mặc định)" : `Mặc định (${encode.default})`, rate: encode.default_bitrate },
+  ];
+  if (encode.default !== "source") choices.push({ value: "source", label: "Theo chất lượng gốc", rate: encode.auto_bitrate });
+  if (encode.source_bitrate) {
+    choices.push({ value: `${Math.round(encode.source_bitrate / 1000)}k`, label: `Bằng bitrate gốc ${codec} (dễ vỡ hình)`, rate: encode.source_bitrate });
+  }
+  for (const value of FIXED_BITRATES) choices.push({ value, label: value.replace("k", " kbit/s").replace("M", " Mbit/s"), rate: parseRate(value) });
+  if (current && !choices.some((choice) => choice.value === current)) choices.push({ value: current, label: current, rate: parseRate(current) });
+  return choices;
+}
+
+function parseRate(value: string): number {
+  const unit = value.slice(-1).toLowerCase();
+  const scale = unit === "k" ? 1_000 : unit === "m" ? 1_000_000 : 1;
+  return Number(scale > 1 ? value.slice(0, -1) : value) * scale;
+}
+
+function formatKbps(rate: number): string {
+  return rate >= 1_000_000 ? `${(rate / 1_000_000).toFixed(1).replace(".", ",")} Mbit/s` : `${Math.round(rate / 1000)} kbit/s`;
+}
+
+/** File size of the whole episode at ``rate`` (video + the AAC track). */
+function formatSize(rate: number, encode: OverlayEncode, duration: number): string {
+  const bytes = ((rate + encode.audio_bitrate) * duration) / 8;
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1).replace(".", ",")} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
+const FONT_SOURCES = { app: "Font của app", user: "Font bạn đã cài", system: "Font hệ thống" } as const;
+
+function fontName(fonts: FontInfo[], path: string): string {
+  return fonts.find((font) => font.path === path)?.name ?? (path.split("/").pop() ?? "").replace(/\.(ttf|otf)$/i, "");
+}
+
+const REGION_NAMES: Record<string, string> = { band: "phụ đề gốc", logo: "logo", text: "vùng chữ" };
+
+/** The stored label stays a stable id ("band"); the editor shows it in Vietnamese. */
+function regionName(region: CoverRegion): string {
+  return REGION_NAMES[region.label] ?? (region.label || region.mode);
 }
 
 function formatTime(seconds: number): string {

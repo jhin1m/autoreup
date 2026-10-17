@@ -120,7 +120,11 @@ class Settings(BaseSettings):
     # the box. Falls back to libx264 off-macOS or when videotoolbox isn't in the ffmpeg
     # build. Hardsub already emits canonical 1080p/30fps so exports just stream-copy.
     video_hw_encode: bool = True
-    video_bitrate: str = "8M"   # target for hardware encode (no CRF on videotoolbox)
+    # "source" = match the source's quality (its video bitrate x how many more bits H.264
+    # needs than its codec); or a fixed ffmpeg rate like "8M". A flat 8M turned a 676MB
+    # AV1 episode (0.44 Mbit/s) into an 8.9GB render with no visible gain.
+    video_bitrate: str = "source"
+    video_bitrate_max: str = "8M"  # ceiling for "source" (and its fallback when probing fails)
     # Light CAS sharpening on the picture during hardsub: Douyin serves ~1Mbps for
     # 1080p (measured: best gear 981kbps), visibly soft. 0 disables.
     video_sharpen: float = 0.35

@@ -48,6 +48,8 @@ class OverlayConfig:
     caption_y: float | None = None
     caption_scale: float = 1.0
     cover: list[CoverRegion] = field(default_factory=list)
+    font: str = ""  # caption font file (one of services.fonts.list_fonts); "" = the app default
+    bitrate: str = ""  # video bitrate for this render ("1800k", "4M", "source"); "" = the app setting
 
     def band_region(self) -> CoverRegion | None:
         for region in self.cover:
@@ -70,6 +72,8 @@ class OverlayConfig:
             "caption_y": None if self.caption_y is None else round(float(self.caption_y), 4),
             "caption_scale": round(min(max(float(self.caption_scale), 0.5), 2.0), 3),
             "cover": [asdict(region.normalized()) for region in self.cover],
+            "font": str(self.font or ""),
+            "bitrate": _bitrate(self.bitrate),
         }
 
     @classmethod
@@ -81,7 +85,17 @@ class OverlayConfig:
             caption_y=(None if data.get("caption_y") is None else float(data["caption_y"])),
             caption_scale=float(data.get("caption_scale") or 1.0),
             cover=regions,
+            font=str(data.get("font") or ""),
+            bitrate=_bitrate(data.get("bitrate")),
         )
+
+
+def _bitrate(value) -> str:
+    """Keep only a rate ffmpeg can take; anything else means "use the app setting"."""
+    from backend.app.infrastructure.ffmpeg_encode import valid_bitrate
+
+    text = str(value or "").strip()
+    return text if text and valid_bitrate(text) else ""
 
 
 def overlay_path(job_dir: Path, job_id: str) -> Path:

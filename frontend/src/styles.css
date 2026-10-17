@@ -1988,6 +1988,19 @@ select.lib-input { cursor: pointer; }
   margin: 0;
   font-weight: 600;
 }
+.ov-quality {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ov-quality select {
+  max-width: 340px;
+}
+.ov-hint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
 .ov-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -2113,6 +2126,7 @@ select.lib-input { cursor: pointer; }
 }
 .ov-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -2195,7 +2209,7 @@ select.lib-input { cursor: pointer; }
   border-radius: 4px;
   background: #00000055;
   color: #fff;
-  font-weight: 600;
+  font-weight: 400; /* the render burns the font as is: no faux bold */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

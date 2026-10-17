@@ -305,7 +305,32 @@ export type OverlayConfig = {
   caption_y: number | null;
   caption_scale: number;
   cover: CoverRegion[];
+  /** caption font file (one of fetchFonts); "" = the app default */
+  font?: string;
+  /** video bitrate for the render ("1800k", "4M", "source"); "" = the app setting */
+  bitrate?: string;
 };
+
+export type OverlayEncode = {
+  source_codec: string;
+  source_bitrate: number;
+  auto_bitrate: number;
+  default: string;
+  default_bitrate: number;
+  audio_bitrate: number;
+  max_bitrate: number;
+};
+
+export type FontInfo = { path: string; name: string; source: "app" | "user" | "system" };
+
+export async function fetchFonts(): Promise<{ default: string; fonts: FontInfo[] }> {
+  const response = await ok(await fetch("/api/v1/settings/fonts"), "Không tải được danh sách font");
+  return (await response.json()) as { default: string; fonts: FontInfo[] };
+}
+
+export function fontFileUrl(path: string): string {
+  return `/api/v1/settings/fonts/file?path=${encodeURIComponent(path)}`;
+}
 
 export type OverlayFrame = {
   out: { width: number; height: number };
@@ -314,6 +339,7 @@ export type OverlayFrame = {
   pad: { x: number; y: number };
   font_size?: number;
   duration: number;
+  encode?: OverlayEncode;
 };
 
 export type OverlayState = OverlayConfig & { frame?: OverlayFrame };

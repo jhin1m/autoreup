@@ -181,3 +181,27 @@ def _probe_http(url: str) -> tuple[bool, str]:
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return False, f"{url}: {exc}"
     return True, f"{url}: HTTP {response.status_code}"
+
+
+@router.get("/fonts")
+def fonts() -> dict:
+    """Caption fonts the hardsub can burn (Vietnamese-capable only) + the default."""
+    from backend.app.services.fonts import default_font, list_fonts
+
+    settings = get_settings()
+    return {"default": str(default_font(settings)), "fonts": list_fonts(settings)}
+
+
+@router.get("/fonts/file")
+def font_file(path: str) -> Response:
+    """One offered font's file, so the overlay editor previews the caption in it."""
+    from backend.app.services.fonts import default_font, resolve_font
+
+    settings = get_settings()
+    font = resolve_font(settings, path)
+    if font is None and path == str(default_font(settings)) and Path(path).is_file():
+        font = Path(path)
+    if font is None:
+        raise HTTPException(status_code=404, detail="không có font này")
+    media = "font/otf" if font.suffix.lower() == ".otf" else "font/ttf"
+    return Response(content=font.read_bytes(), media_type=media, headers={"Cache-Control": "max-age=86400"})

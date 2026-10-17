@@ -628,7 +628,7 @@ def _concat_videos(inputs: list[Path], output: Path, work_dir: Path, settings) -
         norm = work_dir / f"{index:03d}.mp4"
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", scale_filter,
-             *video_encode_args(settings),
+             *video_encode_args(settings, src),
              "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", str(norm)],
             check=True, capture_output=True, text=True,
         )
