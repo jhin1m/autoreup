@@ -66,7 +66,7 @@ class Episode(BaseModel):
     dub_stage_index: int | None = None
     dub_stage_total: int | None = None
     dub_error: str | None = None
-    # Live numbers of the stage in flight (download: bytes/total/speed/eta), if any.
+    # Live state of the stage in flight (step, counts, download bytes, last log lines).
     dub_progress: dict | None = None
 
 

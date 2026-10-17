@@ -119,13 +119,21 @@ export type Episode = {
   dub_progress: DubProgress | null;
 };
 
-/** Live numbers of the stage in flight (today: the video download). */
+/** Live state of the stage in flight. Every key but ``stage`` is optional: a stage
+ *  reports what it knows (a sub-step, counts, download bytes, recent log lines). */
 export type DubProgress = {
   stage: string;
-  downloaded_bytes: number;
-  total_bytes: number | null;
-  speed: number | null; // bytes/s
-  eta: number | null; // seconds
+  started_at?: string | null; // ISO; drives the elapsed clock
+  step?: string; // sub-step in flight, e.g. "Nhận dạng lời (Whisper)"
+  done?: number;
+  total?: number;
+  unit?: string; // what done/total count ("đoạn", "dòng", "câu TTS")
+  sessions?: number; // translate: agent sessions in flight
+  logs?: string[]; // last few log lines of the stage
+  downloaded_bytes?: number;
+  total_bytes?: number | null;
+  speed?: number | null; // bytes/s
+  eta?: number | null; // seconds
 };
 
 export type Export = {

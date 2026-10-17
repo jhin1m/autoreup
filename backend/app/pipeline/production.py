@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import asdict
@@ -63,6 +64,7 @@ from backend.app.services.tts_engines import build_capcut_client as _build_capcu
 from backend.app.settings import app_settings_for, chat_agent, ocr_agent, tts_binding
 from backend.app.settings.schema import AsrTask, Connection, TtsTask
 
+_ASR_CHUNK_LINE = re.compile(r"ASR (\d+)/(\d+)$")
 _VOICEOVER_REPAIR_ROUNDS = 3  # converge; each round only re-synthesizes what changed
 
 
@@ -185,7 +187,11 @@ class DownloadStage(PipelineStage):
                 metrics={"reused_cached_video": True, "duration": cached_duration},
                 logs=[f"download: reused cached source video {cached.name}"],
             )
-        result = _download_source(settings, context.input_url, context.job_id, context.on_progress)
+        def on_bytes(fields: dict) -> None:
+            context.check_cancel()  # raised inside yt-dlp's hook: aborts, the .part stays
+            context.report(fields)
+
+        result = _download_source(settings, context.input_url, context.job_id, on_bytes)
         video = Path(result["path"])
         if cached is not None and video.exists() and not cached.exists():
             try:
@@ -238,10 +244,16 @@ class ASRStage(PipelineStage):
         if not asr.worker_url and _asr_uses_worker(asr.backend):
             raise RuntimeError("Missing ASR worker URL. Set it in Cài đặt → Phụ đề & lời thoại (or AUTOREUP_ASR_WORKER_URL).")
         logs: list[str] = []
+
+        def note(line: str) -> None:
+            note(line)
+            context.log(line)
+
         video = Path(context.artifacts["video"])
         from backend.app.dubbing.onset import _speech_probs, tighten_to_speech
         from backend.app.services.audio import probe_duration
 
+        context.report({"step": "Tìm đoạn có giọng nói (VAD)"})
         packed = _speech_probs(video)
         context.artifacts["vad_probs"] = packed
         duration = probe_duration(video)
@@ -255,6 +267,7 @@ class ASRStage(PipelineStage):
         if asr.ocr_first:
             from backend.app.dubbing.ocr_subs import detect_band, extract_ocr_segments, llm_recognizer, ocr_coverage
 
+            context.report({"step": "Đọc phụ đề có sẵn (OCR)"})
             try:
                 band = detect_band(video)
                 recognizer = None  # default reader: macOS Vision
@@ -269,7 +282,7 @@ class ASRStage(PipelineStage):
                 ocr_segments = extract_ocr_segments(video, band, recognizer=recognizer) if band else None
             except Exception as exc:  # noqa: BLE001 - OCR is optional; ASR stands alone
                 ocr_segments, band = None, None
-                logs.append(f"ocr-subs failed: {exc}")
+                note(f"ocr-subs failed: {exc}")
             if ocr_segments and len(ocr_segments) >= 5:
                 coverage = ocr_coverage(ocr_segments, duration)
                 ocr_stats = {"ocr_segments": len(ocr_segments), "ocr_coverage": round(coverage, 3)}
@@ -285,7 +298,7 @@ class ASRStage(PipelineStage):
             uncovered_ranges = [(max(0.0, a - 0.2), min(duration, b + 0.2)) for a, b in holes]
             uncovered = sum(speech_seconds(packed, a, b) for a, b in uncovered_ranges)
             plan = plan_uncovered_asr(uncovered, len(uncovered_ranges), duration)
-            logs.append(
+            note(
                 f"asr-plan: {uncovered:.0f}s of speech uncovered in {len(uncovered_ranges)} range(s) -> {plan}"
             )
             segments: list[AsrSegment] = list(ocr_segments)
@@ -296,13 +309,14 @@ class ASRStage(PipelineStage):
                 total = len(asr_segments)
                 asr_segments, tightened = tighten_to_speech(asr_segments, packed)
                 if tightened:
-                    logs.append(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(asr_segments)} of {total} left)")
+                    note(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(asr_segments)} of {total} left)")
                 segments, fuse_stats = fuse_rails(segments, asr_segments)
-                logs.append(
+                note(
                     f"ocr-subs: {len(ocr_segments)} captions; kept {fuse_stats['asr_kept']} ASR segments, "
                     f"dropped {fuse_stats['asr_overlapped']} overlapped"
                 )
             elif plan == "glue":
+                context.report({"step": f"Nhận dạng lời ngoài phụ đề ({len(uncovered_ranges)} đoạn)"})
                 try:
                     from backend.app.dubbing.coverage import clamp_to_ranges, transcribe_ranges
 
@@ -315,9 +329,9 @@ class ASRStage(PipelineStage):
                     recovered = clamp_to_ranges(recovered, uncovered_ranges)
                     segments = sorted([*segments, *recovered], key=lambda seg: (seg.start, seg.end))
                     segments = [AsrSegment(id=index, start=s.start, end=s.end, text_zh=s.text_zh) for index, s in enumerate(segments)]
-                    logs.append(f"asr-glue: +{len(recovered)} segments from {len(uncovered_ranges)} range(s)")
+                    note(f"asr-glue: +{len(recovered)} segments from {len(uncovered_ranges)} range(s)")
                 except Exception as exc:  # noqa: BLE001 - best-effort; the ladder follows
-                    logs.append(f"asr-glue failed: {exc}")
+                    note(f"asr-glue failed: {exc}")
         else:
             output_srt = settings.subtitles_dir / f"{context.job_id}.asr.zh.srt"
             logs += _run_asr(context, output_srt, asr)
@@ -327,18 +341,20 @@ class ASRStage(PipelineStage):
             total = len(segments)
             segments, tightened = tighten_to_speech(segments, packed)
             if tightened:
-                logs.append(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(segments)} of {total} left)")
+                note(f"vad-tighten: dropped {tightened} music/hallucination segments ({len(segments)} of {total} left)")
 
         if ocr_segments:
             segments, fuse_stats = fuse_rails(ocr_segments, segments)
-            logs.append(
+            note(
                 f"ocr-subs: {len(ocr_segments)} captions; "
                 f"kept {fuse_stats['asr_kept']} ASR segments, dropped {fuse_stats['asr_overlapped']} overlapped"
             )
 
+        context.report({"step": "Căn thời gian theo giọng"})
         segments, moved, dropped = refine_segments(segments, video, packed=packed)
-        logs.append(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {len(segments)} segments")
+        note(f"vad-align: moved {moved} starts, dropped {dropped} hallucinated of {len(segments)} segments")
 
+        context.report({"step": "Nghe lại khoảng trống lời"})
         segments, gap_stats = fill_coverage_gaps(
             video=video,
             segments=segments,
@@ -353,7 +369,7 @@ class ASRStage(PipelineStage):
             ),
         )
         if gap_stats["gaps"]:
-            logs.append(
+            note(
                 f"gap-fill: {gap_stats['filled']}/{gap_stats['gaps']} speech gaps re-ASR'd "
                 f"({gap_stats['seconds']}s) -> +{gap_stats['recovered']} segments, skipped {gap_stats['skipped']} lyric/artifact, "
                 f"unrecovered {gap_stats['unrecovered']}s"
@@ -361,14 +377,15 @@ class ASRStage(PipelineStage):
         before_dedupe = len(segments)
         segments = dedupe_overlaps(segments)
         if len(segments) != before_dedupe:
-            logs.append(f"rail-dedupe: {before_dedupe} -> {len(segments)} segments after overlap trim")
+            note(f"rail-dedupe: {before_dedupe} -> {len(segments)} segments after overlap trim")
+        context.report({"step": f"Chuẩn hoá {len(segments)} câu (LLM)"})
         segments, normalize_metrics = normalize_segments(segments, _translate_agent(context, "normalize"))
-        logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
+        note(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
         covered, speech_total, ratio = speech_coverage([(s.start, s.end) for s in segments], packed)
         if speech_total > 0:
-            logs.append(f"coverage: {covered:.0f}/{speech_total:.0f}s of speech texted ({ratio*100:.0f}%)")
+            note(f"coverage: {covered:.0f}/{speech_total:.0f}s of speech texted ({ratio*100:.0f}%)")
             if ratio < 0.9:
-                logs.append("coverage WARNING: unmatched speech remains")
+                note("coverage WARNING: unmatched speech remains")
         units = build_units(segments)
         anchors = [Anchor(id=u.id, start=u.start, end=u.end, source_ids=u.segment_ids, source_zh=u.source_zh) for u in units]
         context.artifacts["segments"] = segments
@@ -412,15 +429,18 @@ class GlossaryStage(PipelineStage):
         series_path = _series_glossary_path(settings, context.series_id)
         reused = False
         if series_path is not None and series_path.exists():
+            context.report({"step": "Dùng thuật ngữ chung của series"})
             reused = True
             rows = json.loads(series_path.read_text(encoding="utf-8"))
             glossary = [GlossaryEntry(**row) for row in rows]
         else:
+            context.report({"step": f"Lập thuật ngữ từ {len(anchors)} câu (LLM)"})
             glossary = extract_glossary(anchors, _translate_agent(context, "glossary"), genre=context.config.content_genre, notes=context.config.content_notes)
             rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
             if series_path is not None and glossary:
                 write_json(series_path, rows)
 
+        context.log(f"{len(glossary)} thuật ngữ: {_count_kinds(glossary)}")
         context.artifacts["glossary"] = glossary
         tsv_path = settings.subtitles_dir / f"{context.job_id}.glossary.tsv"
         json_path = settings.subtitles_dir / f"{context.job_id}.glossary.json"
@@ -461,6 +481,7 @@ class TranslateStage(PipelineStage):
         anchors: list[Anchor] = context.artifacts["anchors"]
         segments: list[AsrSegment] = context.artifacts["segments"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
+        context.report({"done": 0, "total": len(anchors), "unit": "dòng"})
         result = translate(
             anchors, glossary, _translate_agent(context), context.job_dir / "translate",
             TranslateConfig(
@@ -468,6 +489,9 @@ class TranslateStage(PipelineStage):
                 timeout=settings.translate_timeout,
                 retries=settings.translate_retries,
             ),
+            report=context.report,
+            log=context.log,
+            cancel=context.cancel,
         )
         speech_rows = result.rows
         context.artifacts["speech_rows"] = speech_rows
@@ -505,6 +529,7 @@ class QAStage(PipelineStage):
         anchors: list[Anchor] = context.artifacts["anchors"]
         segments: list[AsrSegment] = context.artifacts["segments"]
         speech_rows: list[SpeechRow] = context.artifacts["speech_rows"]
+        context.report({"step": f"Dựng và kiểm tra {len(speech_rows)} dòng phụ đề"})
         cues = build_display_cues(
             speech_rows, segments, settings.min_duration,
             max_chars=settings.subtitle_max_line_chars, lead=settings.subtitle_lead,
@@ -606,8 +631,22 @@ class VoiceoverStage(PipelineStage):
             late = max((max(0.0, t.place_start - t.source_start) for t in candidate.timings), default=0.0)
             return (round(overflow, 3), round(late, 3))
 
-        result = render(speech_rows, render_config, work_dir, cache_dir, engine=engine)
-        logs = [f"render round 0: {result.summary}"]
+        def synth_step(label: str):
+            context.report({"step": label})
+            def counted(done: int, total: int) -> None:
+                context.check_cancel()  # between synth chunks: clips already made stay cached
+                context.report({"done": done, "total": total, "unit": "câu TTS"})
+
+            return counted
+
+        logs: list[str] = []
+
+        def note(line: str) -> None:
+            logs.append(line)
+            context.log(line)
+
+        result = render(speech_rows, render_config, work_dir, cache_dir, engine=engine, on_synth=synth_step("Đọc giọng (TTS)"))
+        note(f"render round 0: {result.summary}")
         repair_cfg = RepairConfig()
         best_score = _sync_score(result)
         best_state = (speech_rows, result)
@@ -631,34 +670,39 @@ class VoiceoverStage(PipelineStage):
             if not overflow and not underfull:
                 break
             changed = 0
+            context.report({"step": f"Vòng chỉnh {rounds + 1}/{_VOICEOVER_REPAIR_ROUNDS}: sửa câu dài/ngắn (LLM)"})
             if overflow:
                 speech_rows, n = repair(speech_rows, sources, glossary, overflow, _polish_agent(context), repair_cfg)
                 changed += n
-                logs.append(f"round {rounds + 1}: shortened {n} over-budget rows")
+                note(f"round {rounds + 1}: shortened {n} over-budget rows")
             if underfull:
                 speech_rows, n = expand(speech_rows, sources, glossary, underfull, _polish_agent(context), repair_cfg)
                 changed += n
-                logs.append(f"round {rounds + 1}: completed {n} under-filled rows")
+                note(f"round {rounds + 1}: completed {n} under-filled rows")
             rounds += 1
             if not changed:
                 break
-            candidate = render(speech_rows, render_config, work_dir, cache_dir, engine=engine)
+            candidate = render(
+                speech_rows, render_config, work_dir, cache_dir, engine=engine,
+                on_synth=synth_step(f"Vòng chỉnh {rounds}/{_VOICEOVER_REPAIR_ROUNDS}: đọc lại câu đã sửa"),
+            )
             # Accept a round only when the MEASURED sync does not get worse: a later
             # expand that fixes a pause but overflows the next line must not ship
             # (measured: round 1 hit 0 overflow / 0.22s late, rounds 2-3 turned it into
             # 10.7s overflow and 15.9s late — the loop kept the worst state).
             score = _sync_score(candidate)
-            logs.append(f"render round {rounds}: {candidate.summary}")
+            note(f"render round {rounds}: {candidate.summary}")
             if score <= best_score:
                 best_score, best_state = score, (speech_rows, candidate)
-                logs.append(f"round {rounds} kept (sync score {score})")
+                note(f"round {rounds} kept (sync score {score})")
             else:
-                logs.append(f"round {rounds} rejected (sync score {score} > {best_score}); keeping the better render")
+                note(f"round {rounds} rejected (sync score {score} > {best_score}); keeping the better render")
             result = candidate
         speech_rows, result = best_state
-        logs.append(f"final render kept: sync score {best_score}")
+        note(f"final render kept: sync score {best_score}")
 
         # Assemble the final track once, after timings have converged.
+        context.report({"step": "Ghép track giọng"})
         assemble_voice(result, output_audio, work_dir, crossfade=render_config.crossfade, pitch=settings.tts_pitch_shift)
         context.artifacts["speech_rows"] = speech_rows
         context.artifacts["timings"] = result.timings
@@ -676,7 +720,7 @@ class VoiceoverStage(PipelineStage):
             )
             write_subtitles(cues, Path(context.artifacts["subtitle_json"]), Path(context.artifacts["subtitle_srt"]))
             context.artifacts["display_cues"] = cues
-            logs.append(f"subtitles rebuilt from the fitted rows ({len(cues)} cues)")
+            note(f"subtitles rebuilt from the fitted rows ({len(cues)} cues)")
         speech_tsv = settings.subtitles_dir / f"{context.job_id}.speech.tsv"
         write_tsv(speech_tsv, [r.to_row() for r in speech_rows], SPEECH_FIELDS)
 
@@ -696,6 +740,7 @@ class PackageStage(PipelineStage):
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
         voice_track = context.artifacts.get("voice_track")
+        context.report({"step": "Ghép video, giọng và phụ đề (ffmpeg)"})
         artifacts, logs = package_outputs(
             video=Path(context.artifacts["video"]),
             subtitle_json=Path(context.artifacts["subtitle_json"]),
@@ -810,4 +855,12 @@ def _run_asr(context: PipelineContext, output_srt: Path, asr: AsrTask) -> list[s
         "--chunk-seconds", str(settings.asr_chunk_seconds),
         "--max-chars", "18",
     ]
-    return run_command(command, cwd=settings.root_dir)
+    context.report({"step": "Nhận dạng lời (Whisper)"})
+
+    def on_line(line: str) -> None:
+        # asr_worker_client prints "ASR <done>/<total>" as each chunk comes back
+        match = _ASR_CHUNK_LINE.match(line.strip())
+        if match:
+            context.report({"done": int(match[1]), "total": int(match[2]), "unit": "đoạn"})
+
+    return run_command(command, cwd=settings.root_dir, on_line=on_line, cancel=context.cancel)

@@ -19,8 +19,11 @@ validation, follow-up turns and bisection are exactly the agent path's.
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
+import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -46,8 +49,57 @@ mỗi dòng `ID<TAB>TEXT`, không giải thích gì thêm.
 """
 
 
+# A session that failed on the account's quota: every further session fails the same
+# way, so bisecting it only multiplies dead sessions (measured: one exhausted agy pool
+# grew a 1021-unit job into 103 workspaces before the stage gave up).
+_QUOTA_ERROR = re.compile(r"RESOURCE_EXHAUSTED|quota|usage limit|rate.?limit|\b429\b", re.IGNORECASE)
+
+
 class TranslateError(RuntimeError):
     pass
+
+
+class _Progress:
+    """Live numbers for the stage: units translated so far and sessions in flight.
+
+    Parts run on parallel threads; a unit counts once whichever (sub)session wrote it.
+    ``stopped`` is set by the first quota failure so queued sessions do not start;
+    ``cancel`` (the user stopped the job) also kills the sessions in flight."""
+
+    def __init__(
+        self,
+        total: int,
+        report: Callable[[dict], None] | None,
+        log: Callable[[str], None] | None,
+        cancel: threading.Event | None = None,
+    ):
+        self.total = total
+        self.cancel = cancel
+        self._report = report
+        self._log = log
+        self._lock = threading.Lock()
+        self._done: set[int] = set()
+        self.sessions = 0
+        self.stopped: str | None = None
+
+    def session(self, delta: int) -> None:
+        with self._lock:
+            self.sessions += delta
+            self._publish()
+
+    def finished(self, texts: dict[int, str], missing: list[int], label: str, part: list[Anchor], seconds: float) -> None:
+        with self._lock:
+            self._done.update(unit_id for unit_id in texts if unit_id not in missing)
+            self._publish()
+        self.log(f"{label}: {len(part) - len(missing)}/{len(part)} dòng ({seconds:.0f}s)")
+
+    def log(self, line: str) -> None:
+        if self._log is not None:
+            self._log(line)
+
+    def _publish(self) -> None:
+        if self._report is not None:
+            self._report({"done": len(self._done), "total": self.total, "unit": "dòng", "sessions": self.sessions})
 
 
 @dataclass(slots=True)
@@ -94,6 +146,28 @@ def _parse_table(path: Path) -> dict[int, str]:
     return texts
 
 
+def _provider(llm: AgentConfig) -> str:
+    return (llm.provider or "agy").strip().lower()
+
+
+def _can_resume(workspace: Path, llm: AgentConfig) -> bool:
+    """``--continue`` resumes the cwd's last session OF THAT CLI: a workspace drafted by
+    agy has no Claude Code session to continue, so switching agents starts fresh (the
+    agent still sees out/draft.tsv on disk)."""
+    stamp = workspace / "out" / ".agent"
+    return (workspace / "out" / "draft.tsv").exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == _provider(llm)
+
+
+def _quota_error(runs: list[WorkspaceRun]) -> str | None:
+    for run in runs:
+        if run.returncode != 0:
+            detail = f"{run.stderr}\n{run.stdout}"
+            if _QUOTA_ERROR.search(detail):
+                lines = [line for line in detail.strip().splitlines() if _QUOTA_ERROR.search(line)]
+                return (lines[0] if lines else detail.strip())[:300]
+    return None
+
+
 def _workspace_matches(workspace: Path, digest: str) -> bool:
     stamp = workspace / "input" / ".content"
     return stamp.exists() and stamp.read_text(encoding="utf-8").strip() == digest
@@ -125,6 +199,7 @@ def _prepare_workspace(
         "\n".join(f"{g.term_zh}\t{g.term_vi}\t{g.kind}\t{g.note}" for g in glossary) + "\n", encoding="utf-8"
     )
     (workspace / "input" / "notes.md").write_text(notes or "(không có bối cảnh bổ sung)\n", encoding="utf-8")
+    return keep
 
 
 def _collect(workspace: Path, units: list[Anchor], glossary: list[GlossaryEntry]) -> dict[int, str]:
@@ -159,28 +234,30 @@ def _run_part(
     llm: AgentConfig,
     workspace: Path,
     config: TranslateConfig,
+    cancel: threading.Event | None = None,
 ) -> tuple[dict[int, str], list[WorkspaceRun], list[int]]:
     """One session (plus its bounded follow-up turns) for one part."""
     marked = {unit.id for unit in part}
     keep = _prepare_workspace(workspace, all_units, glossary, config.notes, marked)
+    if keep and not _unusable(_parse_table(workspace / "out" / "final.tsv"), part):
+        # a reviewed final from an earlier attempt (same inputs) needs no new session
+        return _collect(workspace, part, glossary), [], []
     if is_api(llm):
         return _run_part_inline(part, glossary, llm, workspace, config)
-    resume = keep and (workspace / "out" / "draft.tsv").exists()
-    if resume:
-        runs = [run_agent_workspace(workspace, _AGENT_PROMPT, llm, timeout=config.timeout, resume=True)]
-    else:
-        runs = [run_agent_workspace(workspace, _AGENT_PROMPT, llm, timeout=config.timeout)]
+    resume = keep and _can_resume(workspace, llm)
+    (workspace / "out" / ".agent").write_text(_provider(llm), encoding="utf-8")
+    runs = [run_agent_workspace(workspace, _AGENT_PROMPT, llm, timeout=config.timeout, resume=resume, cancel=cancel)]
     texts = _collect(workspace, part, glossary)
     missing = _unusable(texts, part)
     attempt = 0
-    while missing and attempt < max(0, config.retries):
+    while missing and attempt < max(0, config.retries) and not _quota_error(runs):
         attempt += 1
         prompt = (
             f"out/final.tsv còn thiếu/sai {len(missing)} ID: {', '.join(str(i) for i in missing[:40])}. "
             "Bổ sung và sửa đúng định dạng ID<TAB>TEXT (tiếng Việt, KHÔNG Hán tự, không rỗng), "
             "kiểm tra ĐỦ mọi ID có dấu * trong input/units.tsv rồi ghi lại out/final.tsv."
         )
-        runs.append(run_agent_workspace(workspace, prompt, llm, timeout=config.timeout / 2, resume=True))
+        runs.append(run_agent_workspace(workspace, prompt, llm, timeout=config.timeout / 2, resume=True, cancel=cancel))
         texts = _collect(workspace, part, glossary)
         missing = _unusable(texts, part)
     return texts, runs, missing
@@ -271,22 +348,41 @@ def _session(
     llm: AgentConfig,
     workspace: Path,
     config: TranslateConfig,
+    progress: _Progress,
+    label: str,
     depth: int = 0,
 ) -> tuple[dict[int, str], list[WorkspaceRun], list[int], list[str]]:
-    """Run one part; a session that comes back short is BISECTED, never retried as-is."""
-    texts, runs, missing = _run_part(part, all_units, glossary, llm, workspace, config)
+    """Run one part; a session that comes back short is BISECTED, never retried as-is —
+    unless it failed on the quota, which stops the whole stage."""
+    if progress.cancel is not None and progress.cancel.is_set():
+        raise TranslateError("canceled")
+    if progress.stopped:
+        raise TranslateError(f"agent hết quota: {progress.stopped}")
+    progress.session(+1)
+    started = time.monotonic()
+    try:
+        texts, runs, missing = _run_part(part, all_units, glossary, llm, workspace, config, progress.cancel)
+    finally:
+        progress.session(-1)
+    progress.finished(texts, missing, label, part, time.monotonic() - started)
+    quota = _quota_error(runs) if missing else None
+    if quota:
+        progress.stopped = progress.stopped or quota
+        raise TranslateError(f"agent hết quota: {quota}")
     logs: list[str] = []
     if missing and len(part) > config.min_part_units and depth < config.max_split_depth:
         mid = len(part) // 2
-        logs.append(
+        line = (
             f"translate: session left {len(missing)}/{len(part)} units at depth {depth} -> "
             f"bisecting into {mid}+{len(part) - mid}"
         )
+        logs.append(line)
+        progress.log(f"{label}: thiếu {len(missing)}/{len(part)} dòng -> chia đôi {mid}+{len(part) - mid}")
         left_texts, left_runs, left_missing, left_logs = _session(
-            part[:mid], all_units, glossary, llm, workspace / "a", config, depth + 1
+            part[:mid], all_units, glossary, llm, workspace / "a", config, progress, f"{label}/a", depth + 1
         )
         right_texts, right_runs, right_missing, right_logs = _session(
-            part[mid:], all_units, glossary, llm, workspace / "b", config, depth + 1
+            part[mid:], all_units, glossary, llm, workspace / "b", config, progress, f"{label}/b", depth + 1
         )
         texts.update(left_texts)
         texts.update(right_texts)
@@ -302,29 +398,38 @@ def translate(
     llm: AgentConfig,
     workspace: Path,
     config: TranslateConfig | None = None,
+    report: Callable[[dict], None] | None = None,
+    log: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> TranslateResult:
-    """Translate in quota-bounded parallel sessions, each seeing the whole transcript."""
+    """Translate in quota-bounded parallel sessions, each seeing the whole transcript.
+
+    ``report`` receives live counts (units done, sessions in flight) and ``log`` one
+    line per finished session, so a long stage shows how far it got. Setting ``cancel``
+    stops the stage within a second; finished parts stay on disk for the next run."""
     config = config or TranslateConfig()
     if not units:
         return TranslateResult(rows=[])
     workspace = Path(workspace)
     size = max(1, config.part_units)
     parts = [units[i : i + size] for i in range(0, len(units), size)]
+    progress = _Progress(len(units), report, log, cancel)
 
     outcomes: list[tuple[dict[int, str], list[WorkspaceRun], list[int], list[str]]] = []
     if len(parts) == 1:
         # short video: one session at the workspace root, no quota oracle needed
         parallel = 1
-        outcomes.append(_session(parts[0], units, glossary, llm, workspace, config))
+        outcomes.append(_session(parts[0], units, glossary, llm, workspace, config, progress, "phần 1"))
     else:
         parallel = min(len(parts), _parallelism(config, llm))
+        progress.log(f"{len(units)} dòng -> {len(parts)} phần, {parallel} phiên song song ({_provider(llm)})")
         if parallel <= 1:
             for index, part in enumerate(parts):
-                outcomes.append(_session(part, units, glossary, llm, workspace / f"part{index}", config))
+                outcomes.append(_session(part, units, glossary, llm, workspace / f"part{index}", config, progress, f"phần {index + 1}"))
         else:
             with ThreadPoolExecutor(max_workers=parallel) as pool:
                 futures = [
-                    pool.submit(_session, part, units, glossary, llm, workspace / f"part{index}", config)
+                    pool.submit(_session, part, units, glossary, llm, workspace / f"part{index}", config, progress, f"phần {index + 1}")
                     for index, part in enumerate(parts)
                 ]
                 outcomes = [future.result() for future in futures]

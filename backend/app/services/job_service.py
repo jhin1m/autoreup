@@ -45,6 +45,9 @@ class JobService:
         self.pipeline = ProductionPipeline(settings)
         self._lock = threading.Lock()
         self._cancel_requested: set[str] = set()
+        # The cancel event of each job whose pipeline (or download prefetch) is running:
+        # a stop request sets it and the stage in flight stops mid-way.
+        self._cancel_events: dict[str, threading.Event] = {}
         # Bounded FIFO queue so picking many episodes at once doesn't spawn one
         # pipeline thread per job (ASR + ffmpeg + TTS × N oversubscribes the box and
         # crashes it). A small pool of workers drains the queue; the rest wait.
@@ -124,6 +127,17 @@ class JobService:
         self.save(manifest)
         return manifest
 
+    def refresh_settings(self, job_id: str) -> None:
+        """Re-freeze a stopped job's provider settings from the current store, so a retry
+        the user asks for runs with the providers set NOW (e.g. translation moved from an
+        exhausted agy pool to Claude Code). A server-restart resume keeps the old snapshot."""
+        manifest = self.get(job_id)
+        if manifest.state not in {JobState.failed, JobState.canceled}:
+            return
+        manifest.config.settings_snapshot = strip_secrets(SettingsStore(self.settings).load())
+        manifest.touch()
+        self.save(manifest)
+
     def start_background(self, job_id: str) -> None:
         """Enqueue a job to run on the worker pool (FIFO, bounded concurrency).
 
@@ -153,9 +167,10 @@ class JobService:
                     if job_id in self._cancel_requested:
                         return
                 context = self.pipeline.create_context(job_id, manifest.input, manifest.config)
+                context.cancel = self._watch_cancel(job_id)
                 stage = self.pipeline.stages[0]
-                context.on_progress = self._progress_publisher(manifest, stage.name)
                 record = StageRecord(name=stage.name, status=StageStatus.running, started_at=datetime.now(timezone.utc))
+                context.on_progress = self._progress_publisher(manifest, record)
                 result = stage.run(context)
                 record.status = StageStatus.succeeded
                 record.ended_at = datetime.now(timezone.utc)
@@ -181,6 +196,8 @@ class JobService:
                 except Exception:
                     pass
             finally:
+                with self._lock:
+                    self._cancel_events.pop(job_id, None)
                 lock.release()
 
     def _ensure_workers(self) -> None:
@@ -207,11 +224,25 @@ class JobService:
 
     def run(self, job_id: str) -> None:
         with self._job_lock(job_id):
-            self._run_locked(job_id)
+            cancel = self._watch_cancel(job_id)
+            try:
+                self._run_locked(job_id, cancel)
+            finally:
+                with self._lock:
+                    self._cancel_events.pop(job_id, None)
+                    if cancel.is_set():
+                        self._cancel_requested.discard(job_id)
 
-    def _run_locked(self, job_id: str) -> None:
+    def _watch_cancel(self, job_id: str) -> threading.Event:
+        cancel = threading.Event()
+        with self._lock:
+            self._cancel_events[job_id] = cancel
+        return cancel
+
+    def _run_locked(self, job_id: str, cancel: threading.Event) -> None:
         manifest = self.get(job_id)
         context = self.pipeline.create_context(job_id, manifest.input, manifest.config)
+        context.cancel = cancel
         if self._take_cancel(job_id):
             return self._mark_canceled(manifest)
 
@@ -244,10 +275,12 @@ class JobService:
                     return self._mark_canceled(manifest)
                 record = StageRecord(name=stage.name, status=StageStatus.running, started_at=datetime.now(timezone.utc))
                 manifest.stages.append(record)
+                context.reset_live()
+                context.on_progress = self._progress_publisher(manifest, record)
+                manifest.progress = self._live_progress(record, {})
                 manifest.touch()
                 self.save(manifest)
 
-                context.on_progress = self._progress_publisher(manifest, stage.name)
                 result = stage.run(context)
                 manifest.progress = None
                 record.status = StageStatus.succeeded
@@ -264,6 +297,9 @@ class JobService:
             manifest.touch()
             self.save(manifest)
         except Exception as exc:
+            if cancel.is_set():
+                # the stage stopped because the user asked; what it wrote stays for a resume
+                return self._mark_canceled(manifest)
             if manifest.stages:
                 manifest.stages[-1].status = StageStatus.failed
                 manifest.stages[-1].ended_at = datetime.now(timezone.utc)
@@ -274,23 +310,30 @@ class JobService:
             manifest.touch()
             self.save(manifest)
 
-    def _progress_publisher(self, manifest: JobManifest, stage_name) -> Callable[[dict], None]:
-        """A stage's progress callback: put the latest numbers on ``manifest`` and save it,
-        at most once per interval. Runs on the stage's own thread, which owns the job
-        lock, so writing this in-memory manifest cannot race another writer."""
+    def _progress_publisher(self, manifest: JobManifest, record: StageRecord) -> Callable[[dict, bool], None]:
+        """A stage's progress callback: put the latest live state on ``manifest`` and save
+        it — at once when ``urgent`` (a new step, a log line), else at most once per
+        interval (download hooks and counters fire many times per second). Stages call it
+        under the context's live lock, and the stage's thread owns the job lock, so writing
+        this in-memory manifest cannot race another writer."""
         last_save = 0.0
 
-        def publish(progress: dict) -> None:
+        def publish(live: dict, urgent: bool = False) -> None:
             nonlocal last_save
-            manifest.progress = {"stage": str(stage_name), **progress}
+            manifest.progress = self._live_progress(record, live)
             now = time.monotonic()
-            if now - last_save < _PROGRESS_SAVE_INTERVAL:
+            if not urgent and now - last_save < _PROGRESS_SAVE_INTERVAL:
                 return
             last_save = now
             manifest.touch()
             self.save(manifest)
 
         return publish
+
+    @staticmethod
+    def _live_progress(record: StageRecord, live: dict) -> dict:
+        started = record.started_at.isoformat() if record.started_at else None
+        return {"stage": str(record.name), "started_at": started, **live}
 
     def request_cancel(self, job_id: str) -> JobManifest:
         """Ask a pending/running job to stop. No-op for already-finished jobs.
@@ -302,6 +345,9 @@ class JobService:
             return manifest
         with self._lock:
             self._cancel_requested.add(job_id)
+            event = self._cancel_events.get(job_id)
+        if event is not None:
+            event.set()  # the stage in flight stops now, not at the next stage boundary
         return manifest
 
     def _take_cancel(self, job_id: str) -> bool:
@@ -317,6 +363,7 @@ class JobService:
             manifest.stages[-1].ended_at = datetime.now(timezone.utc)
             manifest.stages[-1].error = "canceled"
         manifest.state = JobState.canceled
+        manifest.progress = None
         manifest.touch()
         self.save(manifest)
 

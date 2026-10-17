@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import { OverlayEditor } from "./OverlayEditor";
 import type { Artifact, Episode, JobManifest, SubtitleCue } from "../types";
-import { STAGE_VI, dubErrorVi, formatDuration, formatProgress, latestArtifact } from "../util";
+import { STAGE_VI, dubErrorVi, formatDuration, formatProgress, latestArtifact, stageElapsed } from "../util";
 
 const STAGE_ORDER = ["download", "asr", "glossary", "translate", "qa", "voiceover", "package"];
 
@@ -16,11 +16,26 @@ function toCues(rows: SubtitleCue[]): Cue[] {
     .filter((cue) => cue.text.length > 0);
 }
 
-/** Pipeline checklist so a translating/failed episode shows how far it got and where. */
+/** Re-render every second while ``active`` (an elapsed clock between polls). */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+/** Pipeline checklist so a translating/failed episode shows how far it got and where:
+ *  the stage in flight shows its sub-step, counts, elapsed time and latest log lines. */
 function StageProgress({ ep }: { ep: Episode }) {
   // dub_stage_index counts the stage in flight (or the one that failed) as the last one.
   const current = (ep.dub_stage_index ?? 0) - 1;
   const failed = ep.dub_state === "failed";
+  const live = failed ? null : ep.dub_progress;
+  const now = useNow(Boolean(live?.started_at));
+  const detail = live ? formatProgress(live) : "";
   return (
     <div className="pv-stages">
       <ol>
@@ -30,11 +45,15 @@ function StageProgress({ ep }: { ep: Episode }) {
             <li key={name} className={`stg ${state}`}>
               <span className="stg-mark" aria-hidden>{state === "done" ? "✓" : state === "fail" ? "✕" : state === "now" ? "●" : "○"}</span>
               {STAGE_VI[name] ?? name}
-              {state === "now" && ep.dub_progress ? <span className="stg-live mono">{formatProgress(ep.dub_progress)}</span> : null}
+              {state === "now" && live ? <span className="stg-live mono">{stageElapsed(live, now)}</span> : null}
+              {state === "now" && detail ? <span className="stg-detail">{detail}</span> : null}
             </li>
           );
         })}
       </ol>
+      {live?.logs?.length ? (
+        <pre className="pv-logs mono" aria-live="polite">{live.logs.join("\n")}</pre>
+      ) : null}
       {failed && ep.dub_error ? <p className="pv-err" title={ep.dub_error}>⚠ {dubErrorVi(ep.dub_error)}</p> : null}
     </div>
   );
@@ -62,11 +81,13 @@ export function Preview({
   onClose,
   onRedub,
   onDelete,
+  onStop,
 }: {
   episode: Episode;
   onClose: () => void;
   onRedub: () => void;
   onDelete: () => void;
+  onStop: () => Promise<void>;
 }) {
   const [job, setJob] = useState<JobManifest | null>(null);
   const [dubbed, setDubbed] = useState(true);
@@ -131,6 +152,11 @@ export function Preview({
   // player actually reloads it instead of replaying the browser cache.
   const versioned = art ? `${art.path}?v=${art.size_bytes ?? art.created_at ?? ""}` : "";
   const isDubbed = episode.dub_state === "dubbed";
+  const isRunning = episode.dub_state === "translating";
+  // A failed or stopped dub resumes in place: finished steps and translated parts stay.
+  const canResume = !isDubbed && !isRunning && Boolean(episode.dub_job_id);
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => setStopping(false), [episode.dub_state]);
   const fellBackToSource = dubbed && !!dubArt && artIndex > 0;
   const showSubs = isDubbed && dubbed && !!dubArt && cues.length > 0 && !fellBackToSource;
 
@@ -237,7 +263,18 @@ export function Preview({
                 Khung che & vị trí sub
               </button>
             ) : null}
-            <button className="primary" onClick={onRedub}>{isDubbed ? "Làm lại" : "Dịch tập này"}</button>
+            {isRunning ? (
+              <button
+                className="ghost danger"
+                disabled={stopping}
+                title="Dừng ngay; các bước và phần dịch đã xong được giữ lại"
+                onClick={() => { setStopping(true); onStop().catch(() => setStopping(false)); }}
+              >
+                {stopping ? "Đang dừng…" : "Dừng"}
+              </button>
+            ) : (
+              <button className="primary" onClick={onRedub}>{isDubbed ? "Làm lại" : canResume ? "Dịch tiếp" : "Dịch tập này"}</button>
+            )}
             {isDubbed ? <button className="ghost danger" onClick={onDelete}>Xóa bản dịch</button> : null}
           </div>
         </div>

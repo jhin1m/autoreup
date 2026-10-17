@@ -294,7 +294,8 @@ class LibraryService:
     def translate(self, series_id: str, episode_ids: list[str]) -> list[str]:
         """Dub each episode (one job). A FAILED job is resumed in place — the pipeline
         restarts at the broken stage and reuses the video/ASR/translation already on
-        disk (re-downloading everything on every retry wasted minutes per episode).
+        disk (re-downloading everything on every retry wasted minutes per episode),
+        with the providers set now, not the ones frozen when the job was created.
         Only a previously SUCCEEDED dub is replaced from scratch. Returns the job ids."""
         job_ids: list[str] = []
         for episode_id in episode_ids:
@@ -309,6 +310,8 @@ class LibraryService:
                     except Exception:
                         pass
                 job_id = self.jobs.create(JobInput(url=ep.source_url, series_id=series_id, source_video_id=ep.id)).job_id
+            else:
+                self.jobs.refresh_settings(job_id)
             self.jobs.start_background(job_id)
             self.store.set_episode_dub(ep.id, job_id, DubState.translating)
             job_ids.append(job_id)

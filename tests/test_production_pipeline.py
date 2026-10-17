@@ -62,7 +62,7 @@ class ProductionPipelineTest(unittest.TestCase):
 
             from backend.app.agents.workspace import WorkspaceRun
 
-            def fake_run(workspace, prompt, config, *, timeout=None, resume=False):
+            def fake_run(workspace, prompt, config, *, timeout=None, resume=False, cancel=None):
                 # the real agent writes artifacts; the stub does the same
                 ws = Path(workspace)
                 (ws / "out").mkdir(parents=True, exist_ok=True)

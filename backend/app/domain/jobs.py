@@ -57,7 +57,8 @@ class PipelineConfig(BaseModel):
     tail_out: float = 0.28
     stages: list[StageName] = Field(default_factory=lambda: [stage for stage in StageName if stage is not StageName.edit])
     # Provider/model settings frozen when the job was created (secrets stripped — the
-    # manifest is served). A resume runs with this, not with whatever is current now.
+    # manifest is served). A server-restart resume runs with this; a retry the user asks
+    # for re-freezes it from the current settings first (JobService.refresh_settings).
     settings_snapshot: dict | None = None
 
 
@@ -81,8 +82,9 @@ class JobManifest(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     stages: list[StageRecord] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
-    # Live progress of the stage in flight, e.g. {"stage": "download", "downloaded_bytes": ..,
-    # "total_bytes": .., "speed": .., "eta": ..}. Cleared when the stage ends.
+    # Live progress of the stage in flight: {"stage", "started_at", and what the stage
+    # reports — "step" label, "done"/"total"/"unit" counts, download bytes/speed/eta,
+    # the last "logs" lines}. Cleared when the stage ends.
     progress: dict | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

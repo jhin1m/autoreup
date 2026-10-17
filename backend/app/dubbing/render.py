@@ -33,6 +33,8 @@ from .text import strip_explicit_turn_markers
 from .timeline import RowPlan, TimelineConfig, plan_rows, summarize
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from backend.app.services.capcut_tts import CapCutTtsClient
     from backend.app.services.tts_engines import TtsEngine
 
@@ -149,12 +151,14 @@ def render(
     cache_dir: Path,
     synth_client: "CapCutTtsClient | None" = None,
     engine: "TtsEngine | None" = None,
+    on_synth: "Callable[[int, int], None] | None" = None,
 ) -> RenderResult:
     """Synthesize every row and place it at its caption; report measured timings.
 
     Every synth goes through ``engine`` (its ``cache_id`` keys the raw-clip cache); a
     legacy ``synth_client`` becomes a CapCut engine. Does NOT assemble the final track
     (the fit loop re-measures first); call :func:`assemble_voice` once timings converge.
+    ``on_synth(done, total)`` follows the clips synthesized in this call (cache misses).
     """
     require_ffmpeg()
     blocks, usable = _blocks_from_rows(speech_rows, config.text_mode)
@@ -198,6 +202,8 @@ def render(
             raise RuntimeError(f"TTS engine returned {len(audios)} clips for {len(chunk)} texts")
         with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
             list(pool.map(store_raw, [rp for rp, _ in chunk], audios))
+        if on_synth is not None:
+            on_synth(start + len(chunk), len(todo))
 
     def ensure_raw(block: TtsBlock) -> Path:
         raw_path = raw_path_for(block)

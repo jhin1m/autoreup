@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import * as api from "../api";
 import { Preview } from "../library/Preview";
 import {
   useAddSource,
@@ -130,6 +131,17 @@ export function SeriesPage() {
           episode={episodes.find((e) => e.id === preview.id) ?? preview}
           onClose={() => setPreview(null)}
           onRedub={() => { setPreview(null); doTranslate([preview.id]); }}
+          onStop={async () => {
+            const jobId = (episodes.find((e) => e.id === preview.id) ?? preview).dub_job_id;
+            if (!jobId) return;
+            try {
+              await api.cancelJob(jobId);
+              toast("Đang dừng — phần đã xong được giữ lại, bấm “Dịch tiếp” để chạy tiếp", "success");
+            } catch (error) {
+              toast(error instanceof Error ? error.message : "Không dừng được", "error");
+              throw error;
+            }
+          }}
           onDelete={async () => {
             setPreview(null);
             if (await confirm("Xóa bản dịch của tập này?")) {

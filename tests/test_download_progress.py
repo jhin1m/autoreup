@@ -95,14 +95,16 @@ def test_job_publishes_stage_progress_and_clears_it_when_the_stage_ends(tmp_path
         name = StageName.download
 
         def run(self, context):
-            context.on_progress({"downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 18})
+            context.report({"downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 18})
             on_disk_mid_stage.append(service.get(job_id).progress)
             return StageResult(name=self.name)
 
     service.pipeline.stages = [SlowDownload()]
     service.run(job_id)
 
-    assert on_disk_mid_stage == [{"stage": "download", "downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 18}]
+    [mid] = on_disk_mid_stage
+    assert mid.pop("started_at")  # the stage's start, for the elapsed clock
+    assert mid == {"stage": "download", "downloaded_bytes": 10, "total_bytes": 100, "speed": 5.0, "eta": 18}
     final = service.get(job_id)
     assert final.state == JobState.succeeded
     assert final.progress is None
