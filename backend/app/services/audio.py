@@ -11,7 +11,11 @@ import os
 import shutil
 import subprocess
 import threading
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import numpy as np
 
 
 def run_command(args: list[str]) -> list[str]:
@@ -207,6 +211,34 @@ def render_silence(path: Path, duration: float) -> None:
     ])
 
 
+_MIX_RATE = 44100
+_MIX_WINDOW_SECONDS = 30.0
+_MIX_PREFETCH = 16
+
+
+def _fade_gain(position: np.ndarray, length: float, curve: str) -> np.ndarray:
+    """ffmpeg ``afade`` gains for 0..1 progress: ``tri`` is linear, ``qsin`` a quarter sine."""
+    x = np.clip(position / length, 0.0, 1.0)
+    return np.sin(x * (np.pi / 2)) if curve == "qsin" else x
+
+
+def _placed_clip(path: Path, duration: float, fin: float, fin_curve: str, fout: float, fout_curve: str) -> np.ndarray:
+    """One clip as float32 stereo at ``_MIX_RATE``, faded like ``afade`` in/out and cut at
+    ``duration`` (an ``afade`` out silences everything after its end)."""
+    completed = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(_MIX_RATE), "pipe:1"],
+        capture_output=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Command failed ({completed.returncode}): decode {path}\n{completed.stderr.decode(errors='replace')[-2000:]}")
+    samples = np.frombuffer(completed.stdout, dtype="<f4").reshape(-1, 2)
+    samples = samples[: max(0, int(round(duration * _MIX_RATE)))].copy()
+    t = np.arange(len(samples), dtype=np.float64) / _MIX_RATE
+    gain = _fade_gain(t, fin, fin_curve) * _fade_gain(duration - t, fout, fout_curve)
+    samples *= gain[:, None].astype(np.float32)
+    return samples
+
+
 def assemble_track(
     placements: list[tuple[float, Path, float, bool]],
     output_path: Path,
@@ -217,10 +249,14 @@ def assemble_track(
 
     ``placements`` are ``(place_start, clip_path, duration, glued)`` — the timeline
     stage owns the planning (run-level tempo, breaths, run-boundary anchoring).
-    One ffmpeg filtergraph: fade each clip's edges (equal-power ``qsin`` where it
-    overlaps a glued neighbour, a short declick otherwise), delay it into its slot,
-    then ``amix``. amix sums, so the matched crossfades stay at unity while gaps
-    between runs stay silent.
+    Each clip's edges are faded (equal-power ``qsin`` where it overlaps a glued
+    neighbour, a short declick otherwise) and summed into its slot, so the matched
+    crossfades stay at unity while gaps between runs stay silent.
+
+    The sum runs in numpy over 30-second windows streamed into a single ffmpeg encode:
+    work grows with the clips' own length. (One ``amix`` over every clip summed all
+    inputs for every frame of the track — a 2.4 h episode with 1875 lines ran at
+    ~0.5x realtime.)
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not placements:
@@ -229,39 +265,62 @@ def assemble_track(
 
     cursor = max((place + duration for place, _path, duration, _glued in placements), default=0.0)
     track_end = max(cursor, total_duration or 0.0)
+    total = int(round(max(0.1, track_end) * _MIX_RATE))
 
     declick = 0.008
     n = len(placements)
-    inputs: list[str] = []
-    chains: list[str] = []
-    labels: list[str] = []
+    jobs: list[tuple[int, tuple]] = []
     for index, (place, path, duration, glued_head) in enumerate(placements):
-        inputs += ["-i", str(path)]
         glued_tail = index + 1 < n and placements[index + 1][3]
         fin = min(crossfade if glued_head else declick, duration / 2)
         fout = min(crossfade if glued_tail else declick, duration / 2)
-        fin_curve = "qsin" if glued_head else "tri"
-        fout_curve = "qsin" if glued_tail else "tri"
-        delay_ms = max(0, int(round(place * 1000)))
-        chains.append(
-            f"[{index}:a]aresample=44100,"
-            f"afade=t=in:curve={fin_curve}:st=0:d={fin:.3f},"
-            f"afade=t=out:curve={fout_curve}:st={max(0.0, duration - fout):.3f}:d={fout:.3f},"
-            f"adelay={delay_ms}:all=1[a{index}]"
-        )
-        labels.append(f"[a{index}]")
+        # the planned millisecond, as adelay took it (the amix graph landed within ±1 sample)
+        start = int(max(0, int(round(place * 1000))) * _MIX_RATE / 1000 + 0.5)
+        jobs.append((start, (Path(path), duration, fin, "qsin" if glued_head else "tri", fout, "qsin" if glued_tail else "tri")))
+    jobs.sort(key=lambda job: job[0])
 
-    if n == 1:
-        graph = chains[0] + ";[a0]apad[mix]"
-    else:
-        graph = ";".join(chains) + ";" + "".join(labels) + f"amix=inputs={n}:normalize=0:dropout_transition=0,apad[mix]"
+    encoder = subprocess.Popen(
+        ["ffmpeg", "-y", "-v", "error", "-f", "f32le", "-ar", str(_MIX_RATE), "-ac", "2", "-i", "pipe:0",
+         "-c:a", "aac", "-b:a", "192k", str(output_path)],
+        stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    window = int(_MIX_WINDOW_SECONDS * _MIX_RATE)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            ahead: deque = deque()
+            queued = 0
 
-    run_command([
-        "ffmpeg", "-y", "-v", "error",
-        *inputs,
-        "-filter_complex", graph,
-        "-map", "[mix]",
-        "-t", f"{max(0.1, track_end):.3f}",
-        "-ac", "2", "-c:a", "aac", "-b:a", "192k",
-        str(output_path),
-    ])
+            def fill() -> None:
+                nonlocal queued
+                while queued < len(jobs) and len(ahead) < _MIX_PREFETCH:
+                    start, args = jobs[queued]
+                    ahead.append((start, pool.submit(_placed_clip, *args)))
+                    queued += 1
+
+            active: list[tuple[int, np.ndarray]] = []
+            position = 0
+            while position < total:
+                end = min(position + window, total)
+                fill()
+                while ahead and ahead[0][0] < end:
+                    start, future = ahead.popleft()
+                    active.append((start, future.result()))
+                    fill()
+                block = np.zeros((end - position, 2), dtype=np.float32)
+                for start, samples in active:
+                    lo, hi = max(start, position), min(start + len(samples), end)
+                    if lo < hi:
+                        block[lo - position:hi - position] += samples[lo - start:hi - start]
+                active = [(start, samples) for start, samples in active if start + len(samples) > end]
+                encoder.stdin.write(block.tobytes())
+                position = end
+        encoder.stdin.close()
+    except BrokenPipeError:
+        pass  # the encoder died: its own error is reported below
+    except BaseException:
+        encoder.kill()
+        encoder.wait()
+        raise
+    stderr = encoder.stderr.read().decode(errors="replace")
+    if encoder.wait() != 0:
+        raise RuntimeError(f"Command failed ({encoder.returncode}): encode {output_path}\n{stderr[-2000:]}")
