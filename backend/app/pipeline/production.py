@@ -112,9 +112,7 @@ def _load_overlay(context: PipelineContext):
     return load_overlay(context.job_dir, context.job_id)
 
 
-def _hardsub_config(settings: Settings, overlay=None, video: Path | None = None):
-    """``video`` sizes the encode to the source's quality; without it (frame previews,
-    which never encode a stream) the bitrate falls back to ``video_bitrate_max``."""
+def _hardsub_config(settings: Settings, overlay=None):
     from backend.app.services.fonts import default_font, resolve_font
     from backend.app.services.hardsub import HardsubConfig
     from backend.app.infrastructure.ffmpeg_encode import video_encode_args, canonical_scale_filter
@@ -130,7 +128,7 @@ def _hardsub_config(settings: Settings, overlay=None, video: Path | None = None)
         bed_volume=settings.dub_bed_volume,
         duck=settings.dub_duck,
         carve_db=settings.dub_carve_db,
-        video_codec_args=tuple(video_encode_args(settings, video, getattr(overlay, "bitrate", ""))),
+        video_codec_args=tuple(video_encode_args(settings, getattr(overlay, "bitrate", ""))),
         scale_filter=scale_filter,
         # The caption is rendered in the OUTPUT space. Without a canonical scale the
         # output IS the source, so the overlay must stay source-sized (0 = source).
@@ -745,7 +743,7 @@ class PackageStage(PipelineStage):
         voice_track = context.artifacts.get("voice_track")
         video = Path(context.artifacts["video"])
         overlay = _load_overlay(context)
-        hardsub_config = _hardsub_config(settings, overlay, video)
+        hardsub_config = _hardsub_config(settings, overlay)
         context.report({"step": "Ghép video, giọng và phụ đề (ffmpeg)"})
         context.log(f"font {Path(hardsub_config.font_path).name} · {_encode_summary(settings, video, getattr(overlay, 'bitrate', ''))}")
         artifacts, logs = package_outputs(
@@ -769,7 +767,7 @@ def _encode_summary(settings: Settings, video: Path, bitrate: str = "") -> str:
 
     probe = probe_video(video) or {}
     source = f"gốc {probe.get('codec') or '?'} {probe.get('bit_rate', 0) // 1000} kbit/s → " if probe else ""
-    return f"{source}h264 {target_bitrate(settings, video, bitrate) // 1000} kbit/s"
+    return f"{source}h264 {target_bitrate(settings, bitrate) // 1000} kbit/s"
 
 
 def _artifact(kind: ArtifactKind, path: Path, data_dir: Path) -> Artifact:

@@ -170,21 +170,19 @@ def _frame_info(video: Path) -> dict:
 
 
 def _encode_info(video: Path) -> dict:
-    """The source's own rate and what "theo video gốc" would encode at, so the editor
-    can label each bitrate choice with the file size it produces."""
+    """The render quality tiers (measured, see BITRATE_PRESETS) and the source's own
+    codec/rate, so the editor can label each choice with the file size it produces."""
     from backend.app.api.deps import get_job_service
-    from backend.app.infrastructure.ffmpeg_encode import parse_bitrate, probe_video, target_bitrate
+    from backend.app.infrastructure.ffmpeg_encode import BITRATE_PRESETS, probe_video
 
     settings = get_job_service().settings
     probe = probe_video(video) or {}
     return {
         "source_codec": probe.get("codec", ""),
         "source_bitrate": probe.get("bit_rate", 0),
-        "auto_bitrate": target_bitrate(settings, video, "source"),
         "default": settings.video_bitrate,
-        "default_bitrate": target_bitrate(settings, video),
         "audio_bitrate": 192_000,
-        "max_bitrate": parse_bitrate(settings.video_bitrate_max),
+        "presets": list(BITRATE_PRESETS),
     }
 
 

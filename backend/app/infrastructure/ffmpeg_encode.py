@@ -34,53 +34,41 @@ def use_hw_encode(settings: Settings) -> bool:
     return settings.video_hw_encode and platform.system() == "Darwin" and _has_videotoolbox()
 
 
-def video_encode_args(settings: Settings, source: Path | None = None, bitrate: str = "") -> list[str]:
-    """ffmpeg -c:v ... args for the chosen H.264 encoder, sized to ``source``
-    (or to ``bitrate`` when the user picked one for this render)."""
-    rate = target_bitrate(settings, source, bitrate)
+def video_encode_args(settings: Settings, bitrate: str = "") -> list[str]:
+    """ffmpeg -c:v ... args for the chosen H.264 encoder at ``bitrate`` (the render's
+    own pick) or the ``video_bitrate`` setting."""
+    rate = target_bitrate(settings, bitrate)
     if use_hw_encode(settings):
         # videotoolbox has no CRF; drive quality with a target bitrate.
         return ["-c:v", "h264_videotoolbox", "-b:v", str(rate), "-pix_fmt", "yuv420p"]
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-maxrate", str(rate), "-bufsize", str(rate * 2), "-pix_fmt", "yuv420p"]
 
 
-# H.264 bits needed per source bit for the same picture. Measured on a real AV1 episode
-# (60s, SSIM vs the decoded source): videotoolbox at the source's 440k = 0.974 and
-# visibly blocky, at 2x (900k) = 0.986 and indistinguishable from the source.
-_H264_BITS_PER_SOURCE_BIT = {"av1": 2.0, "vp9": 1.8, "hevc": 1.5, "h264": 1.2}
-_MIN_BITRATE = 500_000
+# Quality tiers of a 1080p30 render, measured with VMAF against the sharpened source
+# (3 x 20s of a Bilibili AV1 episode, videotoolbox). ~95 is where the eye stops telling
+# the render from the source. Sizing from the source's own rate does not work: 2x a
+# 441k AV1 source (881k) scored 79.7 — visibly a tier below the original.
+BITRATE_PRESETS = (
+    {"value": "1500k", "label": "Tiết kiệm", "hint": "kém bản gốc, thấy rõ ở cảnh tối", "vmaf": 90},
+    {"value": "2500k", "label": "Như gốc", "hint": "mắt thường không phân biệt với bản gốc", "vmaf": 95},
+    {"value": "4M", "label": "Cao", "hint": "dư chất lượng khi nền tảng nén lại", "vmaf": 97},
+    {"value": "8M", "label": "Tối đa", "hint": "mức YouTube khuyến nghị cho 1080p", "vmaf": 98},
+)
 
 
-def target_bitrate(settings: Settings, source: Path | None = None, bitrate: str = "") -> int:
-    """Video bitrate (bit/s) for a re-encode: the source's quality, not a flat number.
-
-    ``bitrate`` (the render's own pick) or else ``video_bitrate``: "source" scales the
-    source's own rate by its codec's efficiency (and by the pixel ratio when the
-    canonical size upscales), capped at ``video_bitrate_max``; a fixed value like "8M"
-    is used as is."""
-    ceiling = parse_bitrate(settings.video_bitrate_max)
-    choice = bitrate or settings.video_bitrate
-    if choice != "source":
-        return parse_bitrate(choice)
-    probe = probe_video(source) if source else None
-    if not probe or not probe["bit_rate"]:
-        return ceiling
-    factor = _H264_BITS_PER_SOURCE_BIT.get(probe["codec"], 1.5)
-    pixels = probe["width"] * probe["height"]
-    upscale = max(1.0, settings.video_width * settings.video_height / pixels) if pixels else 1.0
-    return int(min(ceiling, max(_MIN_BITRATE, probe["bit_rate"] * factor * upscale)))
+def target_bitrate(settings: Settings, bitrate: str = "") -> int:
+    """Video bitrate (bit/s): the render's pick, else the ``video_bitrate`` setting."""
+    return parse_bitrate(bitrate or settings.video_bitrate)
 
 
-BITRATE_RE = re.compile(r"^(source|\d+(\.\d+)?[km]?)$", re.IGNORECASE)
+BITRATE_RE = re.compile(r"^\d+(\.\d+)?[km]?$", re.IGNORECASE)
 MIN_PICKED_BITRATE, MAX_PICKED_BITRATE = 300_000, 50_000_000
 
 
 def valid_bitrate(value: str) -> bool:
-    """A user-picked rate: "source" or 300k..50M ("1800k", "4M", "2500000")."""
+    """A user-picked rate within 300k..50M ("1800k", "4M", "2500000")."""
     value = value.strip()
-    if not BITRATE_RE.match(value):
-        return False
-    return value.lower() == "source" or MIN_PICKED_BITRATE <= parse_bitrate(value) <= MAX_PICKED_BITRATE
+    return bool(BITRATE_RE.match(value)) and MIN_PICKED_BITRATE <= parse_bitrate(value) <= MAX_PICKED_BITRATE
 
 
 def parse_bitrate(value: str) -> int:

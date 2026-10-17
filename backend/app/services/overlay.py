@@ -49,7 +49,7 @@ class OverlayConfig:
     caption_scale: float = 1.0
     cover: list[CoverRegion] = field(default_factory=list)
     font: str = ""  # caption font file (one of services.fonts.list_fonts); "" = the app default
-    bitrate: str = ""  # video bitrate for this render ("1800k", "4M", "source"); "" = the app setting
+    bitrate: str = ""  # video bitrate for this render ("2500k", "4M"); "" = the app setting
 
     def band_region(self) -> CoverRegion | None:
         for region in self.cover:

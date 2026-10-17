@@ -307,18 +307,19 @@ export type OverlayConfig = {
   cover: CoverRegion[];
   /** caption font file (one of fetchFonts); "" = the app default */
   font?: string;
-  /** video bitrate for the render ("1800k", "4M", "source"); "" = the app setting */
+  /** video bitrate for the render ("2500k", "4M"); "" = the app setting */
   bitrate?: string;
 };
+
+export type BitratePreset = { value: string; label: string; hint: string; vmaf: number };
 
 export type OverlayEncode = {
   source_codec: string;
   source_bitrate: number;
-  auto_bitrate: number;
+  /** the app's default render bitrate (one of presets, normally) */
   default: string;
-  default_bitrate: number;
   audio_bitrate: number;
-  max_bitrate: number;
+  presets: BitratePreset[];
 };
 
 export type FontInfo = { path: string; name: string; source: "app" | "user" | "system" };

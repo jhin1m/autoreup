@@ -560,9 +560,13 @@ export function OverlayEditor({
             {frame?.encode ? (
               <label className="ov-quality">
                 <span className="mono tiny">Chất lượng video</span>
-                <select value={config?.bitrate ?? ""} onChange={(event) => patch({ bitrate: event.target.value })}>
+                <select
+                  value={config?.bitrate || frame.encode.default}
+                  onChange={(event) => patch({ bitrate: event.target.value })}
+                  title={sourceNote(frame.encode)}
+                >
                   {bitrateChoices(frame.encode, config?.bitrate ?? "").map((choice) => (
-                    <option key={choice.value} value={choice.value}>
+                    <option key={choice.value} value={choice.value} title={choice.hint}>
                       {choice.label} · {formatKbps(choice.rate)} · ~{formatSize(choice.rate, frame.encode!, frame.duration)}
                     </option>
                   ))}
@@ -582,24 +586,29 @@ export function OverlayEditor({
   );
 }
 
-type BitrateChoice = { value: string; label: string; rate: number };
+type BitrateChoice = { value: string; label: string; hint: string; rate: number };
 
-const FIXED_BITRATES = ["1500k", "2500k", "4M", "8M"];
-
-/** "" = the app setting; "source" = the source's quality (its codec's rate x H.264's
- *  overhead); fixed rates above it; the source's exact rate for the curious. */
+/** The measured quality tiers (VMAF vs the source); the app default is marked, and a
+ *  rate saved outside the tiers stays selectable instead of silently changing. */
 function bitrateChoices(encode: OverlayEncode, current: string): BitrateChoice[] {
-  const codec = encode.source_codec ? encode.source_codec.toUpperCase() : "?";
-  const choices: BitrateChoice[] = [
-    { value: "", label: encode.default === "source" ? "Theo chất lượng gốc (mặc định)" : `Mặc định (${encode.default})`, rate: encode.default_bitrate },
-  ];
-  if (encode.default !== "source") choices.push({ value: "source", label: "Theo chất lượng gốc", rate: encode.auto_bitrate });
-  if (encode.source_bitrate) {
-    choices.push({ value: `${Math.round(encode.source_bitrate / 1000)}k`, label: `Bằng bitrate gốc ${codec} (dễ vỡ hình)`, rate: encode.source_bitrate });
+  const choices = encode.presets.map((preset) => ({
+    value: preset.value,
+    label: preset.value === encode.default ? `${preset.label} (mặc định)` : preset.label,
+    hint: preset.hint,
+    rate: parseRate(preset.value),
+  }));
+  if (!choices.some((choice) => choice.value === encode.default)) {
+    choices.unshift({ value: encode.default, label: "Mặc định", hint: "", rate: parseRate(encode.default) });
   }
-  for (const value of FIXED_BITRATES) choices.push({ value, label: value.replace("k", " kbit/s").replace("M", " Mbit/s"), rate: parseRate(value) });
-  if (current && !choices.some((choice) => choice.value === current)) choices.push({ value: current, label: current, rate: parseRate(current) });
+  if (current && !choices.some((choice) => choice.value === current)) {
+    choices.push({ value: current, label: "Đã chọn trước đó", hint: "", rate: parseRate(current) });
+  }
   return choices;
+}
+
+function sourceNote(encode: OverlayEncode): string {
+  if (!encode.source_bitrate) return "";
+  return `Video gốc: ${encode.source_codec.toUpperCase()} ${formatKbps(encode.source_bitrate)}`;
 }
 
 function parseRate(value: string): number {
