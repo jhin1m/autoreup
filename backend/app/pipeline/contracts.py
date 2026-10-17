@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from backend.app.domain.artifacts import Artifact
@@ -36,3 +37,6 @@ class PipelineContext:
     artifacts: dict[str, object] = field(default_factory=dict)
     series_id: str | None = None
     source_video_id: str | None = None  # library link: keys the source-video cache  # library link: lets stages share per-series state (e.g. glossary)
+    # Live progress of a long stage (download bytes/speed/eta); the job runner
+    # publishes it on the manifest. None when nobody is listening.
+    on_progress: Callable[[dict], None] | None = None

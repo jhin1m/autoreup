@@ -116,6 +116,16 @@ export type Episode = {
   dub_stage_index: number | null;
   dub_stage_total: number | null;
   dub_error: string | null;
+  dub_progress: DubProgress | null;
+};
+
+/** Live numbers of the stage in flight (today: the video download). */
+export type DubProgress = {
+  stage: string;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  speed: number | null; // bytes/s
+  eta: number | null; // seconds
 };
 
 export type Export = {

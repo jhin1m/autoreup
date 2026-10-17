@@ -276,12 +276,19 @@ class LibraryService:
             ep.dub_stage = failed.name if failed else None
             ep.dub_stage_index = len(m.stages)
             ep.dub_error = m.error or (failed.error if failed else None)
+        elif m.progress and not m.stages:
+            # A queued job prefetching its video: the download is already under way.
+            ep.dub_stage = m.progress.get("stage")
+            ep.dub_stage_index = 1
+            ep.dub_progress = m.progress
         elif not m.stages:
             ep.dub_stage = "queued"
             ep.dub_stage_index = 0
         else:
             ep.dub_stage = m.stages[-1].name
             ep.dub_stage_index = len(m.stages)
+            if m.progress and m.progress.get("stage") == str(m.stages[-1].name):
+                ep.dub_progress = m.progress
 
     def translate(self, series_id: str, episode_ids: list[str]) -> list[str]:
         """Dub each episode (one job). A FAILED job is resumed in place — the pipeline

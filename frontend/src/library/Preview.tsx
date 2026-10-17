@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import { OverlayEditor } from "./OverlayEditor";
 import type { Artifact, Episode, JobManifest, SubtitleCue } from "../types";
-import { STAGE_VI, dubErrorVi, formatDuration, latestArtifact } from "../util";
+import { STAGE_VI, dubErrorVi, formatDuration, formatProgress, latestArtifact } from "../util";
 
 const STAGE_ORDER = ["download", "asr", "glossary", "translate", "qa", "voiceover", "package"];
 
@@ -18,17 +18,19 @@ function toCues(rows: SubtitleCue[]): Cue[] {
 
 /** Pipeline checklist so a translating/failed episode shows how far it got and where. */
 function StageProgress({ ep }: { ep: Episode }) {
-  const done = ep.dub_stage_index ?? 0;
+  // dub_stage_index counts the stage in flight (or the one that failed) as the last one.
+  const current = (ep.dub_stage_index ?? 0) - 1;
   const failed = ep.dub_state === "failed";
   return (
     <div className="pv-stages">
       <ol>
         {STAGE_ORDER.map((name, i) => {
-          const state = failed && i === done - 1 ? "fail" : i < done ? "done" : i === done && !failed ? "now" : "todo";
+          const state = i < current ? "done" : i === current ? (failed ? "fail" : "now") : "todo";
           return (
             <li key={name} className={`stg ${state}`}>
               <span className="stg-mark" aria-hidden>{state === "done" ? "✓" : state === "fail" ? "✕" : state === "now" ? "●" : "○"}</span>
               {STAGE_VI[name] ?? name}
+              {state === "now" && ep.dub_progress ? <span className="stg-live mono">{formatProgress(ep.dub_progress)}</span> : null}
             </li>
           );
         })}

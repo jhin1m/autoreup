@@ -127,7 +127,7 @@ export function SeriesPage() {
 
       {preview ? (
         <Preview
-          episode={preview}
+          episode={episodes.find((e) => e.id === preview.id) ?? preview}
           onClose={() => setPreview(null)}
           onRedub={() => { setPreview(null); doTranslate([preview.id]); }}
           onDelete={async () => {

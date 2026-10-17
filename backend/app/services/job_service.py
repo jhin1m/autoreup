@@ -2,6 +2,8 @@ import json
 import queue
 import shutil
 import threading
+import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -27,6 +29,9 @@ def drop_missing_artifacts(manifest: JobManifest, data_dir: Path) -> JobManifest
     if len(kept) != len(manifest.artifacts):
         manifest.artifacts = kept
     return manifest
+
+
+_PROGRESS_SAVE_INTERVAL = 1.0  # seconds; yt-dlp fires hooks many times per second
 
 
 class JobBusyError(RuntimeError):
@@ -82,6 +87,7 @@ class JobService:
                 manifest.stages[-1].error = "interrupted (server restart)"
             manifest.state = JobState.queued
             manifest.error = None
+            manifest.progress = None
             manifest.touch()
             self.save(manifest)
             self.start_background(manifest.job_id)
@@ -146,6 +152,7 @@ class JobService:
                         return
                 context = self.pipeline.create_context(job_id, manifest.input, manifest.config)
                 stage = self.pipeline.stages[0]
+                context.on_progress = self._progress_publisher(manifest, stage.name)
                 record = StageRecord(name=stage.name, status=StageStatus.running, started_at=datetime.now(timezone.utc))
                 result = stage.run(context)
                 record.status = StageStatus.succeeded
@@ -159,10 +166,18 @@ class JobService:
                 manifest.stages.append(record)
                 manifest.artifacts.extend(result.artifacts)
                 manifest.metrics[result.name] = result.metrics
+                manifest.progress = None
                 manifest.touch()
                 self.save(manifest)
             except Exception:
-                pass  # the worker will download normally
+                # The worker will download normally; until then don't show a frozen bar.
+                try:
+                    manifest = self.get(job_id)
+                    if manifest.progress is not None:
+                        manifest.progress = None
+                        self.save(manifest)
+                except Exception:
+                    pass
             finally:
                 lock.release()
 
@@ -213,6 +228,7 @@ class JobService:
         manifest.artifacts = [artifact for record in kept for artifact in record.artifacts]
         manifest.metrics = {str(record.name): record.metrics for record in kept}
         manifest.error = None
+        manifest.progress = None
         manifest.state = JobState.running
         manifest.touch()
         self.save(manifest)
@@ -229,7 +245,9 @@ class JobService:
                 manifest.touch()
                 self.save(manifest)
 
+                context.on_progress = self._progress_publisher(manifest, stage.name)
                 result = stage.run(context)
+                manifest.progress = None
                 record.status = StageStatus.succeeded
                 record.ended_at = datetime.now(timezone.utc)
                 record.artifacts = result.artifacts
@@ -248,10 +266,29 @@ class JobService:
                 manifest.stages[-1].status = StageStatus.failed
                 manifest.stages[-1].ended_at = datetime.now(timezone.utc)
                 manifest.stages[-1].error = str(exc)
+            manifest.progress = None
             manifest.state = JobState.failed
             manifest.error = str(exc)
             manifest.touch()
             self.save(manifest)
+
+    def _progress_publisher(self, manifest: JobManifest, stage_name) -> Callable[[dict], None]:
+        """A stage's progress callback: put the latest numbers on ``manifest`` and save it,
+        at most once per interval. Runs on the stage's own thread, which owns the job
+        lock, so writing this in-memory manifest cannot race another writer."""
+        last_save = 0.0
+
+        def publish(progress: dict) -> None:
+            nonlocal last_save
+            manifest.progress = {"stage": str(stage_name), **progress}
+            now = time.monotonic()
+            if now - last_save < _PROGRESS_SAVE_INTERVAL:
+                return
+            last_save = now
+            manifest.touch()
+            self.save(manifest)
+
+        return publish
 
     def request_cancel(self, job_id: str) -> JobManifest:
         """Ask a pending/running job to stop. No-op for already-finished jobs.

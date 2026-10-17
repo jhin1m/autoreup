@@ -78,6 +78,9 @@ class JobManifest(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     stages: list[StageRecord] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
+    # Live progress of the stage in flight, e.g. {"stage": "download", "downloaded_bytes": ..,
+    # "total_bytes": .., "speed": .., "eta": ..}. Cleared when the stage ends.
+    progress: dict | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

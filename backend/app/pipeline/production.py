@@ -249,7 +249,7 @@ class DownloadStage(PipelineStage):
                 metrics={"reused_cached_video": True, "duration": cached_duration},
                 logs=[f"download: reused cached source video {cached.name}"],
             )
-        result = _download_source(settings, context.input_url, context.job_id)
+        result = _download_source(settings, context.input_url, context.job_id, context.on_progress)
         video = Path(result["path"])
         if cached is not None and video.exists() and not cached.exists():
             try:
@@ -270,6 +270,7 @@ class DownloadStage(PipelineStage):
                 "thumbnail_url": result.get("thumbnail_url"),
                 "uploader": result.get("uploader"),
                 "webpage_url": result.get("webpage_url"),
+                "cdn_host": result.get("cdn_host"),
             },
         )
 
@@ -801,7 +802,7 @@ def _make_thumbnail(video: Path, out: Path) -> Path | None:
     return out if completed.returncode == 0 and out.exists() else None
 
 
-def _download_source(settings: Settings, url: str, job_id: str) -> dict:
+def _download_source(settings: Settings, url: str, job_id: str, on_progress=None) -> dict:
     """Douyin goes through the headless-browser extractor; everything else via yt-dlp."""
     from backend.app.services.cookie_vault import CookieVault
     from backend.app.studio.providers import detect_platform
@@ -826,7 +827,9 @@ def _download_source(settings: Settings, url: str, job_id: str) -> dict:
                 return extractor.download(url, job_id)
 
     cookies_file = (vault.netscape_file(platform.value) if platform.value in {"douyin", "bilibili"} else None)
-    return YtDlpDownloader(settings.videos_dir).download(url, str(cookies_file) if cookies_file else settings.cookies_file, job_id)
+    return YtDlpDownloader(settings.videos_dir).download(
+        url, str(cookies_file) if cookies_file else settings.cookies_file, job_id, on_progress=on_progress
+    )
 
 
 def _count_kinds(glossary: list[GlossaryEntry]) -> dict[str, int]:

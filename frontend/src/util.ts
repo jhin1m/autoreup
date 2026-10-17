@@ -1,4 +1,4 @@
-import type { Artifact, DubState, ExportState, JobManifest } from "./types";
+import type { Artifact, DubProgress, DubState, ExportState, JobManifest } from "./types";
 
 /** The most recent artifact of a kind on a job (used to find a job's dubbed video). */
 export function latestArtifact(job: JobManifest, kind: string): Artifact | undefined {
@@ -71,12 +71,33 @@ export function dubProgressLabel(ep: {
   dub_stage: string | null;
   dub_stage_index: number | null;
   dub_stage_total: number | null;
+  dub_progress?: DubProgress | null;
 }): string | null {
   if (!ep.dub_stage) return null;
   const label = STAGE_VI[ep.dub_stage] ?? ep.dub_stage;
   if (ep.dub_stage === "queued") return label;
+  const live = ep.dub_progress ? ` · ${formatProgress(ep.dub_progress)}` : "";
   if (ep.dub_stage_index && ep.dub_stage_total) {
-    return `bước ${ep.dub_stage_index}/${ep.dub_stage_total} · ${label}`;
+    return `bước ${ep.dub_stage_index}/${ep.dub_stage_total} · ${label}${live}`;
   }
-  return label;
+  return label + live;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  return `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+/** "34% · 158 MB/465 MB · 2.1 MB/s · còn 2:26" — parts that are unknown are left out. */
+export function formatProgress(p: DubProgress): string {
+  const parts: string[] = [];
+  if (p.total_bytes) {
+    parts.push(`${Math.floor((p.downloaded_bytes / p.total_bytes) * 100)}%`);
+    parts.push(`${formatBytes(p.downloaded_bytes)}/${formatBytes(p.total_bytes)}`);
+  } else {
+    parts.push(formatBytes(p.downloaded_bytes));
+  }
+  if (p.speed) parts.push(`${(p.speed / 1024 ** 2).toFixed(1)} MB/s`);
+  if (p.eta) parts.push(`còn ${formatDuration(p.eta)}`);
+  return parts.join(" · ");
 }
