@@ -35,7 +35,8 @@ Chi tiết kiến trúc/quyết định: **[`docs/SPEC.md`](docs/SPEC.md)** (sou
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-pip install mlx-whisper              # ASR local (Apple Silicon) — bỏ qua nếu dùng worker
+pip install "mlx-qwen3-asr[aligner]==0.4.4"  # ASR local Qwen3-ASR (Apple Silicon) — khuyến nghị
+pip install mlx-whisper              # ASR local Whisper (tuỳ chọn) — bỏ qua cả hai nếu dùng worker
 pip install -r requirements-dev.txt  # pytest
 
 cd frontend && npm install && npm run build && cd ..
@@ -45,14 +46,16 @@ uvicorn backend.app.main:app --port 8000
 
 Mở `http://127.0.0.1:8000`. UI dev: `cd frontend && npm run dev`.
 
-## ASR: hai backend
+## ASR: ba backend
 
 | Backend | Khi nào | Đo được |
 |---|---|---|
-| **local** (mlx-whisper, cùng model large-v3-turbo) | mặc định khi đã cài mlx-whisper | **11.1× realtime** trên M4 |
+| **qwen** (mlx-qwen3-asr: Qwen3-ASR-1.7B 8-bit + ForcedAligner, timestamp từng chữ) | mặc định khi đã cài mlx-qwen3-asr | ~15× realtime trên M4; tập phim 15 phút: lỗi chữ 0.075 vs 0.177 (Whisper), ảo giác nhạc 11 vs 51, lỗ hổng lời 0 vs 5 |
+| **local** (mlx-whisper, cùng model large-v3-turbo) | khi chỉ cài mlx-whisper | ~23× realtime trên M4 |
 | **worker** (Cloudflare Workers AI) | máy không phải Apple Silicon | ~4.2× realtime, có quota neuron/ngày |
 
-`AUTOREUP_ASR_BACKEND=auto|local|worker`. Worker template ở [`worker-ai/`](worker-ai/) (wrangler + Workers AI binding).
+`AUTOREUP_ASR_BACKEND=auto|qwen|local|worker` (`auto` = cái đầu tiên đã cài theo thứ tự qwen → local → worker).
+Lần chạy đầu của `qwen` tải ~3.7 GB model (ASR 8-bit + aligner) từ Hugging Face. Gap-fill (nghe lại khoảng trống) vẫn chỉ chạy qua worker. Worker template ở [`worker-ai/`](worker-ai/) (wrangler + Workers AI binding).
 
 ## Chỉnh overlay ngay trong UI
 

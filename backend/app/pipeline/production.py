@@ -848,11 +848,11 @@ def _count_kinds(glossary: list[GlossaryEntry]) -> dict[str, int]:
 
 def _asr_uses_worker(backend: str) -> bool:
     """Whether ASR goes to the Cloudflare worker — mirrors ``pick_backend`` in
-    scripts/asr_worker_client.py: ``auto`` runs locally when mlx-whisper is installed,
-    so only the worker backend needs a worker URL."""
+    scripts/asr_worker_client.py: ``auto`` runs locally when mlx-qwen3-asr or
+    mlx-whisper is installed, so only the worker backend needs a worker URL."""
     if backend != "auto":
         return backend == "worker"
-    return importlib.util.find_spec("mlx_whisper") is None
+    return importlib.util.find_spec("mlx_qwen3_asr") is None and importlib.util.find_spec("mlx_whisper") is None
 
 
 def _run_asr(context: PipelineContext, output_srt: Path, asr: AsrTask) -> list[str]:
@@ -869,7 +869,7 @@ def _run_asr(context: PipelineContext, output_srt: Path, asr: AsrTask) -> list[s
         "--chunk-seconds", str(settings.asr_chunk_seconds),
         "--max-chars", "18",
     ]
-    context.report({"step": "Nhận dạng lời (Whisper)"})
+    context.report({"step": "Nhận dạng lời (ASR)"})
 
     def on_line(line: str) -> None:
         # asr_worker_client prints "ASR <done>/<total>" as each chunk comes back

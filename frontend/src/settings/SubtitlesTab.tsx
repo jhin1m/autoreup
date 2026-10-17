@@ -53,6 +53,7 @@ export function SubtitlesTab({ draft, setDraft, saved }: TabProps) {
         <Field label="Chạy ở">
           <select className="set-input" value={asr.backend} onChange={(e) => setAsr({ backend: e.target.value as typeof asr.backend })}>
             <option value="auto">Tự động</option>
+            <option value="qwen">Trên máy (Qwen3-ASR)</option>
             <option value="local">Trên máy (mlx-whisper)</option>
             <option value="worker">Máy chủ Cloudflare</option>
           </select>

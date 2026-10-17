@@ -311,7 +311,8 @@ class DownloadCacheTest(unittest.TestCase):
 
         self.assertTrue(prod._asr_uses_worker("worker"))
         self.assertFalse(prod._asr_uses_worker("local"))
-        # auto runs locally when mlx-whisper is importable, else falls back to the worker
+        self.assertFalse(prod._asr_uses_worker("qwen"))
+        # auto runs locally when mlx-qwen3-asr or mlx-whisper is importable, else the worker
         with patch.object(prod.importlib.util, "find_spec", return_value=object()):
             self.assertFalse(prod._asr_uses_worker("auto"))
         with patch.object(prod.importlib.util, "find_spec", return_value=None):

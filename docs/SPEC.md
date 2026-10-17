@@ -253,7 +253,9 @@ Màn hình (React + Vite, serve bởi FastAPI):
   - **Phụ đề & lời thoại** — Nguồn lời thoại (`asr.ocr_first`): Tự động (đọc phụ đề trên hình trước,
     Speech-to-Text lấp chỗ thiếu — khuyến nghị) / Chỉ Speech-to-Text; Đọc phụ đề trên hình: macOS Vision /
     AI (Gemini/OpenAI-compatible, dùng key đã nhập + model); Speech-to-Text chạy ở Tự động / Trên máy
-    (mlx-whisper) / Máy chủ Cloudflare (+ địa chỉ). Nâng cao: model Speech-to-Text.
+    (Qwen3-ASR) / Trên máy (mlx-whisper) / Máy chủ Cloudflare (+ địa chỉ). Tự động = qwen → mlx-whisper →
+    worker, cái đầu tiên đã cài. Nâng cao: model Speech-to-Text (backend qwen chỉ nhận repo Qwen3-ASR,
+    slug Whisper bị bỏ qua → mặc định `moona3k/mlx-qwen3-asr-1.7b-8bit`).
   - **Tài khoản nền tảng** — cookie/session Douyin, Bilibili.
 
   UI không hiện id kết nối, không có chọn "loại": mỗi dịch vụ ↔ kết nối **đầu tiên** cùng `type` (tạo khi

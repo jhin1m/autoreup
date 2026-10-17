@@ -64,7 +64,7 @@ class TtsTask(BaseModel):
 
 
 class AsrTask(BaseModel):
-    backend: Literal["auto", "local", "worker"] = "auto"
+    backend: Literal["auto", "qwen", "local", "worker"] = "auto"
     worker_url: str = ""
     model: str = ""
     ocr_first: bool = True

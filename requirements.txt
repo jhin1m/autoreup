@@ -19,8 +19,9 @@ gmssl==3.2.2
 # connection of type "edge" synthesizes.
 edge-tts==7.3.1  # 7.2.x gets HTTP 403 from the Edge endpoint
 
-# Optional: local ASR backend (Apple Silicon only). Without it the pipeline uses the
+# Optional: local ASR backends (Apple Silicon only). Without them the pipeline uses the
 # Cloudflare worker (AUTOREUP_ASR_BACKEND=worker). Install separately:
-#   pip install mlx-whisper==0.4.3
+#   pip install "mlx-qwen3-asr[aligner]==0.4.4"   # backend=qwen (preferred by auto)
+#   pip install mlx-whisper==0.4.3                # backend=local
 #
 # Optional: font for the burned subtitle (default ships in backend/app/assets/fonts).

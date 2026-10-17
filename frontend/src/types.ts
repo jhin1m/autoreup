@@ -183,7 +183,7 @@ export type Connection = {
 export type ChatTask = { connection: string; model: string; effort: string };
 export type OcrTask = { recognizer: "vision" | "llm"; connection: string; model: string };
 export type TtsTask = { enabled: boolean; connection: string; model: string; voice: string; synth_rate: number };
-export type AsrTask = { backend: "auto" | "local" | "worker"; worker_url: string; model: string; ocr_first: boolean };
+export type AsrTask = { backend: "auto" | "qwen" | "local" | "worker"; worker_url: string; model: string; ocr_first: boolean };
 
 export type ChatTaskName = "translate" | "glossary" | "normalize" | "repair" | "naming";
 

@@ -79,7 +79,7 @@ def seed_from_env(env: Settings) -> AppSettings:
             ocr=OcrTask(recognizer="vision"),
             tts=TtsTask(enabled=env.tts_enabled, connection=tts_conn.id, voice=env.tts_voice, synth_rate=env.tts_synth_rate),
             asr=AsrTask(
-                backend=env.asr_backend if env.asr_backend in {"auto", "local", "worker"} else "auto",
+                backend=env.asr_backend if env.asr_backend in {"auto", "qwen", "local", "worker"} else "auto",
                 worker_url=env.asr_worker_url or "",
                 model=env.asr_model,
                 ocr_first=env.asr_ocr_subs,
