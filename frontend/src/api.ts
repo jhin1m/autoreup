@@ -1,5 +1,7 @@
 import type {
+  AppSettings,
   ChannelGroup,
+  ConnectionProbe,
   Episode,
   Export,
   GlossaryEntry,
@@ -11,6 +13,7 @@ import type {
   SeriesSource,
   SourceVideo,
   SubtitleCue,
+  TtsVoice,
 } from "./types";
 
 async function ok(response: Response, message: string) {
@@ -81,6 +84,61 @@ export async function saveCookies(platform: string, cookies: string): Promise<vo
     }),
     "Không lưu được cookie",
   );
+}
+
+export async function loadAppSettings(): Promise<AppSettings> {
+  const response = await ok(await fetch("/api/v1/settings"), "Không tải được cài đặt");
+  return (await response.json()) as AppSettings;
+}
+
+export async function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
+  const response = await fetch("/api/v1/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload?.detail;
+    throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "Không lưu được cài đặt");
+  }
+  return (await response.json()) as AppSettings;
+}
+
+export async function testConnection(id: string): Promise<ConnectionProbe> {
+  const response = await ok(
+    await fetch(`/api/v1/settings/connections/${encodeURIComponent(id)}/test`, { method: "POST" }),
+    "Không kiểm tra được kết nối",
+  );
+  return (await response.json()) as ConnectionProbe;
+}
+
+export async function listConnectionModels(id: string): Promise<string[]> {
+  const response = await fetch(`/api/v1/settings/connections/${encodeURIComponent(id)}/models`);
+  if (!response.ok) return [];
+  return ((await response.json()) as { models: string[] }).models;
+}
+
+export async function listTtsVoices(connection: string): Promise<TtsVoice[]> {
+  const response = await ok(
+    await fetch(`/api/v1/settings/tts/voices?connection=${encodeURIComponent(connection)}`),
+    "Không tải được danh sách giọng",
+  );
+  return ((await response.json()) as { voices: TtsVoice[] }).voices;
+}
+
+/** Synthesize a short sample with the (saved) connection and the draft voice/model. */
+export async function previewTts(body: { connection: string; voice: string; model: string }): Promise<Blob> {
+  const response = await fetch("/api/v1/settings/tts/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(typeof payload?.detail === "string" ? payload.detail : "Không nghe thử được giọng");
+  }
+  return response.blob();
 }
 
 export async function discoverVideos(url: string): Promise<SourceVideo[]> {

@@ -21,6 +21,7 @@ from backend.app.library.models import DubState, Episode, Export, ExportState, S
 from backend.app.library.store import LibraryStore, _new_id
 from backend.app.services.cookie_vault import CookieVault
 from backend.app.services.job_service import JobService
+from backend.app.settings import SettingsStore, chat_agent
 from backend.app.studio.models import Platform
 from backend.app.studio.providers import SourceDiscovery, canonical_source_url, detect_platform
 
@@ -514,7 +515,7 @@ class LibraryService:
             raw = complete(system, user, self._agent())
             data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
         except Exception as exc:
-            raise LibraryError("Không tạo được gợi ý (agent CLI lỗi)") from exc
+            raise LibraryError("Không tạo được gợi ý (agent lỗi)") from exc
         tags = data.get("hashtags") or []
         return {
             "title": (data.get("title") or "").strip(),
@@ -524,17 +525,8 @@ class LibraryService:
 
     # ----- LLM-assisted naming / clustering -------------------------------
     def _agent(self) -> AgentConfig:
-        settings = self.settings
-        return AgentConfig(
-            provider=settings.agent_provider,
-            bin=settings.agent_bin,
-            home=settings.agent_home,
-            command=settings.agent_command,
-            model=settings.translate_model,
-            effort=settings.agent_effort,
-            timeout=settings.agent_timeout,
-            retries=settings.agent_retries,
-        )
+        """The agent bound to the naming task (current settings; env when never saved)."""
+        return chat_agent(SettingsStore(self.settings).load(), "naming", self.settings)
 
     def _refine_with_llm(self, groups: list[Group], videos: list) -> list[Group]:
         """Use the LLM only when the heuristic is unsure: many titles lack a "第X集"

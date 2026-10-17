@@ -305,3 +305,14 @@ class DownloadCacheTest(unittest.TestCase):
             self.assertTrue(ctx.artifacts["video"].exists())
             self.assertEqual(ctx.artifacts["video"].read_bytes(), cached.read_bytes())
             # and the cache was seeded on a fresh download in the normal path
+
+    def test_asr_worker_url_only_required_for_the_worker_backend(self):
+        from backend.app.pipeline import production as prod
+
+        self.assertTrue(prod._asr_uses_worker("worker"))
+        self.assertFalse(prod._asr_uses_worker("local"))
+        # auto runs locally when mlx-whisper is importable, else falls back to the worker
+        with patch.object(prod.importlib.util, "find_spec", return_value=object()):
+            self.assertFalse(prod._asr_uses_worker("auto"))
+        with patch.object(prod.importlib.util, "find_spec", return_value=None):
+            self.assertTrue(prod._asr_uses_worker("auto"))

@@ -12,11 +12,11 @@ client (an external-service adapter, like yt-dlp/ffmpeg).
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import sys
-import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -58,6 +58,10 @@ from backend.app.infrastructure.downloader import YtDlpDownloader
 from backend.app.infrastructure.packaging import package_outputs
 from backend.app.infrastructure.process import run_command
 from backend.app.pipeline.contracts import PipelineContext, PipelineStage, StageResult
+from backend.app.services.tts_engines import TtsEngine, build_engine
+from backend.app.services.tts_engines import build_capcut_client as _build_capcut_client
+from backend.app.settings import app_settings_for, chat_agent, ocr_agent, tts_binding
+from backend.app.settings.schema import AsrTask, Connection, TtsTask
 
 _VOICEOVER_REPAIR_ROUNDS = 3  # converge; each round only re-synthesizes what changed
 
@@ -90,25 +94,13 @@ class ProductionPipeline:
         )
 
 
-def _translate_agent(settings: Settings) -> AgentConfig:
-    return _agent_config(settings, settings.translate_model)
+def _translate_agent(context: PipelineContext, task: str = "translate") -> AgentConfig:
+    """The agent bound to a chat task (translate, glossary, normalize) in the job's settings."""
+    return chat_agent(app_settings_for(context), task, context.settings)
 
 
-def _polish_agent(settings: Settings) -> AgentConfig:
-    return _agent_config(settings, settings.polish_model)
-
-
-def _agent_config(settings: Settings, model: str) -> AgentConfig:
-    return AgentConfig(
-        provider=settings.agent_provider,
-        bin=settings.agent_bin,
-        home=settings.agent_home,
-        command=settings.agent_command,
-        model=model,
-        effort=settings.agent_effort,
-        timeout=settings.agent_timeout,
-        retries=settings.agent_retries,
-    )
+def _polish_agent(context: PipelineContext) -> AgentConfig:
+    return chat_agent(app_settings_for(context), "repair", context.settings)
 
 
 def _load_overlay(context: PipelineContext):
@@ -144,65 +136,9 @@ def _hardsub_config(settings: Settings, overlay=None):
     )
 
 
-def _build_capcut_client(settings: Settings):
-    """Native in-process CapCut TTS client, or None to fall back to the HTTP server.
-
-    Self-contained: mints/refreshes its own CapCut session via email/password login
-    (pure Python) when the session file is missing or stale, then signs + batches
-    synthesis itself. Returns None only if native mode is off or no session can be
-    obtained (then the pipeline uses ``tts_server_url`` as before)."""
-    if not settings.tts_native:
-        return None
-    session_path = Path(settings.capcut_session_file) if settings.capcut_session_file else settings.private_dir / "capcut" / "capcut-session.json"
-
-    stale = (not session_path.exists()) or (
-        time.time() - session_path.stat().st_mtime > settings.capcut_session_max_age_days * 86400
-    )
-    if stale and settings.capcut_email and settings.capcut_password:
-        try:
-            from backend.app.services.capcut_login import LoginConfig, login
-
-            login(LoginConfig(
-                email=settings.capcut_email,
-                password=settings.capcut_password,
-                session_file=session_path,
-                app_id=settings.capcut_app_id,
-                web_url=settings.capcut_web_url,
-                login_host=settings.capcut_login_host,
-                fallback_login_host=settings.capcut_fallback_login_host,
-                page_locale=settings.capcut_page_locale,
-                locale=settings.capcut_locale,
-                store_country=settings.capcut_store_country,
-                user_agent=settings.capcut_user_agent,
-            ))
-        except Exception:
-            pass  # fall back to an existing (possibly stale) session if present
-
-    if not session_path.exists():
-        return None
-    from backend.app.services.capcut_tts import CapCutConfig, CapCutTtsClient
-
-    try:
-        return CapCutTtsClient(CapCutConfig(
-            session_file=session_path,
-            edit_api=settings.capcut_edit_api,
-            web_url=settings.capcut_web_url,
-            app_id=settings.capcut_app_id,
-            app_version=settings.capcut_app_version,
-            platform_id=settings.capcut_platform_id,
-            sign_version=settings.capcut_sign_version,
-            sign_prefix=settings.capcut_sign_prefix,
-            sign_suffix=settings.capcut_sign_suffix,
-            sign_path_tail=settings.capcut_sign_path_tail,
-            store_country=settings.capcut_store_country,
-            user_agent=settings.capcut_user_agent,
-            speaker=settings.tts_voice,
-            effect_id=settings.capcut_effect_id,
-            resource_id=settings.capcut_resource_id,
-            voice_name=settings.capcut_voice_name,
-        ))
-    except Exception:
-        return None
+def _tts_engine(settings: Settings, conn: Connection | None, task: TtsTask) -> TtsEngine:
+    """The engine for ``tasks.tts`` (CapCut native → its HTTP ``base_url`` fallback)."""
+    return build_engine(task, conn, settings, capcut_client=_build_capcut_client)
 
 
 class DownloadStage(PipelineStage):
@@ -297,8 +233,10 @@ class ASRStage(PipelineStage):
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
-        if not settings.asr_worker_url:
-            raise RuntimeError("Missing ASR worker URL. Set AUTOREUP_ASR_WORKER_URL.")
+        app = app_settings_for(context)
+        asr = app.tasks.asr
+        if not asr.worker_url and _asr_uses_worker(asr.backend):
+            raise RuntimeError("Missing ASR worker URL. Set it in Cài đặt → Phụ đề & lời thoại (or AUTOREUP_ASR_WORKER_URL).")
         logs: list[str] = []
         video = Path(context.artifacts["video"])
         from backend.app.dubbing.onset import _speech_probs, tighten_to_speech
@@ -314,12 +252,21 @@ class ASRStage(PipelineStage):
         # which is where the cost of a full pass (minutes per hour of video) is wasted.
         ocr_stats: dict = {"ocr_segments": 0, "ocr_coverage": 0.0}
         ocr_segments = None
-        if settings.asr_ocr_subs:
-            from backend.app.dubbing.ocr_subs import detect_band, extract_ocr_segments, ocr_coverage
+        if asr.ocr_first:
+            from backend.app.dubbing.ocr_subs import detect_band, extract_ocr_segments, llm_recognizer, ocr_coverage
 
             try:
                 band = detect_band(video)
-                ocr_segments = extract_ocr_segments(video, band) if band else None
+                recognizer = None  # default reader: macOS Vision
+                if app.tasks.ocr.recognizer == "llm":
+                    recognizer = llm_recognizer(ocr_agent(app, settings))
+                    if band is None:
+                        # Vision found no band (or isn't installed): the LLM can still
+                        # read a band located by the pixel heuristic.
+                        from backend.app.services.hardsub import HardsubConfig, detect_sub_band
+
+                        band = detect_sub_band(video, HardsubConfig())
+                ocr_segments = extract_ocr_segments(video, band, recognizer=recognizer) if band else None
             except Exception as exc:  # noqa: BLE001 - OCR is optional; ASR stands alone
                 ocr_segments, band = None, None
                 logs.append(f"ocr-subs failed: {exc}")
@@ -344,7 +291,7 @@ class ASRStage(PipelineStage):
             segments: list[AsrSegment] = list(ocr_segments)
             if plan == "full":
                 output_srt = settings.subtitles_dir / f"{context.job_id}.asr.zh.srt"
-                logs += _run_asr(context, output_srt)
+                logs += _run_asr(context, output_srt, asr)
                 asr_segments = segments_from_srt(output_srt)
                 total = len(asr_segments)
                 asr_segments, tightened = tighten_to_speech(asr_segments, packed)
@@ -360,9 +307,9 @@ class ASRStage(PipelineStage):
                     from backend.app.dubbing.coverage import clamp_to_ranges, transcribe_ranges
 
                     recovered = transcribe_ranges(
-                        video, uncovered_ranges, str(settings.asr_worker_url), settings.asr_model,
+                        video, uncovered_ranges, asr.worker_url, asr.model,
                         workers=settings.asr_workers, chunk_seconds=settings.asr_chunk_seconds,
-                        backend=settings.asr_backend,
+                        backend=asr.backend,
                         scripts_dir=settings.scripts_dir, python_bin=sys.executable,
                     )
                     recovered = clamp_to_ranges(recovered, uncovered_ranges)
@@ -373,7 +320,7 @@ class ASRStage(PipelineStage):
                     logs.append(f"asr-glue failed: {exc}")
         else:
             output_srt = settings.subtitles_dir / f"{context.job_id}.asr.zh.srt"
-            logs += _run_asr(context, output_srt)
+            logs += _run_asr(context, output_srt, asr)
             segments = segments_from_srt(output_srt)
             # Whisper timestamps lead the real words on noisy content (music/SFX) and it
             # hallucinates lines inside music-only passages — align to VAD before use.
@@ -396,8 +343,8 @@ class ASRStage(PipelineStage):
             video=video,
             segments=segments,
             duration=duration,
-            worker_url=str(settings.asr_worker_url or ""),
-            model=settings.asr_model,
+            worker_url=asr.worker_url,
+            model=asr.model,
             packed=packed,
             config=CoverageConfig(
                 enabled=settings.asr_gap_fill,
@@ -415,7 +362,7 @@ class ASRStage(PipelineStage):
         segments = dedupe_overlaps(segments)
         if len(segments) != before_dedupe:
             logs.append(f"rail-dedupe: {before_dedupe} -> {len(segments)} segments after overlap trim")
-        segments, normalize_metrics = normalize_segments(segments, _translate_agent(settings))
+        segments, normalize_metrics = normalize_segments(segments, _translate_agent(context, "normalize"))
         logs.append(f"normalize: patched {normalize_metrics['patched']} of {normalize_metrics['suspicious']} suspicious segments")
         covered, speech_total, ratio = speech_coverage([(s.start, s.end) for s in segments], packed)
         if speech_total > 0:
@@ -469,7 +416,7 @@ class GlossaryStage(PipelineStage):
             rows = json.loads(series_path.read_text(encoding="utf-8"))
             glossary = [GlossaryEntry(**row) for row in rows]
         else:
-            glossary = extract_glossary(anchors, _translate_agent(settings), genre=context.config.content_genre, notes=context.config.content_notes)
+            glossary = extract_glossary(anchors, _translate_agent(context, "glossary"), genre=context.config.content_genre, notes=context.config.content_notes)
             rows = [{"term_zh": g.term_zh, "term_vi": g.term_vi, "kind": g.kind, "note": g.note} for g in glossary]
             if series_path is not None and glossary:
                 write_json(series_path, rows)
@@ -515,7 +462,7 @@ class TranslateStage(PipelineStage):
         segments: list[AsrSegment] = context.artifacts["segments"]
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         result = translate(
-            anchors, glossary, _translate_agent(settings), context.job_dir / "translate",
+            anchors, glossary, _translate_agent(context), context.job_dir / "translate",
             TranslateConfig(
                 notes=context.config.content_notes,
                 timeout=settings.translate_timeout,
@@ -591,7 +538,7 @@ class VoiceoverStage(PipelineStage):
 
     def hydrate(self, context: PipelineContext) -> bool:
         settings: Settings = context.settings
-        if not settings.tts_enabled:
+        if not app_settings_for(context).tasks.tts.enabled:
             return True  # stage would have been a no-op anyway
         voice = settings.tts_dir / f"{context.job_id}.voice.m4a"
         if not (voice.exists() and voice.stat().st_size > 0):
@@ -601,10 +548,11 @@ class VoiceoverStage(PipelineStage):
 
     def run(self, context: PipelineContext) -> StageResult:
         settings: Settings = context.settings
-        if not settings.tts_enabled:
-            return StageResult(name=self.name, metrics={"enabled": False}, logs=["TTS disabled; set AUTOREUP_TTS_ENABLED=true"])
-        if not settings.tts_server_url:
-            raise RuntimeError("Missing TTS server URL. Set AUTOREUP_TTS_SERVER_URL.")
+        app = app_settings_for(context)
+        tts, conn = tts_binding(app)
+        if not tts.enabled:
+            return StageResult(name=self.name, metrics={"enabled": False}, logs=["TTS disabled; enable it in Cài đặt → Giọng đọc"])
+        engine = _tts_engine(settings, conn, tts)
 
         glossary: list[GlossaryEntry] = context.artifacts.get("glossary", [])
         anchors: list[Anchor] = context.artifacts.get("anchors", [])
@@ -622,16 +570,15 @@ class VoiceoverStage(PipelineStage):
             if lo.strip().isdigit() and hi.strip().isdigit() and int(lo) <= int(hi):
                 text = "".join(seg_by_id[i].text_zh for i in range(int(lo), int(hi) + 1) if i in seg_by_id)
             sources[row.sub_id] = text or anchor_zh.get(row.anchor_id, "")
-        synth_client = _build_capcut_client(settings)
         render_config = RenderConfig(
-            provider_url="capcut-native" if synth_client is not None else settings.tts_server_url,
-            speaker=settings.tts_voice,
+            provider_url=engine.cache_id,
+            speaker=engine.voice,
             text_mode=settings.tts_text_mode,
             crossfade=settings.tts_crossfade,
             workers=settings.tts_workers,
             batch_size=settings.capcut_batch_size,
             batch_concurrency=settings.capcut_batch_concurrency,
-            synth_rate=settings.tts_synth_rate,
+            synth_rate=tts.synth_rate,
             lead=settings.tts_lead,
             tempo_ceiling=settings.tts_tempo_ceiling,
             overflow_tolerance=settings.tts_overflow_tolerance,
@@ -659,7 +606,7 @@ class VoiceoverStage(PipelineStage):
             late = max((max(0.0, t.place_start - t.source_start) for t in candidate.timings), default=0.0)
             return (round(overflow, 3), round(late, 3))
 
-        result = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
+        result = render(speech_rows, render_config, work_dir, cache_dir, engine=engine)
         logs = [f"render round 0: {result.summary}"]
         repair_cfg = RepairConfig()
         best_score = _sync_score(result)
@@ -685,17 +632,17 @@ class VoiceoverStage(PipelineStage):
                 break
             changed = 0
             if overflow:
-                speech_rows, n = repair(speech_rows, sources, glossary, overflow, _polish_agent(settings), repair_cfg)
+                speech_rows, n = repair(speech_rows, sources, glossary, overflow, _polish_agent(context), repair_cfg)
                 changed += n
                 logs.append(f"round {rounds + 1}: shortened {n} over-budget rows")
             if underfull:
-                speech_rows, n = expand(speech_rows, sources, glossary, underfull, _polish_agent(settings), repair_cfg)
+                speech_rows, n = expand(speech_rows, sources, glossary, underfull, _polish_agent(context), repair_cfg)
                 changed += n
                 logs.append(f"round {rounds + 1}: completed {n} under-filled rows")
             rounds += 1
             if not changed:
                 break
-            candidate = render(speech_rows, render_config, work_dir, cache_dir, synth_client=synth_client)
+            candidate = render(speech_rows, render_config, work_dir, cache_dir, engine=engine)
             # Accept a round only when the MEASURED sync does not get worse: a later
             # expand that fixes a pause but overflows the next line must not ship
             # (measured: round 1 hit 0 overflow / 0.22s late, rounds 2-3 turned it into
@@ -840,16 +787,25 @@ def _count_kinds(glossary: list[GlossaryEntry]) -> dict[str, int]:
     return counts
 
 
-def _run_asr(context: PipelineContext, output_srt: Path) -> list[str]:
+def _asr_uses_worker(backend: str) -> bool:
+    """Whether ASR goes to the Cloudflare worker — mirrors ``pick_backend`` in
+    scripts/asr_worker_client.py: ``auto`` runs locally when mlx-whisper is installed,
+    so only the worker backend needs a worker URL."""
+    if backend != "auto":
+        return backend == "worker"
+    return importlib.util.find_spec("mlx_whisper") is None
+
+
+def _run_asr(context: PipelineContext, output_srt: Path, asr: AsrTask) -> list[str]:
     settings: Settings = context.settings
     script = settings.scripts_dir / "asr_worker_client.py"
     command = [
         sys.executable, str(script), str(context.artifacts["video"]),
-        "--backend", str(settings.asr_backend),
-        "--worker-url", str(settings.asr_worker_url or ""),
+        "--backend", asr.backend,
+        "--worker-url", asr.worker_url,
         "--output", str(output_srt),
         "--language", "auto",  # dialogue may be Chinese OR Japanese (mixed anime audio)
-        "--model", str(settings.asr_model),
+        "--model", asr.model,
         "--workers", str(settings.asr_workers),
         "--chunk-seconds", str(settings.asr_chunk_seconds),
         "--max-chars", "18",

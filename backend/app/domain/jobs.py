@@ -56,6 +56,9 @@ class PipelineConfig(BaseModel):
     snap_gap: float = 0.12
     tail_out: float = 0.28
     stages: list[StageName] = Field(default_factory=lambda: [stage for stage in StageName if stage is not StageName.edit])
+    # Provider/model settings frozen when the job was created (secrets stripped — the
+    # manifest is served). A resume runs with this, not with whatever is current now.
+    settings_snapshot: dict | None = None
 
 
 class StageRecord(BaseModel):

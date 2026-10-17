@@ -2,8 +2,8 @@
 
 > Studio local: **video Trung/Nhật → video Việt hoá** — phụ đề 1 dòng + **voice-over tiếng Việt**,
 > cùng một nguồn `master_vi`, đóng gói hardsub (che phụ đề gốc + burn sub Việt + mix bed gốc).
-> Không gọi API LLM: mọi bước chữ nghĩa chạy qua **agent CLI headless** (Antigravity `agy` bằng
-> subscription OAuth, hoặc CLI bất kỳ qua template).
+> Mặc định không cần API key: mọi bước chữ nghĩa chạy qua **agent CLI headless** (Antigravity `agy` bằng
+> subscription OAuth, hoặc CLI bất kỳ qua template) — hoặc chọn kết nối LLM API (OpenAI-compatible, Gemini) trong Cài đặt.
 
 ```
 download → asr → glossary → translate → qa → voiceover → package
@@ -13,7 +13,7 @@ download → asr → glossary → translate → qa → voiceover → package
 
 | Lớp | Việc | Ghi chú |
 |---|---|---|
-| L1 Rail | OCR phụ đề burn-in (macOS Vision) **trước**, ASR chỉ phiên âm phần speech mà caption không phủ | cost model đo được: `none`/`glue`/`full` |
+| L1 Rail | OCR phụ đề burn-in (macOS Vision, hoặc LLM đọc ảnh) **trước**, ASR chỉ phiên âm phần speech mà caption không phủ | cost model đo được: `none`/`glue`/`full` |
 | L2 Unit | gộp caption thành câu/cụm nghĩa (60/90 ký tự) | đơn vị *định thời*, không phải đơn vị lấy context |
 | L3 Dịch | **1 workspace agent run**: `SKILL.md` + `input/` → agent đọc toàn transcript, ghi `out/draft.tsv`, tự soát nghĩa → `out/final.tsv`; pipeline đọc file + **gate code** từng dòng đổi | không nhét ngân sách độ dài vào prompt |
 | L4 Đo | TTS 1 clip/unit → thời lượng THẬT | cache theo text |
@@ -66,13 +66,17 @@ Toạ độ lưu dạng phân số (0..1) nên không phụ thuộc độ phân 
 
 ## Cấu hình
 
-Toàn bộ qua env `AUTOREUP_*` (xem [`.env.example`](.env.example) và `docs/SPEC.md` §12).
-Cookie provider nhập từ UI, lưu ở `.autoreup-private/cookies/` — không bao giờ được serve ra ngoài.
+Env `AUTOREUP_*` (xem [`.env.example`](.env.example) và `docs/SPEC.md` §12) là cấu hình khởi đầu.
+**⚙ Cài đặt** trong UI: tab *Kết nối* (agent CLI, LLM API OpenAI-compatible/Gemini, CapCut, máy chủ TTS, Edge, OpenAI-compatible/Gemini/ElevenLabs TTS…), *Tác vụ* (kết nối + model riêng cho
+dịch / thuật ngữ / chuẩn hoá / sửa độ dài / đặt tên, OCR), *Giọng đọc & ASR* (chọn engine/giọng/model, nút *Nghe thử*; Edge TTS cần `edge-tts` trong `requirements.txt`). Khi đã lưu, `.autoreup-private/settings.json`
+đè env (chưa lưu lần nào → chạy y hệt env); job mới dùng ngay, job đang có giữ cấu hình lúc tạo.
+Cookie provider nhập từ UI, lưu ở `.autoreup-private/cookies/`; secret (API key, mật khẩu) chỉ ở `settings.json`
+(chmod 600) — không bao giờ được serve hay trả về qua API.
 
 ## Tests
 
 ```bash
-. .venv/bin/activate && python -m pytest tests/ -q    # 112 tests
+. .venv/bin/activate && python -m pytest tests/ -q
 ```
 
 ## Cấu trúc

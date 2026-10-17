@@ -9,17 +9,23 @@ and then validates the FILES on disk. Model prose is never parsed for content.
 The code still owns safety: every line the agent changed between draft and final goes
 through ``gate_patch`` (numbers, negations, glossary terms, length), so a bad edit can
 only ever be rejected, never smuggled in.
+
+An LLM API connection has no file tools, so the same workspace is EMULATED: SKILL.md
+becomes the system prompt, the input files travel inline, the fenced TSV reply is
+written to ``out/draft.tsv`` + ``out/final.tsv`` — and from there the disk-first
+validation, follow-up turns and bisection are exactly the agent path's.
 """
 
 from __future__ import annotations
 
 import hashlib
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from backend.app.agents import AgentConfig
+from backend.app.agents import AgentConfig, AgentError, complete, is_api
 from backend.app.agents.quota import gemini_headroom
 from backend.app.agents.workspace import WorkspaceRun, run_agent_workspace
 
@@ -29,6 +35,15 @@ from .text import has_han, has_kana, sanitize_caption
 
 _SKILL_PATH = Path(__file__).with_name("skills") / "translate" / "SKILL.md"
 _AGENT_PROMPT = "Đọc SKILL.md và làm đầy đủ workflow trong đó với input/units.tsv."
+_API_NOTE = """
+
+## Chạy qua API (không có công cụ đọc/ghi file)
+
+Lượt này bạn KHÔNG đọc/ghi được file: nội dung `input/units.tsv`, `input/glossary.tsv`,
+`input/notes.md` được dán ngay trong tin nhắn. Làm đủ workflow ở trên trong đầu (đọc hết →
+nháp → soát → bản cuối) rồi trả về DUY NHẤT nội dung `out/final.tsv` trong MỘT khối ```tsv —
+mỗi dòng `ID<TAB>TEXT`, không giải thích gì thêm.
+"""
 
 
 class TranslateError(RuntimeError):
@@ -148,6 +163,8 @@ def _run_part(
     """One session (plus its bounded follow-up turns) for one part."""
     marked = {unit.id for unit in part}
     keep = _prepare_workspace(workspace, all_units, glossary, config.notes, marked)
+    if is_api(llm):
+        return _run_part_inline(part, glossary, llm, workspace, config)
     resume = keep and (workspace / "out" / "draft.tsv").exists()
     if resume:
         runs = [run_agent_workspace(workspace, _AGENT_PROMPT, llm, timeout=config.timeout, resume=True)]
@@ -169,11 +186,75 @@ def _run_part(
     return texts, runs, missing
 
 
+def _inline_inputs(workspace: Path) -> str:
+    blocks = []
+    for name in ("units.tsv", "glossary.tsv", "notes.md"):
+        text = (workspace / "input" / name).read_text(encoding="utf-8").rstrip()
+        blocks.append(f"### input/{name}\n```\n{text}\n```")
+    return "\n\n".join(blocks)
+
+
+def _write_rows(path: Path, part: list[Anchor], rows: dict[int, str]) -> None:
+    path.write_text("".join(f"{u.id}\t{rows[u.id]}\n" for u in part if u.id in rows), encoding="utf-8")
+
+
+def _run_part_inline(
+    part: list[Anchor],
+    glossary: list[GlossaryEntry],
+    llm: AgentConfig,
+    workspace: Path,
+    config: TranslateConfig,
+) -> tuple[dict[int, str], list[WorkspaceRun], list[int]]:
+    """The workspace session emulated over an LLM API: one call, then follow-ups that
+    ask only for the IDs still missing. Rows already on disk (same inputs) are kept."""
+    out = workspace / "out"
+    system = _SKILL_PATH.read_text(encoding="utf-8") + _API_NOTE
+    inputs = _inline_inputs(workspace)
+    texts = _collect(workspace, part, glossary)
+    missing = _unusable(texts, part)
+    runs: list[WorkspaceRun] = []
+    while missing and len(runs) <= max(0, config.retries):
+        if len(missing) == len(part):
+            ask = "Dịch MỌI dòng có dấu * trong input/units.tsv."
+        else:
+            done = "\n".join(f"{u.id}\t{texts[u.id]}" for u in part if u.id in texts)
+            ask = (
+                f"out/final.tsv hiện tại:\n```tsv\n{done}\n```\n"
+                f"Còn thiếu/sai {len(missing)} ID: {', '.join(str(i) for i in missing)}. "
+                "Chỉ trả về các ID đó (tiếng Việt, KHÔNG Hán tự, không rỗng), giữ mạch và xưng hô như các dòng đã có."
+            )
+        # same budgets as the agent path: a full session, then half for each follow-up
+        session = replace(llm, timeout=config.timeout if not runs else config.timeout / 2)
+        started = time.monotonic()
+        try:
+            reply = complete(system, f"{inputs}\n\n{ask}", session)
+        except AgentError as exc:
+            # like a timed-out agent session: report it as a failed run so the part is
+            # bisected (too-long output, timeouts), instead of failing the whole stage
+            timed_out = "Timeout" in str(exc)
+            runs.append(WorkspaceRun(-1, "", str(exc), round(time.monotonic() - started, 1), timed_out=timed_out))
+            break
+        runs.append(WorkspaceRun(0, reply, "", round(time.monotonic() - started, 1)))
+        raw = out / f"reply-{len(runs)}.txt"
+        raw.write_text(reply, encoding="utf-8")
+        fresh = _parse_table(raw)
+        texts.update({unit_id: fresh[unit_id] for unit_id in missing if unit_id in fresh})
+        # no separate self-review pass over an API: draft == final, nothing to gate
+        _write_rows(out / "draft.tsv", part, texts)
+        _write_rows(out / "final.tsv", part, texts)
+        texts = _collect(workspace, part, glossary)
+        missing = _unusable(texts, part)
+    return texts, runs, missing
+
+
 def _parallelism(config: TranslateConfig, llm: AgentConfig) -> int:
     """How many sessions may run at once: part count, capped by measured quota headroom.
 
     Every agent call draws from the same 5-hour pool as the fit loop; when the oracle
-    says the window is nearly spent, serialize instead of collecting 429s."""
+    says the window is nearly spent, serialize instead of collecting 429s. An LLM API
+    has its own rate limits, not the agy pool, so the oracle does not apply there."""
+    if is_api(llm):
+        return config.max_parallel
     headroom = gemini_headroom(llm.bin)
     if headroom is None:
         return config.max_parallel
@@ -257,7 +338,9 @@ def translate(
         missing += part_missing
         logs += part_logs
     if missing:
-        raise TranslateError(f"workspace sessions left {len(missing)} unit(s) untranslated: {missing[:10]}")
+        errors = [run.stderr for run in runs if run.returncode != 0 and run.stderr]
+        detail = f" (last error: {errors[-1]})" if errors else ""
+        raise TranslateError(f"workspace sessions left {len(missing)} unit(s) untranslated: {missing[:10]}{detail}")
 
     rows = [
         SpeechRow(

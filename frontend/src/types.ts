@@ -155,3 +155,35 @@ export type ChannelGroup = {
   total: number;
   episodes: Record<string, unknown>[];
 };
+
+// ----- provider/model settings (secrets arrive masked: "••••" + last 4) -----
+export type ConnectionType = "agy" | "command" | "openai_compat" | "gemini" | "elevenlabs" | "capcut" | "edge" | "http_tts";
+
+export type Connection = {
+  id: string;
+  label: string;
+  type: ConnectionType;
+  base_url: string;
+  api_key: string;
+  bin: string;
+  home: string;
+  command: string;
+  email: string;
+  password: string;
+};
+
+export type ChatTask = { connection: string; model: string; effort: string };
+export type OcrTask = { recognizer: "vision" | "llm"; connection: string; model: string };
+export type TtsTask = { enabled: boolean; connection: string; model: string; voice: string; synth_rate: number };
+export type AsrTask = { backend: "auto" | "local" | "worker"; worker_url: string; model: string; ocr_first: boolean };
+
+export type ChatTaskName = "translate" | "glossary" | "normalize" | "repair" | "naming";
+
+export type AppSettings = {
+  version: number;
+  connections: Connection[];
+  tasks: Record<ChatTaskName, ChatTask> & { ocr: OcrTask; tts: TtsTask; asr: AsrTask };
+};
+
+export type ConnectionProbe = { ok: boolean; message: string };
+export type TtsVoice = { id: string; name: string };

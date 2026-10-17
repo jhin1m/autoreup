@@ -15,6 +15,9 @@ silero-vad==6.2.1
 onnxruntime==1.27.0
 # Douyin a_bogus signature (infrastructure/douyin): gmssl provides the SM3 hash.
 gmssl==3.2.2
+# Edge read-aloud TTS engine (services/tts_engines.py), imported only when a
+# connection of type "edge" synthesizes.
+edge-tts==7.3.1  # 7.2.x gets HTTP 403 from the Edge endpoint
 
 # Optional: local ASR backend (Apple Silicon only). Without it the pipeline uses the
 # Cloudflare worker (AUTOREUP_ASR_BACKEND=worker). Install separately:

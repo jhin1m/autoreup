@@ -12,6 +12,7 @@ from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
 from backend.app.domain.jobs import JobInput, JobManifest, JobState, PipelineConfig, StageRecord, StageStatus
 from backend.app.pipeline.production import ProductionPipeline
+from backend.app.settings import SettingsStore, strip_secrets
 from backend.app.studio.providers import extract_url
 
 
@@ -117,6 +118,7 @@ class JobService:
                 min_gap=self.settings.min_gap,
                 snap_gap=self.settings.snap_gap,
                 tail_out=self.settings.tail_out,
+                settings_snapshot=strip_secrets(SettingsStore(self.settings).load()),
             ),
         )
         self.save(manifest)
