@@ -102,7 +102,9 @@ queued → running → succeeded | failed | canceled
 - Rail OCR (phụ đề cứng, trước ASR): change-detection tìm từng caption ổn định, mỗi caption 1 crop → bộ đọc `tasks.ocr.recognizer`: `vision` (macOS Vision, mặc định) hoặc `llm` (kết nối có vision `openai_compat`/`gemini`, 20 crop/request, trả JSON `{"số": "text"}`, thiếu số = bỏ caption). Band: Vision; với `llm` mà Vision không ra band → heuristic pixel `hardsub.detect_sub_band`. OCR lỗi → chỉ dùng ASR.
 - Rail ASR: segment được co về đúng vùng VAD speech chứa nó (bỏ blob nhạc dài), hallucination nhạc bị loại; rail bất biến **sorted, không chồng lấn** sau gap-fill.
 - **Nghĩa là đơn vị dịch (F1)**: `translate` là **một workspace agent run** — workspace `data/jobs/<job>/translate/` gồm `SKILL.md` + `input/{units,glossary,notes}`, agent đọc toàn bộ transcript, ghi `out/draft.tsv`, tự soát nghĩa rồi ghi `out/final.tsv`. Pipeline **đọc artifact từ đĩa** (không parse prose), và **gate code** mọi dòng đổi giữa draft→final (số/phủ định/glossary/độ dài) — không bao giờ đặt ngân sách độ dài trong prompt.
-- Agent flags (agy): `--add-dir <ws> --dangerously-skip-permissions --sandbox`; timeout workspace phải phủ vòng lặp nội bộ của agent (`translate_timeout`).
+- Agent flags — agy: `--add-dir <ws> --dangerously-skip-permissions --sandbox`; claude: cwd = ws,
+  `--permission-mode acceptEdits --tools Read,Write,Edit,Glob,Grep` (không Bash), follow-up `--continue`; codex: cwd = ws,
+  `-c sandbox_mode="workspace-write"`, follow-up `exec resume --last`. Timeout workspace phải phủ vòng lặp nội bộ của agent (`translate_timeout`).
 - **Row = unit = clip**: mỗi unit một clip TTS neo vào cửa sổ của unit; timing không nội suy, không pack theo run, không clamp/hold.
 - **Sub = voice, cùng thời điểm (F4)**: khối cue của unit = `[voice_start − lead, max(voice_end, unit_end)]` (clamp theo cue kế) — sub hiện trước voice ~0.12s và phủ trọn cửa sổ caption gốc; text sub dựng lại SAU fit loop nên luôn khớp đúng lời đọc.
 - QA gate: mọi unit có dòng Việt đúng cửa sổ rail (`units_missing_coverage`, `rows_misaligned_with_rail`), không Hán, cue không chồng, 1 dòng/cue.
@@ -157,8 +159,16 @@ lấy từ env. Tác vụ chat trỏ vào kết nối không có năng lực cha
 
 - **provider `agy`** (mặc định): Antigravity `agy -p <prompt> --output-format json --print-timeout <t> [+ --model, --effort]`;
   login subscription qua HOME — `agent_home` để tách account (mỗi account một HOME riêng).
-- **provider `command`**: template CLI bất kỳ cho agent khác — ACP (`acpx claude exec --format quiet {prompt}`),
-  `claude -p`, `codex exec`… `{prompt}` được thay thế, hoặc prompt append cuối argv nếu không có placeholder.
+- **provider `claude_code`**: Claude Code `claude -p <prompt> --output-format json` (đọc `result`), luôn kèm
+  `--strict-mcp-config --setting-sources "" --disable-slash-commands` — không nạp CLAUDE.md/MCP/plugin của user
+  (đo: ~283k → ~4k token/lượt); one-shot thêm `--tools "" --no-session-persistence --system-prompt …`, chạy trong cwd
+  tạm rỗng. `--model` (alias `sonnet`/`opus`/`fable`/`haiku` hoặc id đầy đủ), `--effort`.
+- **provider `codex`**: Codex `codex exec --skip-git-repo-check -c sandbox_mode="read-only" --ephemeral
+  --output-last-message <file> [--model, -c model_reasoning_effort=…] -- <prompt>`, đọc reply từ file; lỗi lấy dòng
+  `ERROR:` cuối của stderr. Cwd tạm rỗng (không nạp AGENTS.md của repo).
+- claude/codex/agy dùng login có sẵn của CLI; `home` (HOME override) để tách account. Quota oracle chỉ dành cho agy.
+- **provider `command`**: template CLI bất kỳ cho agent khác — ACP (`acpx claude exec --format quiet {prompt}`)…
+  `{prompt}` được thay thế, hoặc prompt append cuối argv nếu không có placeholder.
 - **provider `openai_compat`**: `POST {base_url}/chat/completions` (OpenAI, OpenRouter, Ollama, vLLM…), header
   `Authorization: Bearer <api_key>` (bỏ khi không có key), `reasoning_effort` = effort khi đặt; ảnh nhúng `data:` URL.
 - **provider `gemini`**: `POST {base_url|https://generativelanguage.googleapis.com/v1beta}/models/{model}:generateContent`,
@@ -170,9 +180,10 @@ lấy từ env. Tác vụ chat trỏ vào kết nối không có năng lực cha
   khối TSV trả về ghi ra `out/draft.tsv` + `out/final.tsv` (raw ở `out/reply-N.txt`) → gate/follow-up (chỉ hỏi ID còn
   thiếu, ≤ `translate_retries`, timeout/2)/bisect y như đường agent; lỗi API (timeout, vượt context…) = session hỏng →
   bisect, không làm hỏng cả stage. Không dùng quota oracle của agy.
-- Adapter nằm ở `backend/app/agents/` (`runtime.py`, `agy.py`, `command.py`, `api_llm.py`); stage modules chỉ gọi
+- Adapter nằm ở `backend/app/agents/` (`runtime.py`, `agy.py`, `claude_code.py`, `codex.py`, `command.py`, `api_llm.py`); stage modules chỉ gọi
   `complete(system, user, config)`. Settings API: *Kiểm tra* kết nối API = liệt kê model (chứng minh endpoint + key),
-  `GET …/models` trả danh sách model cho ô chọn (CLI: rỗng, nhập tay).
+  `GET …/models` trả danh sách model cho ô chọn (claude: alias; codex: từ
+  `~/.codex/models_cache.json` của CLI; CLI khác: rỗng, nhập tay).
 
 ## 10. API v1
 
@@ -232,9 +243,9 @@ Màn hình (React + Vite, serve bởi FastAPI):
 - **Series detail** `/series/:id?tab=source|dubbed|export` — 3 tab: Nguồn / Đã dịch / Export; tab nằm trong URL.
 - **Settings** (modal) — sắp theo **việc**, field kỹ thuật gập trong **▸ Nâng cao** (mặc định đóng):
   - **Dịch thuật** — chọn 1 dịch vụ cho mọi việc chữ (dịch, thuật ngữ, chuẩn hoá, sửa câu, đặt tên):
-    Antigravity (agy, gói đăng ký, nút Kiểm tra) / Gemini API (key + model) / OpenAI-compatible (địa chỉ API +
+    Antigravity (agy) / Claude Code (claude) / Codex CLI (codex) — gói đăng ký, nút Kiểm tra / Gemini API (key + model) / OpenAI-compatible (địa chỉ API +
     key + model) / Lệnh CLI tuỳ chỉnh (chỉ hiện khi đã có). Nâng cao: model + mức nghĩ riêng từng bước con
-    (mặc định "giống Dịch"), thư mục HOME, lệnh agy, mẫu lệnh CLI.
+    (mặc định "giống Dịch"), thư mục HOME, lệnh chạy (agy/claude/codex), mẫu lệnh CLI.
   - **Giọng đọc** — bật lồng tiếng; dịch vụ CapCut / Edge TTS / OpenAI-compatible / Gemini / ElevenLabs /
     Máy chủ HTTP, chỉ hiện field của dịch vụ đã chọn (CapCut: email + mật khẩu; API: key, model giọng đọc
     cho OpenAI/Gemini); Giọng (danh sách `GET /settings/tts/voices`) + **▶ Nghe thử** (`POST /settings/tts/preview`,
@@ -263,7 +274,7 @@ UX rules (bắt buộc):
 ## 12. Config (env `AUTOREUP_*`, file `.env`)
 
 ```text
-Agent:    AGENT_PROVIDER (agy|command), AGENT_BIN, AGENT_HOME, AGENT_COMMAND,
+Agent:    AGENT_PROVIDER (agy|claude|codex|command), AGENT_BIN, AGENT_HOME, AGENT_COMMAND,
           AGENT_EFFORT, AGENT_TIMEOUT, AGENT_RETRIES, TRANSLATE_MODEL, POLISH_MODEL
 Content:  CONTENT_GENRE (hint, optional), CONTENT_NOTES (mặc định per-video)
 ASR:      ASR_WORKER_URL, ASR_MODEL, ASR_WORKERS
@@ -276,7 +287,7 @@ Limits:   MAX_CHARS, DISPLAY_MAX_CHARS, DISPLAY_MAX_LINES, MAX_CPS, TARGET_CPS,
 Provider cookies nhập từ UI lưu tại `.autoreup-private/cookies/` (ngoài thư mục media được serve).
 
 **Settings JSON đè env**: `.autoreup-private/settings.json` (chmod 600, ghi atomic, không serve) giữ
-`connections` (agy · command · openai_compat · gemini · elevenlabs · capcut · edge · http_tts; id
+`connections` (agy · claude_code · codex · command · openai_compat · gemini · elevenlabs · capcut · edge · http_tts; id
 `^[a-z0-9][a-z0-9_-]{0,39}$`) và `tasks` (translate, glossary, normalize, repair, naming, ocr, tts, asr).
 Không có file → seed từ env, hành vi y hệt chỉ-env: kết nối `agent` (AGENT_*), `capcut` (TTS_NATIVE, kèm
 TTS_SERVER_URL làm HTTP dự phòng) hoặc `tts-server`; translate/glossary/normalize/naming = TRANSLATE_MODEL,

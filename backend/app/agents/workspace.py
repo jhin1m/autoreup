@@ -6,7 +6,8 @@ one with ``--add-dir``), file tools are soft-denied unless
 can loop internally across many turns. So a translation job is ONE agent run that
 reads inputs, writes its draft, reviews it against the source and writes the final
 file — while the deterministic pipeline validates the artifacts FROM DISK, never
-from model prose.
+from model prose. Claude Code and Codex run the same way (their adapters own the
+flags that allow file edits inside the workspace and resume its last session).
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .agy import format_timeout
+from .claude_code import build_claude_argv
+from .codex import build_codex_argv
 from .config import AgentConfig, AgentError
 
 # Provider-specific flags that turn a one-shot CLI into a workspace agent.
@@ -42,6 +45,11 @@ def build_workspace_argv(prompt: str, config: AgentConfig, workspace: Path, *, r
         if not template:
             raise AgentError("provider=command requires agent_command (template with {prompt})")
         return [part.replace("{prompt}", prompt) for part in template.split()]
+    # claude/codex: the workspace is the cwd (see run_agent_workspace), no flag needed
+    if provider == "claude_code":
+        return build_claude_argv(prompt, config, workspace=True, resume=resume)
+    if provider == "codex":
+        return build_codex_argv(prompt, config, workspace=True, resume=resume)
     argv = [
         config.bin,
         "-p",

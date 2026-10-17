@@ -12,15 +12,17 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ConnectionType = Literal["agy", "command", "openai_compat", "gemini", "elevenlabs", "capcut", "edge", "http_tts"]
+ConnectionType = Literal["agy", "claude_code", "codex", "command", "openai_compat", "gemini", "elevenlabs", "capcut", "edge", "http_tts"]
 
 # What each connection type can do. ASR backends (local mlx / Cloudflare worker) stay
 # their own task fields — they are not connections.
 CAPABILITIES: dict[str, set[str]] = {
-    "chat": {"agy", "command", "openai_compat", "gemini"},
+    "chat": {"agy", "claude_code", "codex", "command", "openai_compat", "gemini"},
     "vision": {"openai_compat", "gemini"},
     "tts": {"capcut", "http_tts", "edge", "openai_compat", "gemini", "elevenlabs"},
 }
+# Subscription CLI agents: the binary run when a connection leaves ``bin`` blank.
+CLI_BINS: dict[str, str] = {"agy": "agy", "claude_code": "claude", "codex": "codex"}
 SECRET_FIELDS = ("api_key", "password")
 # Never written into a (served) job manifest; refilled from the store on resume.
 SNAPSHOT_PRIVATE_FIELDS = (*SECRET_FIELDS, "email")
@@ -34,7 +36,7 @@ class Connection(BaseModel):
     type: ConnectionType
     base_url: str = ""   # API root; capcut: legacy HTTP TTS fallback server
     api_key: str = ""    # secret
-    bin: str = ""        # agy binary
+    bin: str = ""        # CLI agent binary (blank = CLI_BINS default)
     home: str = ""       # HOME override for CLI agents (account isolation)
     command: str = ""    # provider=command template with {prompt}
     email: str = ""      # capcut auto-login
@@ -114,6 +116,7 @@ class AppSettings(BaseModel):
 __all__ = [
     "CAPABILITIES",
     "CHAT_TASKS",
+    "CLI_BINS",
     "SECRET_FIELDS",
     "SNAPSHOT_PRIVATE_FIELDS",
     "AppSettings",

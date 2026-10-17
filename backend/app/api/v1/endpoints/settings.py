@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shlex
 import shutil
 from dataclasses import replace
@@ -14,12 +16,14 @@ from pydantic import BaseModel, ValidationError
 from backend.app.agents import AgentError, api_llm
 from backend.app.core.config import get_settings
 from backend.app.services.tts_engines import TtsEngineError, audio_media_type, build_engine, list_voices as engine_voices
-from backend.app.settings import Connection, SettingsFileError, SettingsStore, TtsTask, agent_for
+from backend.app.settings import CLI_BINS, Connection, SettingsFileError, SettingsStore, TtsTask, agent_for
 
 router = APIRouter()
 
 _PREVIEW_TEXT = "Xin chào, đây là giọng đọc thử cho video lồng tiếng của bạn."
 _PROBE_TIMEOUT = 15.0  # a model listing is quick; never wait the long agent timeout here
+# `claude --model` aliases that always point at the newest model of each tier
+_CLAUDE_MODELS = ["sonnet", "opus", "fable", "haiku"]
 
 
 def get_settings_store() -> SettingsStore:
@@ -68,8 +72,12 @@ def test_connection(connection_id: str) -> dict:
 def list_models(connection_id: str) -> dict:
     store = get_settings_store()
     conn = _connection(store, connection_id)
+    if conn.type == "claude_code":
+        return {"models": _CLAUDE_MODELS}
+    if conn.type == "codex":
+        return {"models": _codex_models(conn)}
     if conn.type not in api_llm.API_PROVIDERS:
-        return {"models": []}  # CLI agents take free-form model names
+        return {"models": []}  # other CLI agents take free-form model names
     try:
         return {"models": _api_models(conn, store)}
     except AgentError as exc:
@@ -113,6 +121,17 @@ def _api_models(conn: Connection, store: SettingsStore) -> list[str]:
     return api_llm.list_models(replace(agent_for(conn, "", store.env), timeout=_PROBE_TIMEOUT))
 
 
+def _codex_models(conn: Connection) -> list[str]:
+    """Suggestions from the model list the Codex CLI itself caches (none if absent)."""
+    home = Path(os.path.expanduser(conn.home)) / ".codex" if conn.home else Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser()
+    try:
+        cache = json.loads((home / "models_cache.json").read_text(encoding="utf-8"))
+        slugs = [str(model.get("slug") or "") for model in cache.get("models", [])]
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [slug for slug in slugs if slug and "review" not in slug]
+
+
 def _probe(conn: Connection, store: SettingsStore) -> tuple[bool, str]:
     """Cheap reachability check — never runs a model or synthesizes audio."""
     if conn.type in api_llm.API_PROVIDERS:
@@ -122,8 +141,8 @@ def _probe(conn: Connection, store: SettingsStore) -> tuple[bool, str]:
         except AgentError as exc:
             return False, str(exc)
         return True, f"kết nối được — {len(models)} model"
-    if conn.type == "agy":
-        binary = conn.bin or "agy"
+    if conn.type in CLI_BINS:
+        binary = conn.bin or CLI_BINS[conn.type]
         found = shutil.which(binary)
         return (True, f"{binary}: {found}") if found else (False, f"không tìm thấy lệnh {binary}")
     if conn.type == "command":

@@ -2,8 +2,8 @@
 
 > Studio local: **video Trung/Nhật → video Việt hoá** — phụ đề 1 dòng + **voice-over tiếng Việt**,
 > cùng một nguồn `master_vi`, đóng gói hardsub (che phụ đề gốc + burn sub Việt + mix bed gốc).
-> Mặc định không cần API key: mọi bước chữ nghĩa chạy qua **agent CLI headless** (Antigravity `agy` bằng
-> subscription OAuth, hoặc CLI bất kỳ qua template) — hoặc chọn kết nối LLM API (OpenAI-compatible, Gemini) trong Cài đặt.
+> Mặc định không cần API key: mọi bước chữ nghĩa chạy qua **agent CLI headless** (Antigravity `agy`, Claude Code
+> `claude` hay Codex `codex` bằng gói đăng ký đã đăng nhập, hoặc CLI bất kỳ qua template) — hoặc chọn kết nối LLM API (OpenAI-compatible, Gemini) trong Cài đặt.
 
 ```
 download → asr → glossary → translate → qa → voiceover → package
@@ -28,7 +28,7 @@ Chi tiết kiến trúc/quyết định: **[`docs/SPEC.md`](docs/SPEC.md)** (sou
 
 - **macOS** (bắt buộc cho OCR Vision + tuỳ chọn ASR local MLX; phần còn lại chạy được ở nơi khác)
 - Python **3.13**, `ffmpeg`, Node **≥ 22** (tool Douyin CDP + build frontend)
-- Một **agent CLI headless** đã đăng nhập (`agy`) — hoặc bất kỳ CLI nào qua `AUTOREUP_AGENT_COMMAND`
+- Một **agent CLI headless** đã đăng nhập (`agy`, `claude` hoặc `codex`) — hoặc bất kỳ CLI nào qua `AUTOREUP_AGENT_COMMAND`
 
 ## Cài đặt nhanh
 

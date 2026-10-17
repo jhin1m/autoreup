@@ -157,7 +157,7 @@ export type ChannelGroup = {
 };
 
 // ----- provider/model settings (secrets arrive masked: "••••" + last 4) -----
-export type ConnectionType = "agy" | "command" | "openai_compat" | "gemini" | "elevenlabs" | "capcut" | "edge" | "http_tts";
+export type ConnectionType = "agy" | "claude_code" | "codex" | "command" | "openai_compat" | "gemini" | "elevenlabs" | "capcut" | "edge" | "http_tts";
 
 export type Connection = {
   id: string;

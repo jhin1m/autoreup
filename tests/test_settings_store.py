@@ -64,6 +64,12 @@ class SeedParityTest(unittest.TestCase):
         self.assertEqual(agent.command, "acpx claude exec {prompt}")
         self.assertEqual(agent, _legacy_agent(env, env.translate_model))
 
+    def test_seed_claude_and_codex_providers_use_their_own_binary(self):
+        for provider, conn_type, binary in (("claude", "claude_code", "claude"), ("codex", "codex", "codex")):
+            env = _env(self.root, agent_provider=provider)
+            agent = chat_agent(seed_from_env(env), "translate", env)
+            self.assertEqual((agent.provider, agent.bin), (conn_type, binary), provider)
+
     def test_seed_tts_native_capcut_keeps_http_fallback(self):
         env = _env(self.root, tts_enabled=True, tts_native=True, tts_server_url="http://127.0.0.1:8080",
                    capcut_email="a@b.c", capcut_password="pw")

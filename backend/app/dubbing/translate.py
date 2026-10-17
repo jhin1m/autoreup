@@ -252,8 +252,9 @@ def _parallelism(config: TranslateConfig, llm: AgentConfig) -> int:
 
     Every agent call draws from the same 5-hour pool as the fit loop; when the oracle
     says the window is nearly spent, serialize instead of collecting 429s. An LLM API
-    has its own rate limits, not the agy pool, so the oracle does not apply there."""
-    if is_api(llm):
+    or another CLI (claude, codex) has its own limits, not the agy pool, so the oracle
+    does not apply there."""
+    if (llm.provider or "agy").strip().lower() not in {"agy", "antigravity"}:
         return config.max_parallel
     headroom = gemini_headroom(llm.bin)
     if headroom is None:

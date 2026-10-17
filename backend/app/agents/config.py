@@ -27,7 +27,9 @@ class AgentConfig:
 
     ``provider``:
       - ``"agy"``      — Antigravity CLI headless (``agy -p … --output-format json``)
-      - ``"command"``  — any headless CLI template (ACP clients, claude/codex CLIs)
+      - ``"claude_code"`` — Claude Code CLI headless (``claude -p …``)
+      - ``"codex"``    — Codex CLI headless (``codex exec …``)
+      - ``"command"``  — any other headless CLI template (ACP clients, …)
       - ``"openai_compat"`` / ``"gemini"`` — LLM API over HTTP (``base_url`` + ``api_key``)
 
     ``home`` overrides ``HOME`` for the child process (account isolation).

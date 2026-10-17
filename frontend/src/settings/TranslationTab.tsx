@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from "react";
 import type { ChatTaskName, ConnectionType } from "../types";
 import { Advanced, CheckButton, EffortSelect, ModelField, SecretField, Section, ServiceChoice, TextField, type TabProps } from "./fields";
-import { CHAT_SUBTASKS, chatService, connectionOf, firstOfType, followsTranslate, patchConnection, patchService, setChatService, setSubtask, setTranslate } from "./model";
+import { CHAT_SUBTASKS, CLI_BINS, chatService, connectionOf, firstOfType, followsTranslate, patchConnection, patchService, setChatService, setSubtask, setTranslate } from "./model";
 
 const SERVICES: { type: ConnectionType; title: string; description: string }[] = [
   { type: "agy", title: "Antigravity (agy)", description: "Dùng gói đăng ký Antigravity trên máy này — không cần API key." },
+  { type: "claude_code", title: "Claude Code (claude)", description: "Dùng gói Claude Pro/Max đã đăng nhập trong Claude Code trên máy này — không cần API key." },
+  { type: "codex", title: "Codex CLI (codex)", description: "Dùng tài khoản ChatGPT đã đăng nhập trong Codex CLI trên máy này — không cần API key." },
   { type: "gemini", title: "Gemini API", description: "Gọi thẳng API Gemini của Google bằng API key của bạn." },
   { type: "openai_compat", title: "OpenAI-compatible", description: "Mọi dịch vụ chuẩn OpenAI: OpenRouter, DeepSeek, Groq, Ollama…" },
   { type: "command", title: "Lệnh CLI tuỳ chỉnh", description: "Chạy một lệnh CLI của riêng bạn cho mỗi lượt dịch." },
@@ -101,12 +103,12 @@ export function TranslationTab({ draft, setDraft, saved }: TabProps) {
             })}
           </div>
         </Section>
-        {service === "agy" || service === "command" ? (
+        {service in CLI_BINS || service === "command" ? (
           <TextField label="Thư mục HOME" value={conn?.home ?? ""} placeholder="để trống = tài khoản mặc định" hint="tách tài khoản đăng nhập riêng cho app"
             onChange={(home) => patch({ home })} />
         ) : null}
-        {service === "agy" ? (
-          <TextField label="Lệnh agy" value={conn?.bin ?? ""} placeholder="agy" onChange={(bin) => patch({ bin })} />
+        {service in CLI_BINS ? (
+          <TextField label="Lệnh chạy" value={conn?.bin ?? ""} placeholder={CLI_BINS[service]} onChange={(bin) => patch({ bin })} />
         ) : null}
         {service !== "command" ? (
           <TextField label="Mẫu lệnh CLI tuỳ chỉnh" value={firstOfType(draft, "command")?.command ?? ""} placeholder="my-llm --prompt {prompt}"

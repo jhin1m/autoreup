@@ -58,6 +58,25 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(models.status_code, 200)
         self.assertEqual(models.json(), {"models": []})
 
+    def test_claude_and_codex_connections_probe_their_binary_and_suggest_models(self):
+        data = self.client.get("/api/v1/settings").json()
+        data["connections"] += [
+            {"id": "cc", "label": "Claude Code", "type": "claude_code", "bin": "claude-binary-that-does-not-exist"},
+            {"id": "cx", "label": "Codex", "type": "codex", "home": self.tmp.name},
+        ]
+        data["tasks"]["translate"] = {"connection": "cc", "model": "sonnet", "effort": "high"}
+        self.assertEqual(self.client.put("/api/v1/settings", json=data).status_code, 200)
+        probe = self.client.post("/api/v1/settings/connections/cc/test").json()
+        self.assertFalse(probe["ok"])
+        self.assertIn("claude-binary-that-does-not-exist", probe["message"])
+        self.assertIn("sonnet", self.client.get("/api/v1/settings/connections/cc/models").json()["models"])
+        # codex: suggestions come from the CLI's own model cache under that HOME
+        self.assertEqual(self.client.get("/api/v1/settings/connections/cx/models").json(), {"models": []})
+        cache = Path(self.tmp.name) / ".codex" / "models_cache.json"
+        cache.parent.mkdir()
+        cache.write_text('{"models": [{"slug": "gpt-5.5"}, {"slug": "codex-auto-review"}]}', encoding="utf-8")
+        self.assertEqual(self.client.get("/api/v1/settings/connections/cx/models").json(), {"models": ["gpt-5.5"]})
+
     def test_corrupt_file_is_a_clear_error_and_put_repairs_it(self):
         fresh = self.client.get("/api/v1/settings").json()
         self.store.path.write_text("{not json", encoding="utf-8")

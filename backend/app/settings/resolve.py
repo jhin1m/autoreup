@@ -9,7 +9,7 @@ from __future__ import annotations
 from backend.app.agents import AgentConfig
 from backend.app.core.config import Settings
 
-from .schema import CAPABILITIES, AppSettings, AsrTask, Connection, OcrTask, TtsTask
+from .schema import CAPABILITIES, CLI_BINS, AppSettings, AsrTask, Connection, OcrTask, TtsTask
 from .store import SettingsStore
 
 
@@ -31,7 +31,7 @@ def agent_for(conn: Connection, model: str, env: Settings, effort: str = "") -> 
         provider=conn.type,
         model=model,
         effort=effort,
-        bin=conn.bin or "agy",
+        bin=conn.bin or CLI_BINS.get(conn.type, "agy"),
         home=conn.home or None,
         command=conn.command,
         timeout=env.agent_timeout,

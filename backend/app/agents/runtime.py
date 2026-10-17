@@ -1,8 +1,9 @@
 """Agent runtime — the single text-generation seam.
 
 Every text step (glossary extraction, translation, repair, naming) goes through here:
-a headless agent CLI — Antigravity (``agy``) natively, or any ACP/headless command via
-a configurable template — or an LLM API connection (``openai_compat`` / ``gemini``).
+a headless agent CLI — Antigravity (``agy``), Claude Code (``claude``) or Codex
+(``codex``) natively, or any ACP/headless command via a configurable template — or an
+LLM API connection (``openai_compat`` / ``gemini``).
 
 The deterministic pipeline still owns timing, segmentation and QA; the agent only
 receives a bounded prompt and returns text.
@@ -14,6 +15,8 @@ import time
 
 from . import api_llm
 from .agy import run_agy
+from .claude_code import run_claude
+from .codex import run_codex
 from .command import run_command
 from .config import AgentConfig, AgentError
 
@@ -47,6 +50,10 @@ def run_once(prompt: str, config: AgentConfig) -> str:
     provider = (config.provider or "agy").strip().lower()
     if provider in {"agy", "antigravity"}:
         return run_agy(prompt, config)
+    if provider == "claude_code":
+        return run_claude(prompt, config)
+    if provider == "codex":
+        return run_codex(prompt, config)
     if provider in {"command", "cli", "acp"}:
         if not config.command.strip():
             raise AgentError("provider=command requires agent_command (template with {prompt})")

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     data_dir_name: str = "data"
     frontend_dir_name: str = "frontend"
     # Agent runtime — headless CLI agents (no LLM API keys).
-    agent_provider: str = "agy"  # agy | command
+    agent_provider: str = "agy"  # agy | claude | codex | command
     agent_bin: str = "agy"
     agent_home: str | None = None  # HOME override for the child process (account isolation)
     # provider=command: template with {prompt}, e.g. "acpx claude exec --format quiet {prompt}"

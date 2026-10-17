@@ -9,9 +9,14 @@ const CHAT_TASKS: ChatTaskName[] = ["translate", ...CHAT_SUBTASKS];
 const VISION_TYPES: ConnectionType[] = ["gemini", "openai_compat"];
 const MASK = "••••";
 
+/** Subscription CLI agents and the binary they run when `bin` is blank. */
+export const CLI_BINS: Partial<Record<ConnectionType | "", string>> = { agy: "agy", claude_code: "claude", codex: "codex" };
+
 /** Name a new connection gets in settings.json (the UI never shows it). */
 export const SERVICE_NAMES: Record<ConnectionType, string> = {
   agy: "Antigravity",
+  claude_code: "Claude Code",
+  codex: "Codex CLI",
   command: "Lệnh CLI tuỳ chỉnh",
   openai_compat: "OpenAI-compatible",
   gemini: "Gemini API",

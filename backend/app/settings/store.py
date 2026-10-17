@@ -40,11 +40,20 @@ def _is_placeholder(value: str) -> bool:
 def seed_from_env(env: Settings) -> AppSettings:
     """The settings an env-only install implicitly had."""
     provider = (env.agent_provider or "agy").strip().lower()
+    if provider in {"command", "cli", "acp"}:
+        agent_type = "command"
+    elif provider in {"claude", "claude_code"}:
+        agent_type = "claude_code"
+    elif provider == "codex":
+        agent_type = "codex"
+    else:
+        agent_type = "agy"
     agent = Connection(
         id="agent",
         label="Agent CLI",
-        type="command" if provider in {"command", "cli", "acp"} else "agy",
-        bin=env.agent_bin,
+        type=agent_type,
+        # AGENT_BIN defaults to "agy": never hand that binary to another CLI
+        bin="" if agent_type != "agy" and env.agent_bin == "agy" else env.agent_bin,
         home=env.agent_home or "",
         command=env.agent_command,
     )
