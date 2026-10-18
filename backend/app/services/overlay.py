@@ -15,20 +15,22 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-COVER_MODES = ("blur", "darken", "solid")
+COVER_MODES = ("blur", "darken", "solid", "image")
 
 
 @dataclass(slots=True)
 class CoverRegion:
-    """One rectangle to hide (fractions of width/height), plus how to hide it."""
+    """One rectangle to hide (fractions of width/height), plus how to hide it — or,
+    with mode "image", where to stamp one of the user's images (services.overlay_images)."""
 
     x: float
     y: float
     w: float
     h: float
-    mode: str = "blur"        # blur | darken | solid
-    strength: float = 1.0     # blur: radius scale; darken/solid: 0..1 opacity
+    mode: str = "blur"        # blur | darken | solid | image
+    strength: float = 1.0     # blur: radius scale; darken/solid/image: 0..1 opacity
     label: str = ""           # "band" | "logo" | free text
+    image: str = ""           # mode "image": the library file name (fitted inside the box)
 
     def normalized(self) -> "CoverRegion":
         x = min(max(float(self.x), 0.0), 1.0)
@@ -36,8 +38,9 @@ class CoverRegion:
         w = min(max(float(self.w), 0.01), 1.0 - x)
         h = min(max(float(self.h), 0.01), 1.0 - y)
         mode = self.mode if self.mode in COVER_MODES else "blur"
+        image = Path(str(self.image or "")).name if mode == "image" else ""
         return CoverRegion(round(x, 4), round(y, 4), round(w, 4), round(h, 4), mode,
-                           round(min(max(float(self.strength), 0.05), 1.0), 3), self.label)
+                           round(min(max(float(self.strength), 0.05), 1.0), 3), self.label, image)
 
 
 @dataclass(slots=True)

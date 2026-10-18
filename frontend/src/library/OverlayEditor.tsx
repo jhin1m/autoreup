@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
-import type { CoverRegion, FontInfo, OverlayConfig, OverlayEncode, OverlayFrame } from "../api";
+import type { CoverRegion, FontInfo, OverlayConfig, OverlayEncode, OverlayFrame, OverlayImage } from "../api";
 import { useToast } from "../toast";
 
 const MODES: { id: string; label: string }[] = [
@@ -58,6 +58,10 @@ export function OverlayEditor({
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const [defaultFont, setDefaultFont] = useState("");
   const [captionFamily, setCaptionFamily] = useState("");
+  const [images, setImages] = useState<OverlayImage[]>([]);
+  const [imageBase, setImageBase] = useState("/media/overlay_images");
+  const [uploading, setUploading] = useState(false);
+  const imageInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     api
@@ -65,6 +69,13 @@ export function OverlayEditor({
       .then((list) => {
         setFonts(list.fonts);
         setDefaultFont(list.default);
+      })
+      .catch(() => {});
+    api
+      .fetchOverlayImages()
+      .then((library) => {
+        setImages(library.images);
+        setImageBase(library.base);
       })
       .catch(() => {});
   }, []);
@@ -185,6 +196,39 @@ export function OverlayEditor({
       return { ...current, cover: [...current.cover, region] };
     });
     setPreview("");
+  }
+
+  /** Stamp a library image: a box with the image's own shape, in the top-right corner. */
+  function addImage(image: OverlayImage) {
+    const aspect = frame ? frame.out.width / frame.out.height : 16 / 9;
+    let w = 0.18;
+    let h = (w * aspect * image.height) / image.width;
+    if (h > 0.4) {
+      w *= 0.4 / h;
+      h = 0.4;
+    }
+    setConfig((current) => {
+      if (!current) return current;
+      const region: CoverRegion = { x: round4(0.97 - w), y: 0.04, w: round4(w), h: round4(h), mode: "image", strength: 1, label: "image", image: image.name };
+      setSelected(current.cover.length);
+      return { ...current, cover: [...current.cover, region] };
+    });
+    setPreview("");
+  }
+
+  /** Upload into the shared library, then stamp it (or swap it into the selected image box). */
+  async function uploadImage(file: File) {
+    setUploading(true);
+    try {
+      const image = await api.uploadOverlayImage(file);
+      setImages((list) => [image, ...list.filter((item) => item.name !== image.name)]);
+      if (active?.mode === "image") patchRegion(selected, { image: image.name });
+      else addImage(image);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Không tải ảnh lên được", "error");
+    } finally {
+      setUploading(false);
+    }
   }
 
   function removeRegion(index: number) {
@@ -380,6 +424,9 @@ export function OverlayEditor({
                   onPointerDown={(event) => onPointerDown(event, index, "move")}
                   title={region.label || region.mode}
                 >
+                  {region.mode === "image" && region.image ? (
+                    <img className="ov-image" src={`${imageBase}/${region.image}`} alt="" style={{ opacity: region.strength }} draggable={false} />
+                  ) : null}
                   <span className="ov-tag">{regionName(region)}</span>
                 </div>
                 {index === selected ? (
@@ -510,7 +557,7 @@ export function OverlayEditor({
             ) : null}
 
             <div className="ov-group">
-              <p className="mono tiny">Vùng che chữ gốc ({config?.cover.length ?? 0})</p>
+              <p className="mono tiny">Vùng che &amp; ảnh chèn ({config?.cover.length ?? 0})</p>
               {config?.cover.map((region, index) => (
                 <button
                   key={index}
@@ -536,27 +583,67 @@ export function OverlayEditor({
                 <button className="ghost" onClick={() => addRegion("band", "blur")}>
                   + Phụ đề gốc
                 </button>
+                <button
+                  className="ghost"
+                  disabled={uploading}
+                  onClick={() => imageInput.current?.click()}
+                  title="Logo, watermark… (PNG trong suốt là đẹp nhất). Ảnh được lưu lại để dùng cho mọi tập"
+                >
+                  {uploading ? "Đang tải ảnh…" : "+ Ảnh của bạn"}
+                </button>
+                <input
+                  ref={imageInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void uploadImage(file);
+                  }}
+                />
               </div>
+              {images.length ? (
+                <div className="ov-library" role="list" aria-label="Ảnh đã tải lên">
+                  {images.map((image) => (
+                    <button
+                      key={image.name}
+                      role="listitem"
+                      className={active?.mode === "image" && active.image === image.name ? "on" : ""}
+                      onClick={() => (active?.mode === "image" ? patchRegion(selected, { image: image.name }) : addImage(image))}
+                      title={active?.mode === "image" ? "Đổi ảnh của hộp đang chọn" : "Chèn ảnh này"}
+                    >
+                      <img src={`${imageBase}/${image.name}`} alt={image.name} loading="lazy" />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             {active ? (
               <div className="ov-group">
                 <p className="mono tiny">Hộp đang chọn</p>
+                {active.mode === "image" ? (
+                  <p className="mono tiny">Ảnh nằm gọn trong hộp, giữ đúng tỉ lệ. Bấm ảnh ở thư viện phía trên để đổi.</p>
+                ) : (
+                  <label className="ov-field">
+                    <span>Cách che</span>
+                    <select value={active.mode} onChange={(event) => patchRegion(selected, { mode: event.target.value })}>
+                      {MODES.map((mode) => (
+                        <option key={mode.id} value={mode.id}>
+                          {mode.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="ov-field">
-                  <span>Cách che</span>
-                  <select value={active.mode} onChange={(event) => patchRegion(selected, { mode: event.target.value })}>
-                    {MODES.map((mode) => (
-                      <option key={mode.id} value={mode.id}>
-                        {mode.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="ov-field">
-                  <span>Cường độ {active.strength.toFixed(2)}</span>
+                  <span>
+                    {active.mode === "image" ? "Độ đậm" : "Cường độ"} {active.strength.toFixed(2)}
+                  </span>
                   <input
                     type="range"
-                    min={0.2}
+                    min={active.mode === "image" ? 0.1 : 0.2}
                     max={1}
                     step={0.05}
                     value={active.strength}
@@ -752,7 +839,7 @@ function fontName(fonts: FontInfo[], path: string): string {
   return fonts.find((font) => font.path === path)?.name ?? (path.split("/").pop() ?? "").replace(/\.(ttf|otf)$/i, "");
 }
 
-const REGION_NAMES: Record<string, string> = { band: "phụ đề gốc", logo: "logo", text: "vùng chữ" };
+const REGION_NAMES: Record<string, string> = { band: "phụ đề gốc", logo: "logo", text: "vùng chữ", image: "ảnh" };
 
 /** The stored label stays a stable id ("band"); the editor shows it in Vietnamese. */
 function regionName(region: CoverRegion): string {

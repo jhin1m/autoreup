@@ -115,6 +115,7 @@ def _load_overlay(context: PipelineContext):
 def _hardsub_config(settings: Settings, overlay=None):
     from backend.app.services.fonts import default_font, resolve_font
     from backend.app.services.hardsub import HardsubConfig
+    from backend.app.services.overlay_images import images_dir
     from backend.app.infrastructure.ffmpeg_encode import video_encode_args, canonical_scale_filter
 
     font = resolve_font(settings, getattr(overlay, "font", "")) or default_font(settings)
@@ -130,6 +131,7 @@ def _hardsub_config(settings: Settings, overlay=None):
         bed_volume=settings.dub_bed_volume if bed_volume is None else bed_volume,
         voice_volume=getattr(overlay, "voice_volume", 1.0),
         gap_volume=settings.dub_gap_volume if gap_volume is None else gap_volume,
+        images_dir=str(images_dir(settings)),
         duck=settings.dub_duck,
         carve_db=settings.dub_carve_db,
         video_codec_args=tuple(video_encode_args(settings, getattr(overlay, "bitrate", ""))),

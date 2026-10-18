@@ -109,6 +109,7 @@ class CoverRegionIn(BaseModel):
     mode: str = "blur"
     strength: float = Field(default=1.0, gt=0.0, le=1.0)
     label: str = ""
+    image: str = ""
 
 
 class OverlayIn(BaseModel):

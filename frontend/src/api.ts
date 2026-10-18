@@ -300,6 +300,8 @@ export type CoverRegion = {
   mode: string;
   strength: number;
   label: string;
+  /** mode "image": the library file name (fetchOverlayImages) */
+  image?: string;
 };
 
 export type OverlayConfig = {
@@ -335,6 +337,25 @@ export type FontInfo = { path: string; name: string; source: "app" | "user" | "s
 export async function fetchFonts(): Promise<{ default: string; fonts: FontInfo[] }> {
   const response = await ok(await fetch("/api/v1/settings/fonts"), "Không tải được danh sách font");
   return (await response.json()) as { default: string; fonts: FontInfo[] };
+}
+
+export type OverlayImage = { name: string; width: number; height: number };
+
+/** The user's images (logo, watermark…) to stamp on renders; files live under ``base``. */
+export async function fetchOverlayImages(): Promise<{ base: string; images: OverlayImage[] }> {
+  const response = await ok(await fetch("/api/v1/settings/images"), "Không tải được thư viện ảnh");
+  return (await response.json()) as { base: string; images: OverlayImage[] };
+}
+
+export async function uploadOverlayImage(file: File): Promise<OverlayImage> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch("/api/v1/settings/images", { method: "POST", body });
+  if (!response.ok) {
+    const detail = await response.json().then((data: { detail?: unknown }) => data.detail, () => null);
+    throw new Error(typeof detail === "string" ? detail : "Không tải ảnh lên được");
+  }
+  return (await response.json()) as OverlayImage;
 }
 
 export function fontFileUrl(path: string): string {

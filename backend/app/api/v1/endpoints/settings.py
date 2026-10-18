@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, Query, Response
+from fastapi import APIRouter, Body, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, ValidationError
 
 from backend.app.agents import AgentError, api_llm
@@ -208,6 +208,26 @@ def fonts() -> dict:
 
     settings = get_settings()
     return {"default": str(default_font(settings)), "fonts": list_fonts(settings)}
+
+
+@router.get("/images")
+def overlay_images() -> dict:
+    """The user's images the overlay editor can stamp on a render (served under /media)."""
+    from backend.app.services.overlay_images import list_images
+
+    return {"base": "/media/overlay_images", "images": list_images(get_settings())}
+
+
+@router.post("/images")
+async def upload_overlay_image(file: UploadFile = File(...)) -> dict:
+    """Add an image (PNG/JPG/WebP…) to the library; stored as a PNG, alpha kept."""
+    from backend.app.services.overlay_images import MAX_UPLOAD_BYTES, ImageUploadError, save_image
+
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        return save_image(get_settings(), file.filename or "", data)
+    except ImageUploadError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("/fonts/file")
