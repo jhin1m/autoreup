@@ -42,7 +42,7 @@ class HardsubConfig:
     band_pad: int = 26        # extra px around the detected band so the original sub's outline is fully covered
     blur: int = 20            # boxblur radius (ffmpeg caps at 23); applied twice for strong coverage
     darken: float = 0.12
-    bed_volume: float = 0.55
+    bed_volume: float = 0.18
     voice_volume: float = 1.0
     gap_volume: float = 0.0  # original audio where nobody speaks; <= bed_volume = no boost
     images_dir: str = ""  # the user's image library (services.overlay_images) for "image" regions

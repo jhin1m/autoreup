@@ -131,9 +131,9 @@ export function OverlayEditor({
 
   // The render's mix levels; the "dub" preview plays the original at the bed level
   // (the render additionally ducks it while the voice speaks).
-  const bedVolume = config?.bed_volume ?? frame?.bed_volume ?? 0.55;
+  const bedVolume = config?.bed_volume ?? frame?.bed_volume ?? 0.18;
   const voiceVolume = config?.voice_volume ?? 1;
-  const gapVolume = config?.gap_volume ?? frame?.gap_volume ?? 1;
+  const gapVolume = config?.gap_volume ?? frame?.gap_volume ?? 0.7;
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
