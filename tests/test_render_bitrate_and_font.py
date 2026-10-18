@@ -60,3 +60,23 @@ def test_a_render_uses_the_bitrate_picked_in_the_editor(monkeypatch):
     for junk in ("8M; rm -rf /", "fast", "10k", "900M", "source"):
         assert OverlayConfig.from_json({"bitrate": junk}).bitrate == ""
     assert OverlayConfig.from_json(OverlayConfig(bitrate="1500k").to_json()).bitrate == "1500k"
+
+
+def test_a_render_mixes_at_the_levels_picked_in_the_editor(tmp_path):
+    from backend.app.services.audio import dub_mix_filter
+
+    settings = _settings(tmp_path, dub_bed_volume=0.55)
+    overlay = OverlayConfig.from_json(OverlayConfig(bed_volume=0.2, voice_volume=0.8).to_json())
+    config = _hardsub_config(settings, overlay)
+    assert (config.bed_volume, config.voice_volume) == (0.2, 0.8)
+    graph = dub_mix_filter("[0:a:0]", "[2:a:0]", "[aout]", config.bed_volume, voice_volume=config.voice_volume)
+    assert "volume=0.200" in graph and "volume=0.800" in graph
+
+    # never touched in the editor: the app setting and a full-level voice
+    untouched = _hardsub_config(settings, OverlayConfig.from_json({}))
+    assert (untouched.bed_volume, untouched.voice_volume) == (0.55, 1.0)
+    # a muted bed stays muted instead of falling back to the app setting
+    assert _hardsub_config(settings, OverlayConfig.from_json({"bed_volume": 0})).bed_volume == 0.0
+    # out of range clamps to 0-1, junk falls back
+    clamped = OverlayConfig.from_json({"bed_volume": 3, "voice_volume": "loud"})
+    assert (clamped.bed_volume, clamped.voice_volume) == (1.0, 1.0)

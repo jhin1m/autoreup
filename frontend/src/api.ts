@@ -311,6 +311,12 @@ export type OverlayConfig = {
   font?: string;
   /** video bitrate for the render ("2500k", "4M"); "" = the app setting */
   bitrate?: string;
+  /** original audio under the dub (0-1); null = the app setting (frame.bed_volume) */
+  bed_volume?: number | null;
+  /** the dub itself (0-1) */
+  voice_volume?: number;
+  /** original audio where nobody speaks (0-1); null = the app setting (frame.gap_volume) */
+  gap_volume?: number | null;
 };
 
 export type BitratePreset = { value: string; label: string; hint: string; vmaf: number };
@@ -343,6 +349,10 @@ export type OverlayFrame = {
   font_size?: number;
   duration: number;
   encode?: OverlayEncode;
+  /** the app's default level for the original audio under the dub */
+  bed_volume?: number;
+  /** the app's default level for the original audio where nobody speaks */
+  gap_volume?: number;
 };
 
 export type OverlayState = OverlayConfig & { frame?: OverlayFrame };

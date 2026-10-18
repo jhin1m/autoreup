@@ -43,6 +43,8 @@ class HardsubConfig:
     blur: int = 20            # boxblur radius (ffmpeg caps at 23); applied twice for strong coverage
     darken: float = 0.12
     bed_volume: float = 0.55
+    voice_volume: float = 1.0
+    gap_volume: float = 0.0  # original audio where nobody speaks; <= bed_volume = no boost
     duck: bool = True
     carve_db: float = -3.0
     # Encoder + canonical geometry (filled from Settings). See preferred_video_codec_args:
@@ -379,10 +381,21 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     ) if part] or ["null"]
     video_graph = f"[0:v]{','.join(picture_filters)}[scaled];" + cover.replace("[0:v]", "[scaled]") + f"[cov][1:v]overlay=0:0[vo]"
 
+    gap_boost = None
     if has_voice:
-        from backend.app.services.audio import dub_mix_filter
+        from backend.app.services.audio import dub_mix_filter, render_gap_gain
 
-        audio_graph = ";" + dub_mix_filter("[0:a:0]", "[2:a:0]", "[aout]", config.bed_volume, duck=config.duck, carve_db=config.carve_db)
+        bed_gain = None
+        if config.gap_volume > config.bed_volume:
+            gain_path = work_dir / "bed_gain.wav"
+            gap_boost = render_gap_gain(video, Path(voice_track), gain_path, config.bed_volume, config.gap_volume)
+            if gap_boost:
+                inputs += ["-i", str(gain_path)]
+                bed_gain = "[3:a:0]"
+        audio_graph = ";" + dub_mix_filter(
+            "[0:a:0]", "[2:a:0]", "[aout]", config.bed_volume, duck=config.duck, carve_db=config.carve_db,
+            voice_volume=config.voice_volume, bed_gain=bed_gain,
+        )
         amap = ["-map", "[aout]"]
     else:
         audio_graph = ""
@@ -397,4 +410,4 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         str(output),
     ])
-    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues)}
+    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues), "gap_boost": gap_boost}

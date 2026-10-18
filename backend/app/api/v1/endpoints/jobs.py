@@ -118,6 +118,9 @@ class OverlayIn(BaseModel):
     cover: list[CoverRegionIn] = Field(default_factory=list)
     font: str = ""
     bitrate: str = ""
+    bed_volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    voice_volume: float = Field(default=1.0, ge=0.0, le=1.0)
+    gap_volume: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 def _overlay_context(job_id: str):
@@ -166,6 +169,8 @@ def _frame_info(video: Path) -> dict:
         "font_size": config.font_size,
         "duration": duration,
         "encode": _encode_info(video),
+        "bed_volume": get_job_service().settings.dub_bed_volume,
+        "gap_volume": get_job_service().settings.dub_gap_volume,
     }
 
 

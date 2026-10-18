@@ -50,6 +50,9 @@ class OverlayConfig:
     cover: list[CoverRegion] = field(default_factory=list)
     font: str = ""  # caption font file (one of services.fonts.list_fonts); "" = the app default
     bitrate: str = ""  # video bitrate for this render ("2500k", "4M"); "" = the app setting
+    bed_volume: float | None = None  # original audio under the dub (0-1); None = the app setting
+    voice_volume: float = 1.0  # the dub itself (0-1)
+    gap_volume: float | None = None  # original audio where nobody speaks (0-1); None = the app setting
 
     def band_region(self) -> CoverRegion | None:
         for region in self.cover:
@@ -74,6 +77,9 @@ class OverlayConfig:
             "cover": [asdict(region.normalized()) for region in self.cover],
             "font": str(self.font or ""),
             "bitrate": _bitrate(self.bitrate),
+            "bed_volume": _volume(self.bed_volume),
+            "voice_volume": _volume(self.voice_volume, 1.0),
+            "gap_volume": _volume(self.gap_volume),
         }
 
     @classmethod
@@ -87,6 +93,9 @@ class OverlayConfig:
             cover=regions,
             font=str(data.get("font") or ""),
             bitrate=_bitrate(data.get("bitrate")),
+            bed_volume=_volume(data.get("bed_volume")),
+            voice_volume=_volume(data.get("voice_volume"), 1.0),
+            gap_volume=_volume(data.get("gap_volume")),
         )
 
 
@@ -96,6 +105,14 @@ def _bitrate(value) -> str:
 
     text = str(value or "").strip()
     return text if text and valid_bitrate(text) else ""
+
+
+def _volume(value, default: float | None = None) -> float | None:
+    """A gain in 0-1 (rounded); anything unreadable falls back to ``default``."""
+    try:
+        return round(min(max(float(value), 0.0), 1.0), 3)
+    except (TypeError, ValueError):
+        return default
 
 
 def overlay_path(job_dir: Path, job_id: str) -> Path:

@@ -147,6 +147,7 @@ export function Preview({
 
   const dubArt = job ? latestArtifact(job, "hardsub_mp4") ?? latestArtifact(job, "dubbed_mp4") : undefined;
   const srcArt = job ? latestArtifact(job, "video") : undefined;
+  const voiceArt = job ? latestArtifact(job, "voice_track") : undefined;
   // Prefer the dubbed render, but fall back to the original if that file is gone
   // (a stale manifest artifact is dropped server-side; a broken file may still 404).
   const candidates = (dubbed ? [dubArt, srcArt] : [srcArt]).filter((artifact): artifact is Artifact => Boolean(artifact));
@@ -331,6 +332,8 @@ export function Preview({
         <OverlayEditor
           jobId={job.job_id}
           videoPath={`/media/${srcArt.path}`}
+          // a re-dub rewrites the same path: version it so the editor never replays a stale voice
+          voicePath={voiceArt ? `/media/${voiceArt.path}?v=${voiceArt.size_bytes ?? voiceArt.created_at ?? ""}` : ""}
           cues={cues}
           firstRender={isReview}
           onClose={() => setEditor(false)}

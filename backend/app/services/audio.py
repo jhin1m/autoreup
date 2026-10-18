@@ -44,27 +44,137 @@ DUB_DUCK = "sidechaincompress=threshold=0.03:ratio=6:attack=25:release=420:makeu
 DUB_CARVE = "equalizer=f=2500:t=q:w=1.0:g=-3"
 
 
-def dub_mix_filter(bed: str, voice: str, out: str, bed_volume: float, duck: bool = True, carve_db: float = -3.0) -> str:
+def dub_mix_filter(bed: str, voice: str, out: str, bed_volume: float, duck: bool = True, carve_db: float = -3.0, voice_volume: float = 1.0, bed_gain: str | None = None) -> str:
     """Dub mix graph. ``bed``/``voice``/``out`` are stream labels ('[0:a:0]' …).
 
     Keep the original bed alive and DUCK it under narration (sidechain 6:1, slow
     attack/release) instead of playing it at a constant low level; a 2.5 kHz dip on
     the bed buys intelligibility so the bed can stay loud, and music/SFX breathe back
-    in the gaps."""
+    in the gaps.
+
+    ``bed_gain`` (a mono gain-envelope stream, see ``render_gap_gain``) replaces the
+    constant ``bed_volume``: the envelope already holds the bed level under speech and
+    the louder level in the gaps."""
     stable = out.strip("[]")
     carve = f",equalizer=f=2500:t=q:w=1.0:g={carve_db:.1f}" if carve_db else ""
+    if bed_gain:
+        # pan, not aformat: aformat's mono->stereo upmix lowers each side by 3 dB
+        bed_chain = (
+            f"{bed}aresample=44100,aformat=channel_layouts=stereo[{stable}_raw];"
+            f"{bed_gain}aresample=44100,pan=stereo|c0=c0|c1=c0[{stable}_gain];"
+            f"[{stable}_raw][{stable}_gain]amultiply{carve}[{stable}_bed];"
+        )
+    else:
+        bed_chain = f"{bed}aresample=44100,volume={bed_volume:.3f}{carve}[{stable}_bed];"
     if duck:
         return (
-            f"{bed}aresample=44100,volume={bed_volume:.3f}{carve}[{stable}_bed];"
-            f"{voice}aresample=44100,volume=1.0,asplit=2[{stable}_voc][{stable}_sc];"
+            bed_chain
+            + f"{voice}aresample=44100,volume={voice_volume:.3f},asplit=2[{stable}_voc][{stable}_sc];"
             f"[{stable}_bed][{stable}_sc]{DUB_DUCK}[{stable}_ducked];"
             f"[{stable}_ducked][{stable}_voc]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,volume=0.95,alimiter=limit=0.95{out}"
         )
     return (
-        f"{bed}aresample=44100,volume={bed_volume:.3f}{carve}[{stable}_bed];"
-        f"{voice}aresample=44100,volume=1.0[{stable}_voc];"
+        bed_chain
+        + f"{voice}aresample=44100,volume={voice_volume:.3f}[{stable}_voc];"
         f"[{stable}_bed][{stable}_voc]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,volume=0.95,alimiter=limit=0.95{out}"
     )
+
+
+# Gap boost: wherever nobody speaks — neither the source (Silero VAD) nor the dub —
+# the original audio (music, SFX) comes up from the bed level to a louder one.
+# Source speech counts too: where a dub line ends before the original line does, a
+# boost would bring the original voice up in the clear.
+GAP_PAD = 0.3          # speech keeps the bed level this long around it (s)
+GAP_MIN = 1.5          # quieter gaps than this stay at the bed level (no pumping)
+GAP_RAMP = 0.4         # bed <-> gap fade, inside the gap (s)
+GAIN_RATE = 1000       # gain-envelope sample rate; ffmpeg resamples it to the mix rate
+VOICE_FLOOR_DB = -45.0  # the dub track counts as speaking above this frame RMS
+_VOICE_RATE = 8000
+_VOICE_FRAME = 0.02
+
+
+def voice_regions(voice_track: Path) -> list[tuple[float, float]]:
+    """Spans where the dub track is audible (its gaps are rendered as silence).
+
+    Streams the decode in one-minute blocks: a whole 2 h track at 8 kHz would be ~230 MB."""
+    frame = int(_VOICE_RATE * _VOICE_FRAME)
+    floor = 10 ** (VOICE_FLOOR_DB / 20)
+    decoder = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-i", str(voice_track), "-f", "f32le", "-ac", "1", "-ar", str(_VOICE_RATE), "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    loud: list[np.ndarray] = []
+    block = frame * 3000  # one minute of 20 ms frames
+    pending = np.zeros(0, dtype=np.float32)
+    while True:
+        chunk = decoder.stdout.read(block * 4)
+        if not chunk:
+            break
+        pending = np.concatenate([pending, np.frombuffer(chunk, dtype="<f4")])
+        whole = len(pending) // frame * frame
+        frames = pending[:whole].reshape(-1, frame)
+        loud.append(np.sqrt(np.mean(frames * frames, axis=1)) > floor)
+        pending = pending[whole:]
+    stderr = decoder.stderr.read().decode(errors="replace")
+    if decoder.wait() != 0:
+        raise RuntimeError(f"Command failed ({decoder.returncode}): decode {voice_track}\n{stderr[-2000:]}")
+    active = np.concatenate(loud) if loud else np.zeros(0, dtype=bool)
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], active.astype(np.int8), [0]])))
+    return [(start * _VOICE_FRAME, end * _VOICE_FRAME) for start, end in zip(edges[::2], edges[1::2])]
+
+
+def speech_gaps(regions: list[tuple[float, float]], duration: float, pad: float = GAP_PAD, min_gap: float = GAP_MIN) -> list[tuple[float, float]]:
+    """The spans of ``[0, duration]`` at least ``min_gap`` long that no padded speech
+    region touches."""
+    gaps: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in sorted(regions):
+        if start - pad - cursor >= min_gap:
+            gaps.append((cursor, start - pad))
+        cursor = max(cursor, end + pad)
+    if duration - cursor >= min_gap:
+        gaps.append((cursor, duration))
+    return gaps
+
+
+def gap_gain_envelope(gaps: list[tuple[float, float]], duration: float, bed: float, gap: float, ramp: float = GAP_RAMP, rate: int = GAIN_RATE) -> np.ndarray:
+    """Per-sample bed gain: ``bed`` under speech, ``gap`` in the gaps, a raised-cosine
+    ``ramp`` inside each gap edge (none at the very start/end of the video)."""
+    envelope = np.full(int(round(duration * rate)) + 1, bed, dtype=np.float32)
+    for start, end in gaps:
+        lo, hi = int(round(start * rate)), min(len(envelope), int(round(end * rate)))
+        t = np.arange(lo, hi, dtype=np.float64) / rate
+        rise = np.clip((t - start) / ramp, 0.0, 1.0) if start > 0 else 1.0
+        fall = np.clip((end - t) / ramp, 0.0, 1.0) if end < duration else 1.0
+        weight = 0.5 - 0.5 * np.cos(np.pi * np.minimum(rise, fall))
+        envelope[lo:hi] = bed + (gap - bed) * weight
+    return envelope
+
+
+def render_gap_gain(video: Path, voice_track: Path, output_path: Path, bed: float, gap: float) -> dict | None:
+    """Write the bed's gain envelope (mono 16-bit wav at ``GAIN_RATE``) for
+    ``dub_mix_filter(bed_gain=...)``. ``None`` = no boost: the source VAD is missing
+    (never boost blind — the gaps could hold the original voice) or nothing qualifies."""
+    import wave
+
+    from backend.app.dubbing.onset import _regions_from_probs, _speech_probs
+
+    packed = _speech_probs(video)
+    if packed is None:
+        return None
+    duration = probe_duration(video)
+    gaps = speech_gaps(_regions_from_probs(*packed) + voice_regions(voice_track), duration)
+    if not gaps:
+        return None
+    # hold the last level past the bed's end: amultiply stops at the shorter input
+    envelope = np.pad(gap_gain_envelope(gaps, duration, bed, gap), (0, 5 * GAIN_RATE), mode="edge")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(output_path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(GAIN_RATE)
+        out.writeframes((np.clip(envelope, 0.0, 1.0) * 32767).astype("<i2").tobytes())
+    return {"gaps": len(gaps), "seconds": round(float(sum(end - start for start, end in gaps)), 1)}
 
 
 def clamp(value: float, lower: float, upper: float) -> float:

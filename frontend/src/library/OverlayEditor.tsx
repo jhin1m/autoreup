@@ -11,6 +11,11 @@ const MODES: { id: string; label: string }[] = [
 
 type Handle = "move" | "se" | "caption" | null;
 
+type Sound = "dub" | "source" | "off";
+
+/** Re-seek the voice when it drifts this far (s) from the picture. */
+const MAX_VOICE_DRIFT = 0.3;
+
 /** WYSIWYG review of the render: drag boxes over the paused frame to hide the original
  *  subtitle band / a channel logo, place the Vietnamese caption, pick font and quality,
  *  then start the render. The pipeline waits here before an episode's first render.
@@ -18,6 +23,7 @@ type Handle = "move" | "se" | "caption" | null;
 export function OverlayEditor({
   jobId,
   videoPath,
+  voicePath,
   cues,
   firstRender,
   onClose,
@@ -25,6 +31,8 @@ export function OverlayEditor({
 }: {
   jobId: string;
   videoPath: string;
+  /** The finished voiceover track ("" when the episode has no voice). */
+  voicePath: string;
   cues: { start: number; end: number; text: string }[];
   /** The episode has never been rendered (the dub waits for this review). */
   firstRender: boolean;
@@ -33,12 +41,14 @@ export function OverlayEditor({
 }) {
   const { toast } = useToast();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const voiceRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [config, setConfig] = useState<OverlayConfig | null>(null);
   const [frame, setFrame] = useState<OverlayFrame | null>(null);
   const [selected, setSelected] = useState(-1);
   const [t, setT] = useState(1);
   const [playing, setPlaying] = useState(false);
+  const [sound, setSound] = useState<Sound>(voicePath ? "dub" : "off");
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState("");
@@ -108,6 +118,41 @@ export function OverlayEditor({
   const captionFontPx =
     frame && canvasWidth > 0 ? ((frame.font_size ?? 58) * (config?.caption_scale ?? 1) * canvasWidth) / frame.out.width : 16;
 
+  // The render's mix levels; the "dub" preview plays the original at the bed level
+  // (the render additionally ducks it while the voice speaks).
+  const bedVolume = config?.bed_volume ?? frame?.bed_volume ?? 0.55;
+  const voiceVolume = config?.voice_volume ?? 1;
+  const gapVolume = config?.gap_volume ?? frame?.gap_volume ?? 1;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) {
+      video.muted = sound === "off";
+      video.volume = sound === "dub" ? bedVolume : 1;
+    }
+    if (voiceRef.current) voiceRef.current.volume = voiceVolume;
+  }, [sound, bedVolume, voiceVolume]);
+
+  // The video carries the original audio; the dub is a separate track kept in step
+  // with the picture (started from its position, paused with it).
+  useEffect(() => {
+    const video = videoRef.current;
+    const voice = voiceRef.current;
+    if (!voice) return;
+    if (sound === "dub" && playing && video) {
+      voice.currentTime = video.currentTime;
+      voice.play().catch(() => {});
+    } else {
+      voice.pause();
+    }
+  }, [sound, playing]);
+
+  function syncVoice(time: number) {
+    const voice = voiceRef.current;
+    if (voice && sound === "dub" && !voice.paused && Math.abs(voice.currentTime - time) > MAX_VOICE_DRIFT) {
+      voice.currentTime = time;
+    }
+  }
+
   const captionText = useMemo(() => {
     const cue = cues.find((item) => item.start <= t && t < item.end);
     return cue?.text ?? "";
@@ -116,6 +161,11 @@ export function OverlayEditor({
   function patch(next: Partial<OverlayConfig>) {
     setConfig((current) => (current ? { ...current, ...next } : current));
     setPreview("");
+  }
+
+  /** Mix levels change only the sound: keep the rendered preview frame. */
+  function patchVolume(next: Partial<Pick<OverlayConfig, "bed_volume" | "voice_volume" | "gap_volume">>) {
+    setConfig((current) => (current ? { ...current, ...next } : current));
   }
 
   function patchRegion(index: number, next: Partial<CoverRegion>) {
@@ -289,7 +339,6 @@ export function OverlayEditor({
             <video
               ref={videoRef}
               src={videoPath}
-              muted
               playsInline
               preload="metadata"
               onLoadedMetadata={() => {
@@ -297,9 +346,14 @@ export function OverlayEditor({
                 if (video) video.currentTime = t;
               }}
               onTimeUpdate={(event) => {
-                if (playing) setT(event.currentTarget.currentTime);
+                if (!playing) return;
+                const time = event.currentTarget.currentTime;
+                setT(time);
+                syncVoice(time);
               }}
+              onEnded={() => setPlaying(false)}
             />
+            {voicePath ? <audio ref={voiceRef} src={voicePath} preload="auto" /> : null}
             {frame && Math.abs(frame.source.width / frame.source.height - outAspect) > 0.01 ? (
               <div
                 className="ov-source-area"
@@ -392,7 +446,68 @@ export function OverlayEditor({
                 />
                 <span className="mono tiny">{formatTime(t)}</span>
               </div>
+              <div className="seg-toggle" role="group" aria-label="Âm thanh khi chạy">
+                {voicePath ? (
+                  <button
+                    className={sound === "dub" ? "on" : ""}
+                    onClick={() => setSound("dub")}
+                    title="Giọng lồng tiếng trên nền âm gốc, theo mức âm lượng bên dưới"
+                  >
+                    Lồng tiếng
+                  </button>
+                ) : null}
+                <button className={sound === "source" ? "on" : ""} onClick={() => setSound("source")}>
+                  Gốc
+                </button>
+                <button className={sound === "off" ? "on" : ""} onClick={() => setSound("off")}>
+                  Tắt tiếng
+                </button>
+              </div>
             </div>
+
+            {voicePath ? (
+              <div className="ov-group">
+                <p className="mono tiny">Âm lượng bản render</p>
+                <label className="ov-field" title="Âm thanh gốc (nhạc, tiếng động) giữ làm nền; khi có giọng, bản render còn tự hạ nền xuống thêm">
+                  <span>Âm gốc {Math.round(bedVolume * 100)}%</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={bedVolume}
+                    onChange={(event) => patchVolume({ bed_volume: Number(event.target.value) })}
+                  />
+                </label>
+                <label
+                  className="ov-field"
+                  title="Những đoạn không ai nói (cả thoại gốc lẫn lồng tiếng) tự nâng âm gốc lên mức này. Không cao hơn âm gốc = tắt. Chỉ nghe được trong bản render"
+                >
+                  <span>
+                    Âm gốc khi không thoại {gapVolume > bedVolume ? `${Math.round(gapVolume * 100)}%` : "tắt"}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={gapVolume}
+                    onChange={(event) => patchVolume({ gap_volume: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="ov-field">
+                  <span>Lồng tiếng {Math.round(voiceVolume * 100)}%</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={voiceVolume}
+                    onChange={(event) => patchVolume({ voice_volume: Number(event.target.value) })}
+                  />
+                </label>
+              </div>
+            ) : null}
 
             <div className="ov-group">
               <p className="mono tiny">Vùng che chữ gốc ({config?.cover.length ?? 0})</p>

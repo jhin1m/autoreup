@@ -119,13 +119,17 @@ def _hardsub_config(settings: Settings, overlay=None):
 
     font = resolve_font(settings, getattr(overlay, "font", "")) or default_font(settings)
     scale_filter = canonical_scale_filter(settings)
+    bed_volume = getattr(overlay, "bed_volume", None)
+    gap_volume = getattr(overlay, "gap_volume", None)
     return HardsubConfig(
         font_path=str(font),
         font_size=settings.hardsub_font_size,
         blur=settings.hardsub_blur,
         band_pad=settings.hardsub_band_pad,
         darken=settings.hardsub_darken,
-        bed_volume=settings.dub_bed_volume,
+        bed_volume=settings.dub_bed_volume if bed_volume is None else bed_volume,
+        voice_volume=getattr(overlay, "voice_volume", 1.0),
+        gap_volume=settings.dub_gap_volume if gap_volume is None else gap_volume,
         duck=settings.dub_duck,
         carve_db=settings.dub_carve_db,
         video_codec_args=tuple(video_encode_args(settings, getattr(overlay, "bitrate", ""))),
@@ -745,7 +749,11 @@ class PackageStage(PipelineStage):
         overlay = _load_overlay(context)
         hardsub_config = _hardsub_config(settings, overlay)
         context.report({"step": "Ghép video, giọng và phụ đề (ffmpeg)"})
-        context.log(f"font {Path(hardsub_config.font_path).name} · {_encode_summary(settings, video, getattr(overlay, 'bitrate', ''))}")
+        context.log(
+            f"font {Path(hardsub_config.font_path).name} · {_encode_summary(settings, video, getattr(overlay, 'bitrate', ''))}"
+            f" · âm gốc {hardsub_config.bed_volume:.0%} (khi không thoại {hardsub_config.gap_volume:.0%})"
+            f" · lồng tiếng {hardsub_config.voice_volume:.0%}"
+        )
         artifacts, logs = package_outputs(
             video=video,
             subtitle_json=Path(context.artifacts["subtitle_json"]),

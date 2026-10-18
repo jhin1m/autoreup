@@ -108,6 +108,7 @@ class Settings(BaseSettings):
     # so keep it OFF (1.0). The presence EQ in VOICE_MASTER_CHAIN already adds brightness.
     tts_pitch_shift: float = 1.0
     dub_bed_volume: float = 0.55  # bed stays loud; the sidechain ducks it under the dub
+    dub_gap_volume: float = 1.0  # original audio where nobody speaks (source VAD + dub); <= bed = off
     dub_duck: bool = True
     dub_carve_db: float = -3.0  # original audio kept as a quiet bed under the VI voice (was 0.38)
     # Hardsub: cover the original burned-in subtitle (OCR/cv2-detected band) + burn VI
