@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ Band = tuple[int, int, int, int]  # (band_y, band_h, width, height) — see hard
 # One gray crop of the (padded) subtitle band per stable caption run in, one text per
 # crop out ("" = no caption read). The seam between change detection and the reader.
 Recognizer = Callable[[list["np.ndarray"]], list[str]]
+_OCR_BATCH = 200  # crops per recognizer call (a multiple of llm_recognizer's batch of 20)
 
 
 @dataclass(slots=True)
@@ -214,65 +216,95 @@ def extract_ocr_segments(
     # crop height down to even (measured: 175 -> 174 rows), so every frame read here
     # would be one row short, the index drifts 1/crop_h behind the video and the
     # captions land seconds early (19.5s at minute 57 of a 2.6h episode).
-    proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", str(video),
-         "-vf", f"format=gray,crop={width}:{crop_h}:0:{crop_y0},fps={config.fps}",
-         "-f", "rawvideo", "-"],
-        capture_output=True,
-    )
-    if proc.returncode != 0 or not proc.stdout:
-        return None
-    frame_bytes = width * crop_h
-    if len(proc.stdout) % frame_bytes:
-        # Frames of another size than asked for: slicing them would shift every
-        # caption in time, so refuse and let the caller fall back to ASR.
-        raise RuntimeError(
-            f"ocr-subs: ffmpeg returned {len(proc.stdout)} bytes, not a multiple of the "
-            f"{width}x{crop_h} frame — caption timing would drift"
-        )
-    n = len(proc.stdout) // frame_bytes
-    if n < 2:
-        return None
-    frames = np.frombuffer(proc.stdout[: n * frame_bytes], dtype=np.uint8).reshape(n, crop_h, width)
-    band_frames = frames[:, band_top:band_top + band_h, :]
-
-    # --- change detection on a text-mask column profile (not raw pixels) ---
+    #
+    # Frames are streamed one at a time and dropped once seen: the whole band of a long
+    # video does not fit in memory (1920x200 gray at 4 fps is ~43 GB for a 7.7h video,
+    # and holding it all once took the backend to 145 GB and got it killed).
     x0, x1 = int(width * 0.18), int(width * 0.82)
+    empty_floor = config.empty_frac * band_h * (x1 - x0)
+    frame_bytes = width * crop_h
 
-    def mask_col(frame: "np.ndarray") -> tuple["np.ndarray", int]:
+    def mask_col(frame: "np.ndarray") -> tuple["np.ndarray", bool]:
+        """Normalized text-mask column profile (not raw pixels) and whether the band is empty."""
         bright = (frame >= 195).astype(np.uint8)
         dark = cv2.dilate((frame <= 85).astype(np.uint8), np.ones((5, 5), np.uint8))
         text = (bright & dark)[:, x0:x1]
-        return text.sum(axis=0).astype(np.float32), int(text.sum())
+        col = text.sum(axis=0).astype(np.float32)
+        norm = np.linalg.norm(col)
+        return (col / norm if norm > 0 else col), float(text.sum()) < empty_floor
 
-    cols = np.empty((n, x1 - x0), dtype=np.float32)
-    totals = np.empty(n, dtype=np.float32)
-    for i, frame in enumerate(band_frames):
-        cols[i], totals[i] = mask_col(frame)
+    # A run of frames with the same caption ends where the profile changes; its middle
+    # frame is the one OCR'd. The middle only moves forward as the run grows, so only
+    # the frames from the current middle on are kept. Crops are OCR'd in batches as they
+    # come, so a long video's thousands of cues are never all held at once either.
+    cue_runs: list[tuple[int, int]] = []
+    crops: list["np.ndarray"] = []
+    texts: list[str] = []
+    run: deque[tuple[int, "np.ndarray"]] = deque()
+    cursor = run_empty = n = 0
+    prev_col = prev_empty = None
 
-    def normalize(vec: "np.ndarray") -> "np.ndarray":
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 0 else vec
+    def recognize_crops() -> None:
+        batch = crops.copy()  # the recognizer may keep the list it was handed
+        crops.clear()
+        read = recognizer(batch)
+        if len(read) != len(batch):  # a short reply must not shift captions in time
+            raise ValueError(f"ocr-subs: recognizer returned {len(read)} texts for {len(batch)} crops")
+        texts.extend(read)
 
-    normalized = np.array([normalize(c) for c in cols])
-    diff = 1 - np.sum(normalized[1:] * normalized[:-1], axis=1)
-    empty = totals < (config.empty_frac * band_h * (x1 - x0))
-    changed = (diff > config.diff_threshold) | (empty[1:] != empty[:-1])
+    def close_run(end: int) -> None:
+        if run_empty <= 0.5 * (end - cursor):
+            cue_runs.append((cursor, end))
+            crops.append(run[0][1])
+            if len(crops) >= _OCR_BATCH:
+                recognize_crops()
 
-    runs: list[tuple[int, int]] = []
-    cursor = 0
-    for i, is_change in enumerate(changed):
-        if is_change:
-            runs.append((cursor, i + 1))
-            cursor = i + 1
-    runs.append((cursor, n))
-    cue_runs = [r for r in runs if empty[r[0]:r[1]].mean() <= 0.5]
+    partial = False
+    with subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-i", str(video),
+         "-vf", f"format=gray,crop={width}:{crop_h}:0:{crop_y0},fps={config.fps}",
+         "-f", "rawvideo", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    ) as proc:
+        try:
+            while chunk := proc.stdout.read(frame_bytes):
+                if len(chunk) < frame_bytes:
+                    partial = True
+                    break
+                frame = np.frombuffer(chunk, dtype=np.uint8).reshape(crop_h, width)
+                col, is_empty = mask_col(frame[band_top:band_top + band_h])
+                if prev_col is not None and (
+                    1 - float(np.sum(col * prev_col)) > config.diff_threshold or is_empty != prev_empty
+                ):
+                    close_run(n)
+                    cursor, run_empty = n, 0
+                    run.clear()
+                run.append((n, frame))
+                run_empty += is_empty
+                n += 1
+                while run[0][0] < (cursor + n) // 2:
+                    run.popleft()
+                prev_col, prev_empty = col, is_empty
+        except BaseException:
+            proc.kill()  # don't leave ffmpeg blocked on a full pipe
+            raise
+    if proc.returncode != 0:
+        return None
+    if partial:
+        # Frames of another size than asked for: slicing them would shift every
+        # caption in time, so refuse and let the caller fall back to ASR.
+        raise RuntimeError(
+            f"ocr-subs: ffmpeg returned a trailing partial frame, not a multiple of the "
+            f"{width}x{crop_h} frame — caption timing would drift"
+        )
+    if n < 2:
+        return None
+    close_run(n)
 
-    # --- OCR one representative frame per stable run ---
-    crops = [frames[(start_i + end_i) // 2] for start_i, end_i in cue_runs]
-    texts = recognizer(crops) if crops else []
+    if crops:
+        recognize_crops()
     segments: list[AsrSegment] = []
-    for (start_i, end_i), raw in zip(cue_runs, texts, strict=True):  # a short reply must not shift captions in time
+    for (start_i, end_i), raw in zip(cue_runs, texts, strict=True):
         text = clean(raw)
         if text:
             segments.append(AsrSegment(
