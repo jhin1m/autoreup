@@ -191,3 +191,33 @@ def test_ocr_agent_rejects_missing_or_non_vision_connection():
     with pytest.raises(ValueError):
         _app("llm", "vis", conn_type="capcut").validate_references()
     _app("vision", "").validate_references()  # Vision needs no connection
+
+
+def test_extract_ocr_segments_keeps_time_on_a_420_video_with_an_odd_crop_height():
+    """A 4:2:0 source rounds an odd crop height down to even; read at the asked-for
+    height, every frame is short a row and captions drift early over a long video."""
+    import cv2
+    import subprocess
+
+    width, height, fps = 320, 240, 10
+    with tempfile.TemporaryDirectory() as tmp:
+        raw, video = Path(tmp) / "caps.avi", Path(tmp) / "caps.mp4"
+        writer = cv2.VideoWriter(str(raw), cv2.VideoWriter_fourcc(*"MJPG"), fps, (width, height))
+        blank = np.full((height, width, 3), 128, dtype=np.uint8)
+        caption = blank.copy()
+        for color, thickness in (((0, 0, 0), 9), ((255, 255, 255), 3)):
+            cv2.putText(caption, "HHH", (60, 205), cv2.FONT_HERSHEY_SIMPLEX, 1.4, color, thickness, cv2.LINE_AA)
+        for img, seconds in ((blank, 60), (caption, 2), (blank, 1)):
+            for _ in range(seconds * fps):
+                writer.write(img)
+        writer.release()
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(raw), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)],
+            check=True,
+        )
+        band = (165, 55, width, height)  # padded crop is 75 rows: odd
+        segments = extract_ocr_segments(video, band, recognizer=lambda crops: ["甲"] * len(crops))
+
+    assert [seg.text_zh for seg in segments] == ["甲"]
+    assert segments[0].start == pytest.approx(60.0, abs=0.3)
+    assert segments[0].end == pytest.approx(62.0, abs=0.3)

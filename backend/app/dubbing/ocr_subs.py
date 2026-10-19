@@ -210,15 +210,26 @@ def extract_ocr_segments(
     crop_h = crop_y1 - crop_y0
     band_top = band_y - crop_y0
 
+    # Convert to gray BEFORE cropping: on a 4:2:0 source ffmpeg silently rounds an odd
+    # crop height down to even (measured: 175 -> 174 rows), so every frame read here
+    # would be one row short, the index drifts 1/crop_h behind the video and the
+    # captions land seconds early (19.5s at minute 57 of a 2.6h episode).
     proc = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(video),
-         "-vf", f"crop={width}:{crop_h}:0:{crop_y0},fps={config.fps},format=gray",
+         "-vf", f"format=gray,crop={width}:{crop_h}:0:{crop_y0},fps={config.fps}",
          "-f", "rawvideo", "-"],
         capture_output=True,
     )
     if proc.returncode != 0 or not proc.stdout:
         return None
     frame_bytes = width * crop_h
+    if len(proc.stdout) % frame_bytes:
+        # Frames of another size than asked for: slicing them would shift every
+        # caption in time, so refuse and let the caller fall back to ASR.
+        raise RuntimeError(
+            f"ocr-subs: ffmpeg returned {len(proc.stdout)} bytes, not a multiple of the "
+            f"{width}x{crop_h} frame — caption timing would drift"
+        )
     n = len(proc.stdout) // frame_bytes
     if n < 2:
         return None
