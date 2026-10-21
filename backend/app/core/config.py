@@ -145,6 +145,14 @@ class Settings(BaseSettings):
     tts_lead: float = 0.15
     tts_tempo_ceiling: float = 1.18
     tts_overflow_tolerance: float = 0.4
+    # Local video stretch (dubbing/time_warp.py): a line still too long at the voice
+    # ceiling slows the picture over its caption window (down to 1/max speed) before
+    # the fit loop asks the LLM to shorten it; the voice ceiling drops to keep the
+    # dub unhurried. Off = the voice ceiling above, then the LLM. Off by default until
+    # the levels are checked on a real episode (AUTOREUP_VIDEO_STRETCH=true to try it).
+    video_stretch: bool = False
+    video_stretch_max: float = 1.111
+    video_stretch_tempo_ceiling: float = 1.10
     # A row whose voice covers < this share of the VAD speech it belongs to is
     # "clearly under-filled" -> the fit loop asks the editor to complete it.
     tts_expand_floor: float = 0.7

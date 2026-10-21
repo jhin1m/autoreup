@@ -15,10 +15,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import tempfile
+from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.app.services.audio import run_command
+
+if TYPE_CHECKING:
+    from backend.app.dubbing.time_warp import TimeWarp
 
 
 @lru_cache(maxsize=1)
@@ -371,9 +376,12 @@ def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], con
     return ";".join(parts) + ";[v" + str(len(regions)) + "]null[cov];"
 
 
-def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, output: Path, work_dir: Path, config: HardsubConfig | None = None) -> dict:
+def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, output: Path, work_dir: Path, config: HardsubConfig | None = None, warp: "TimeWarp | None" = None) -> dict:
     """Produce a hardsubbed MP4: cover the original sub band, burn the VI sub, mux the
-    dubbed audio (original as a quiet bed under the VI voice). Returns a small summary."""
+    dubbed audio (original as a quiet bed under the VI voice). Returns a small summary.
+
+    ``warp`` (a ``TimeWarp``) slows the picture and the original audio where the dub
+    needed more time; ``cues`` and ``voice_track`` must already be in that output time."""
     config = config or HardsubConfig()
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -383,6 +391,7 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     cap = cv2.VideoCapture(str(video))
     src_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
     src_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     cap.release()
     geometry = overlay_geometry(src_width, src_height, None, config)
 
@@ -410,34 +419,47 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, caption_cy, overlay_mov, config)
 
     has_voice = voice_track is not None and Path(voice_track).exists()
-    inputs = ["-i", str(video), "-i", str(overlay_mov)]
-    if has_voice:
-        inputs += ["-i", str(voice_track)]
+    inputs: list[str] = []
+
+    def add_input(path: Path) -> int:
+        """Append an ffmpeg input; returns its index for the graph's stream labels."""
+        inputs.extend(["-i", str(path)])
+        return len(inputs) // 2 - 1
+
+    add_input(video)
+    add_input(overlay_mov)
+    voice_label = f"[{add_input(voice_track)}:a:0]" if has_voice else ""
 
     regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
     cover = _build_cover_chain(regions, config)
     # Order: scale/pad to the canonical OUTPUT first, then cover + caption in that space.
     # Everything the editor draws is output-space, so what it shows is what gets burned
     # (and a 4K source can no longer shrink the caption — measured 58px -> 29px before).
+    # The stretch re-times frames, so the output needs a constant rate again: the
+    # canonical scale filter ends in fps=, a bare source-size render gets the source's.
     picture_filters = [part for part in (
-        config.scale_filter,
+        warp.setpts_filter() if warp else "",
+        config.scale_filter or (f"fps={Fraction(src_fps).limit_denominator(1001)}" if warp else ""),
         f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
     ) if part] or ["null"]
     video_graph = f"[0:v]{','.join(picture_filters)}[scaled];" + cover.replace("[0:v]", "[scaled]") + f"[cov][1:v]overlay=0:0[vo]"
 
     gap_boost = None
     if has_voice:
-        from backend.app.services.audio import dub_mix_filter, render_gap_gain
+        from backend.app.services.audio import dub_mix_filter, render_gap_gain, warp_audio
 
+        bed_label = "[0:a:0]"
+        if warp:
+            bed = warp_audio(video, warp, work_dir / "bed_warped.flac", work_dir / "bed_pieces")
+            bed_label = f"[{add_input(bed)}:a:0]"
         bed_gain = None
         if config.gap_volume > config.bed_volume:
             gain_path = work_dir / "bed_gain.wav"
-            gap_boost = render_gap_gain(video, Path(voice_track), gain_path, config.bed_volume, config.gap_volume)
+            gap_boost = render_gap_gain(video, Path(voice_track), gain_path, config.bed_volume, config.gap_volume, warp=warp)
             if gap_boost:
-                inputs += ["-i", str(gain_path)]
-                bed_gain = "[3:a:0]"
+                bed_gain = f"[{add_input(gain_path)}:a:0]"
         audio_graph = ";" + dub_mix_filter(
-            "[0:a:0]", "[2:a:0]", "[aout]", config.bed_volume, duck=config.duck, carve_db=config.carve_db,
+            bed_label, voice_label, "[aout]", config.bed_volume, duck=config.duck, carve_db=config.carve_db,
             voice_volume=config.voice_volume, bed_gain=bed_gain,
         )
         amap = ["-map", "[aout]"]
@@ -445,13 +467,16 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         audio_graph = ""
         amap = ["-map", "0:a:0?"]
 
-    run_command([
-        "ffmpeg", "-y", "-v", "error", *inputs,
-        "-filter_complex", video_graph + audio_graph,
-        "-map", "[vo]", *amap,
-        *config.video_codec_args,
-        # Fixed audio params so a compilation can concat hardsubs with `-c copy`.
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-        str(output),
-    ])
+    try:
+        run_command([
+            "ffmpeg", "-y", "-v", "error", *inputs,
+            "-filter_complex", video_graph + audio_graph,
+            "-map", "[vo]", *amap,
+            *config.video_codec_args,
+            # Fixed audio params so a compilation can concat hardsubs with `-c copy`.
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+            str(output),
+        ])
+    finally:
+        (work_dir / "bed_warped.flac").unlink(missing_ok=True)  # ~1 GB per hour of episode
     return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues), "gap_boost": gap_boost}

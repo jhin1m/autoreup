@@ -5,6 +5,35 @@ export function latestArtifact(job: JobManifest, kind: string): Artifact | undef
   return [...job.artifacts].reverse().find((artifact) => artifact.kind === kind);
 }
 
+/** Local video stretch (backend dubbing/time_warp.py): source-time windows the render
+ *  slowed down. The hardsub and the voice track run in that OUTPUT time; the source
+ *  video and the subtitle files stay in source time. Sorted, non-overlapping. */
+export type WarpSegment = { start: number; length: number; factor: number };
+
+export function toOutputTime(warp: WarpSegment[], t: number): number {
+  let out = t;
+  for (const segment of warp) {
+    if (t <= segment.start) break;
+    out += (segment.factor - 1) * Math.min(t - segment.start, segment.length);
+  }
+  return out;
+}
+
+/** How much the render slows the picture at source time ``t`` (1 = not at all). */
+export function warpFactorAt(warp: WarpSegment[], t: number): number {
+  return warp.find((segment) => segment.start <= t && t < segment.start + segment.length)?.factor ?? 1;
+}
+
+/** The job's stretch, read from its voiceover manifest ([] = none, or no voiceover). */
+export async function fetchTimeWarp(job: JobManifest): Promise<WarpSegment[]> {
+  const artifact = latestArtifact(job, "tts_manifest");
+  if (!artifact) return [];
+  const response = await fetch(`/media/${artifact.path}?v=${artifact.size_bytes ?? artifact.created_at ?? ""}`);
+  if (!response.ok) return [];
+  const manifest = (await response.json()) as { time_warp?: WarpSegment[] };
+  return Array.isArray(manifest.time_warp) ? manifest.time_warp : [];
+}
+
 /** Route a remote CDN cover through the backend proxy (browsers can't load Douyin
  *  images cross-origin). Local /media paths and empty values pass through unchanged. */
 export function thumbSrc(url: string | null | undefined): string | undefined {

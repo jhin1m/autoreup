@@ -1,10 +1,14 @@
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.app.domain.artifacts import Artifact, ArtifactKind
 from backend.app.infrastructure.process import run_command
 from backend.app.services.subtitle_formats import load_cues, write_vtt
+
+if TYPE_CHECKING:
+    from backend.app.dubbing.time_warp import TimeWarp
 
 
 MIME_BY_KIND = {
@@ -18,7 +22,7 @@ MIME_BY_KIND = {
 }
 
 
-def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packages_dir: Path, root_data_dir: Path, voice_track: Path | None = None, bed_volume: float = 0.55, duck: bool = True, carve_db: float = -3.0, hardsub: bool = False, hardsub_config=None) -> tuple[list[Artifact], list[str]]:
+def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packages_dir: Path, root_data_dir: Path, voice_track: Path | None = None, bed_volume: float = 0.55, duck: bool = True, carve_db: float = -3.0, hardsub: bool = False, hardsub_config=None, warp: "TimeWarp | None" = None) -> tuple[list[Artifact], list[str]]:
     packages_dir.mkdir(parents=True, exist_ok=True)
     stem = subtitle_json.stem.replace(".final", "")
     vtt_path = packages_dir / f"{stem}.vtt"
@@ -29,6 +33,10 @@ def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packag
     artifacts: list[Artifact] = []
 
     cues = load_cues(subtitle_json)
+    if warp:
+        # the subtitle files stay in source time (the editor's clock); the rendered
+        # deliverables follow the stretched picture
+        cues = [cue | {"start": warp.to_output(float(cue["start"])), "end": warp.to_output(float(cue["end"]))} for cue in cues]
     write_vtt(cues, vtt_path)
     artifacts.append(_artifact(ArtifactKind.subtitle_vtt, vtt_path, root_data_dir))
 
@@ -39,7 +47,7 @@ def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packag
 
         # A failed render fails the stage: the episode must not read "dubbed" with no
         # video. Every earlier stage is kept, so a retry only re-runs this render.
-        summary = build_hardsub(video, cues, voice_track, hardsub_path, packages_dir / f"{stem}.hswork", hardsub_config)
+        summary = build_hardsub(video, cues, voice_track, hardsub_path, packages_dir / f"{stem}.hswork", hardsub_config, warp=warp)
         logs.append(f"hardsub: {summary}")
         artifacts.append(_artifact(ArtifactKind.hardsub_mp4, hardsub_path, root_data_dir))
     elif shutil.which("ffmpeg"):

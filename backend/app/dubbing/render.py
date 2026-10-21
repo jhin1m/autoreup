@@ -3,7 +3,10 @@
 Placement is the timeline's per-row re-anchoring (``timeline.plan_rows``): every
 clip starts at its own caption window, so the dub cannot drift away from the
 picture and no clamps are needed. The voice is only ever sped up (<= ceiling) and
-only as much as needed to fit the free time before the next caption.
+only as much as needed to fit the free time before the next caption; a line still
+too long slows the picture over its caption window (``RenderConfig.stretch_max``).
+Timings stay in SOURCE time; only the placements (what the voice track is assembled
+from) are in the stretched OUTPUT time (``RenderResult.warp``).
 
 This module measures and reports — it never hides an overflow. The voiceover stage
 grades the measured durations against the source speech (VAD) and runs the fit
@@ -30,7 +33,8 @@ from backend.app.services.tts import (
 )
 from .models import SpeechRow
 from .text import strip_explicit_turn_markers
-from .timeline import RowPlan, TimelineConfig, plan_rows, summarize
+from .time_warp import TimeWarp
+from .timeline import RowPlan, TimelineConfig, plan_rows_with_warp, summarize
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,6 +65,7 @@ class RenderConfig:
     lead: float = 0.15
     tempo_ceiling: float = 1.18
     overflow_tolerance: float = 0.4
+    stretch_max: float = 1.0
 
 
 @dataclass(slots=True)
@@ -73,6 +78,7 @@ class RowTiming:
     tts_duration: float
     tempo: float
     overflow_ms: int
+    stretch: float = 1.0
 
 
 @dataclass(slots=True)
@@ -80,10 +86,11 @@ class RenderResult:
     voice_track: Path | None
     timings: list[RowTiming] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
-    # (place_start, clip_path, playback_duration, glued)
+    # (place_start, clip_path, playback_duration, glued) in OUTPUT time
     placements: list[tuple[float, Path, float, bool]] = field(default_factory=list)
     plans: list[RowPlan] = field(default_factory=list)
-    total_duration: float = 0.0
+    total_duration: float = 0.0  # OUTPUT time
+    warp: TimeWarp = field(default_factory=TimeWarp)
 
 
 def assemble_voice(result: RenderResult, output_audio: Path, work_dir: Path, crossfade: float = 0.06, pitch: float = 1.0) -> Path:
@@ -217,13 +224,14 @@ def render(
         raw_durations = list(pool.map(probe_duration, raw_paths))
 
     # 2) per-row plan: re-anchor to each caption, speed up only to fit the free time
-    plans = plan_rows(
+    plans, warp = plan_rows_with_warp(
         usable,
-        {index: duration for index, duration in enumerate(raw_durations)},
+        {row.sub_id: duration for row, duration in zip(usable, raw_durations)},
         TimelineConfig(
             lead=config.lead,
             tempo_ceiling=config.tempo_ceiling,
             overflow_tolerance=config.overflow_tolerance,
+            stretch_max=config.stretch_max,
         ),
     )
 
@@ -247,7 +255,7 @@ def render(
     with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
         fitted = list(pool.map(fit_block, range(len(blocks))))
 
-    placements = [(place, path, playback, glued) for _index, place, path, playback, glued in fitted]
+    placements = [(warp.to_output(place), path, playback, glued) for _index, place, path, playback, glued in fitted]
     timings = [
         RowTiming(
             sub_id=plans[index].sub_id,
@@ -258,16 +266,17 @@ def render(
             tts_duration=round(playback, 3),
             tempo=plans[index].tempo,
             overflow_ms=int(round(plans[index].overflow_seconds * 1000)),
+            stretch=plans[index].stretch,
         )
         for index, place, _path, playback, _glued in fitted
     ]
-    total_duration = max((row.anchor_end for row in usable), default=0.1)
+    total_duration = warp.to_output(max((row.anchor_end for row in usable), default=0.1))
     summary = {
         "blocks": len(blocks),
         "rows": len(timings),
         "max_overflow_ms": max((t.overflow_ms for t in timings), default=0),
         "overflow_rows": sum(1 for t in timings if t.overflow_ms > 0),
-        "timeline": summarize(plans),
+        "timeline": summarize(plans, warp),
         "voice_track": None,
         "total_duration": round(total_duration, 3),
     }
@@ -278,4 +287,5 @@ def render(
         placements=placements,
         plans=plans,
         total_duration=total_duration,
+        warp=warp,
     )

@@ -60,3 +60,89 @@ def test_summarize_reports_leads_pauses_and_overflows():
     assert summary["max_late_lead_s"] > 0
     assert summary["overflow_rows"] >= 1
     assert summary["pause_seconds"] > 0
+
+
+def _reference_plan(rows, durations, config):
+    """The planner before the video stretch existed (field-by-field regression oracle)."""
+    out, cursor = [], 0.0
+    for index, row in enumerate(rows):
+        raw = max(0.001, durations.get(row.sub_id, 0.0))
+        start = max(cursor, row.anchor_start - config.lead)
+        next_start = rows[index + 1].anchor_start if index + 1 < len(rows) else None
+        free = float(next_start - start) if next_start is not None else -1.0
+        tempo = min(config.tempo_ceiling, raw / free) if 0.05 < free < raw else 1.0
+        duration = raw / tempo
+        overflow = 0.0 if free < 0 else max(0.0, duration - free - config.overflow_tolerance)
+        out.append((round(start, 3), round(duration, 3), round(tempo, 4), round(row.anchor_start - start, 3),
+                    round(free, 3), round(overflow, 3), round(max(0.0, start - cursor), 3)))
+        cursor = start + duration
+    return out
+
+
+def test_stretch_off_is_the_old_planner_exactly():
+    import random
+
+    from backend.app.dubbing.timeline import plan_rows_with_warp
+
+    rng = random.Random(11)
+    spans, t = [], 0.0
+    for _ in range(300):
+        t += rng.uniform(0.0, 2.0)
+        length = rng.uniform(0.3, 4.0)
+        spans.append((t, t + length))
+        t += length
+    rows = _rows(spans)
+    durations = {i: rng.uniform(0.2, 6.0) for i in range(len(rows))}
+    config = TimelineConfig()
+    plans, warp = plan_rows_with_warp(rows, durations, config)
+    assert not warp
+    got = [(p.place_start, p.playback_duration, p.tempo, p.early_lead, p.free_after, p.overflow_seconds, p.gap_before)
+           for p in plans]
+    assert got == _reference_plan(rows, durations, config)
+    assert all(p.stretch == 1.0 and p.stretch_seconds == 0.0 for p in plans)
+
+
+def _stretch_config(**kw):
+    return TimelineConfig(tempo_ceiling=1.10, stretch_max=1.111, **kw)
+
+
+def test_stretch_slows_the_window_then_reports_the_rest_as_overflow():
+    from backend.app.dubbing.timeline import plan_rows_with_warp
+
+    # free 3.0s, raw 4.2s -> 3.818s at 1.10x; the 3s window can add at most 0.333s
+    rows = _rows([(0.0, 2.0), (3.0, 4.0)])
+    plans, warp = plan_rows_with_warp(rows, {0: 4.2, 1: 0.5}, _stretch_config())
+    assert plans[0].tempo == 1.1
+    assert plans[0].stretch == 1.111
+    assert abs(plans[0].stretch_seconds - 0.333) < 1e-3
+    assert abs(plans[0].free_after - 3.333) < 1e-3
+    assert abs(plans[0].overflow_seconds - (4.2 / 1.1 - 3.333 - 0.4)) < 2e-3
+    assert len(warp.segments) == 1 and warp.segments[0].start == 0.0 and warp.segments[0].length == 3.0
+    # row 1 follows row 0's voice (output 3.818s), mapped back to source time
+    assert abs(warp.to_output(plans[1].place_start) - 4.2 / 1.1) < 2e-3
+
+
+def test_later_rows_keep_their_source_place_and_shift_in_output():
+    from backend.app.dubbing.timeline import plan_rows_with_warp
+
+    config = _stretch_config()
+    rows = _rows([(0.0, 2.0), (3.0, 4.0), (6.0, 7.0)])
+    plans, warp = plan_rows_with_warp(rows, {0: 3.6, 1: 0.5, 2: 0.5}, config)
+    extra = 3.6 / 1.1 - 3.0  # fully absorbed by the stretch: no overflow, no LLM
+    assert plans[0].overflow_seconds == 0.0
+    assert abs(plans[0].stretch_seconds - extra) < 1e-3
+    assert abs(plans[1].place_start - 3.0) < 1e-3  # right on its own caption
+    assert abs(plans[2].place_start - (6.0 - config.lead)) < 1e-3
+    assert abs(warp.to_output(plans[2].place_start) - (6.0 - config.lead + extra)) < 1e-3
+    summary = summarize(plans)
+    assert summary["stretch_rows"] == 1
+    assert abs(summary["stretch_seconds"] - extra) < 0.01
+
+
+def test_last_row_is_never_stretched():
+    from backend.app.dubbing.timeline import plan_rows_with_warp
+
+    rows = _rows([(0.0, 2.0), (3.0, 4.0)])
+    plans, warp = plan_rows_with_warp(rows, {0: 0.5, 1: 9.0}, _stretch_config())
+    assert not warp
+    assert plans[1].stretch == 1.0 and plans[1].free_after == -1.0

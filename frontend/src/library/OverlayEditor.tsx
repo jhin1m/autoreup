@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
 import type { CoverRegion, FontInfo, OverlayConfig, OverlayEncode, OverlayFrame, OverlayImage } from "../api";
 import { useToast } from "../toast";
+import { toOutputTime, warpFactorAt } from "../util";
+import type { WarpSegment } from "../util";
 
 const MODES: { id: string; label: string }[] = [
   { id: "blur", label: "Làm mờ" },
@@ -25,6 +27,7 @@ export function OverlayEditor({
   videoPath,
   voicePath,
   cues,
+  warp,
   firstRender,
   onClose,
   onRepack,
@@ -34,6 +37,8 @@ export function OverlayEditor({
   /** The finished voiceover track ("" when the episode has no voice). */
   voicePath: string;
   cues: { start: number; end: number; text: string }[];
+  /** Where the render slows the picture; the voice track runs in that stretched time. */
+  warp: WarpSegment[];
   /** The episode has never been rendered (the dub waits for this review). */
   firstRender: boolean;
   onClose: () => void;
@@ -150,17 +155,21 @@ export function OverlayEditor({
     const voice = voiceRef.current;
     if (!voice) return;
     if (sound === "dub" && playing && video) {
-      voice.currentTime = video.currentTime;
+      voice.currentTime = toOutputTime(warp, video.currentTime);
       voice.play().catch(() => {});
     } else {
       voice.pause();
     }
-  }, [sound, playing]);
+  }, [sound, playing, warp]);
 
   function syncVoice(time: number) {
     const voice = voiceRef.current;
-    if (voice && sound === "dub" && !voice.paused && Math.abs(voice.currentTime - time) > MAX_VOICE_DRIFT) {
-      voice.currentTime = time;
+    // play the original slowed where the render slows it, so the dub stays in step
+    const video = videoRef.current;
+    if (video && warp.length) video.playbackRate = 1 / warpFactorAt(warp, time);
+    const target = toOutputTime(warp, time);
+    if (voice && sound === "dub" && !voice.paused && Math.abs(voice.currentTime - target) > MAX_VOICE_DRIFT) {
+      voice.currentTime = target;
     }
   }
 

@@ -53,6 +53,7 @@ from backend.app.dubbing.qa import qa_report
 from backend.app.dubbing.rail import segments_from_srt
 from backend.app.dubbing.render import RenderConfig, assemble_voice, render
 from backend.app.dubbing.repair import RepairConfig, expand, repair
+from backend.app.dubbing.time_warp import TimeWarp
 from backend.app.dubbing.translate import TranslateConfig, translate
 from backend.app.dubbing.tsv_io import read_tsv, write_json, write_tsv
 from backend.app.infrastructure.downloader import YtDlpDownloader
@@ -576,6 +577,11 @@ class VoiceoverStage(PipelineStage):
         if not (voice.exists() and voice.stat().st_size > 0):
             return False
         context.artifacts["voice_track"] = voice
+        # the voice track was assembled against this picture stretch: the package
+        # must render the same one (a manifest from before the stretch = identity)
+        manifest = settings.tts_dir / f"{context.job_id}.tts.json"
+        data = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
+        context.artifacts["time_warp"] = TimeWarp.from_json(data.get("time_warp"))
         return True
 
     def run(self, context: PipelineContext) -> StageResult:
@@ -612,8 +618,9 @@ class VoiceoverStage(PipelineStage):
             batch_concurrency=settings.capcut_batch_concurrency,
             synth_rate=tts.synth_rate,
             lead=settings.tts_lead,
-            tempo_ceiling=settings.tts_tempo_ceiling,
+            tempo_ceiling=settings.video_stretch_tempo_ceiling if settings.video_stretch else settings.tts_tempo_ceiling,
             overflow_tolerance=settings.tts_overflow_tolerance,
+            stretch_max=settings.video_stretch_max if settings.video_stretch else 1.0,
         )
         work_dir = context.job_dir / "tts"
         cache_dir = settings.tts_cache_dir
@@ -707,6 +714,9 @@ class VoiceoverStage(PipelineStage):
             result = candidate
         speech_rows, result = best_state
         note(f"final render kept: sync score {best_score}")
+        warp = result.warp
+        if warp:
+            note(f"video chậm {len(warp.segments)} câu, +{warp.extra_seconds():.1f} s")
 
         # Assemble the final track once, after timings have converged.
         context.report({"step": "Ghép track giọng"})
@@ -719,7 +729,11 @@ class VoiceoverStage(PipelineStage):
         # the voice reads the post-fit one ("sub không khớp với voice"). The windows are
         # the captions', so only the text (and its reflow) changes here.
         if rounds:
-            voice_windows = {t.sub_id: (t.place_start, t.place_start + t.tts_duration) for t in result.timings}
+            # the voice plays in OUTPUT time; the cues stay in source time
+            voice_windows = {
+                t.sub_id: (t.place_start, warp.to_source(warp.to_output(t.place_start) + t.tts_duration))
+                for t in result.timings
+            }
             cues = build_display_cues(
                 speech_rows, segments, settings.min_duration,
                 max_chars=settings.subtitle_max_line_chars, lead=settings.subtitle_lead,
@@ -732,7 +746,12 @@ class VoiceoverStage(PipelineStage):
         write_tsv(speech_tsv, [r.to_row() for r in speech_rows], SPEECH_FIELDS)
 
         manifest = settings.tts_dir / f"{context.job_id}.tts.json"
-        write_json(manifest, {"summary": result.summary, "timings": [asdict(t) for t in result.timings]})
+        write_json(manifest, {
+            "summary": result.summary,
+            "timings": [asdict(t) for t in result.timings],
+            "time_warp": warp.to_json(),
+        })
+        context.artifacts["time_warp"] = warp
         artifacts = []
         if result.voice_track:
             context.artifacts["voice_track"] = result.voice_track
@@ -756,6 +775,9 @@ class PackageStage(PipelineStage):
             f" · âm gốc {hardsub_config.bed_volume:.0%} (khi không thoại {hardsub_config.gap_volume:.0%})"
             f" · lồng tiếng {hardsub_config.voice_volume:.0%}"
         )
+        warp = context.artifacts.get("time_warp")
+        if warp:
+            context.log(f"video kéo dãn {len(warp.segments)} đoạn, +{warp.extra_seconds():.1f} s")
         artifacts, logs = package_outputs(
             video=video,
             subtitle_json=Path(context.artifacts["subtitle_json"]),
@@ -767,6 +789,7 @@ class PackageStage(PipelineStage):
         duck=settings.dub_duck,
         carve_db=settings.dub_carve_db,
             hardsub_config=hardsub_config,
+            warp=warp,
         )
         return StageResult(name=self.name, artifacts=artifacts, logs=logs)
 

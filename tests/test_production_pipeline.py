@@ -259,6 +259,51 @@ class ProductionPipelineTest(unittest.TestCase):
             self.assertEqual(max(t.overflow_ms for t in ctx.artifacts["timings"]), 100)
             self.assertIn("keeping the better render", "\n".join(out.logs))
 
+    def test_voiceover_saves_the_time_warp_and_hydrate_reloads_it(self):
+        """The voice track is assembled against a picture stretch: a repack (package
+        only) must render the same stretch, so it lives in the tts manifest."""
+        import backend.app.pipeline.production as prod
+        from backend.app.dubbing.render import RenderResult, RowTiming
+        from backend.app.dubbing.time_warp import TimeWarp, WarpSegment
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(root_dir=root, _env_file=None, tts_enabled=True, tts_server_url="http://x")
+            settings.ensure_directories()
+            ctx = _context(root)
+            ctx.settings = settings
+            ctx.artifacts["speech_rows"] = [
+                SpeechRow(0, 0, 0.0, 2.0, "0-1", "Lời một"),
+                SpeechRow(1, 1, 2.0, 4.0, "2-3", "Lời hai"),
+            ]
+            QAStage().run(ctx)
+            warp = TimeWarp([WarpSegment(0.0, 2.0, 1.1)])
+            fake_render = RenderResult(
+                voice_track=None,
+                timings=[RowTiming(0, 0.0, 2.0, 0.0, 2.2, 2.1, 1.1, 0, 1.1),
+                         RowTiming(1, 2.0, 4.0, 2.0, -1.0, 0.5, 1.0, 0)],
+                summary={"blocks": 2, "rows": 2}, placements=[], total_duration=4.2, warp=warp,
+            )
+            with patch.object(prod, "render", return_value=fake_render), patch.object(
+                prod, "assemble_voice"
+            ), patch.object(prod, "_build_capcut_client", return_value=None):
+                out = VoiceoverStage().run(ctx)
+            self.assertIn("video chậm 1 câu, +0.2 s", "\n".join(out.logs))
+            manifest = json.loads((settings.tts_dir / "job.tts.json").read_text())
+            self.assertEqual(manifest["time_warp"], [{"start": 0.0, "length": 2.0, "factor": 1.1}])
+            self.assertEqual(manifest["timings"][0]["stretch"], 1.1)
+
+            resumed = _context(root)
+            resumed.settings = settings
+            (settings.tts_dir / "job.voice.m4a").write_bytes(b"x")
+            self.assertTrue(VoiceoverStage().hydrate(resumed))
+            self.assertEqual(resumed.artifacts["time_warp"].segments, warp.segments)
+
+            # a manifest from before the stretch existed = no stretch
+            (settings.tts_dir / "job.tts.json").write_text(json.dumps({"timings": []}))
+            self.assertTrue(VoiceoverStage().hydrate(resumed))
+            self.assertFalse(resumed.artifacts["time_warp"])
+
     def test_voiceover_skipped_when_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _context(Path(tmp))  # tts_enabled defaults to False

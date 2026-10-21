@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
 import { OverlayEditor } from "./OverlayEditor";
 import type { Artifact, Episode, JobManifest, SubtitleCue } from "../types";
-import { STAGE_VI, dubErrorVi, formatDuration, formatProgress, latestArtifact, stageElapsed } from "../util";
+import { STAGE_VI, dubErrorVi, fetchTimeWarp, formatDuration, formatProgress, latestArtifact, stageElapsed, toOutputTime } from "../util";
+import type { WarpSegment } from "../util";
 
 const STAGE_ORDER = ["download", "asr", "glossary", "translate", "qa", "voiceover", "package"];
 
@@ -96,6 +97,7 @@ export function Preview({
   const [dubbed, setDubbed] = useState(true);
   const [error, setError] = useState("");
   const [cues, setCues] = useState<Cue[]>([]);
+  const [warp, setWarp] = useState<WarpSegment[]>([]);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [artIndex, setArtIndex] = useState(0);
   const [editor, setEditor] = useState(false);
@@ -106,6 +108,7 @@ export function Preview({
     if (!episode.dub_job_id) return;
     setJob(null);
     setCues([]);
+    setWarp([]);
     setActiveIndex(-1);
     api.fetchJob(episode.dub_job_id).then(setJob).catch((err) => setError(String(err)));
   }, [episode.dub_job_id]);
@@ -140,6 +143,30 @@ export function Preview({
       cancelled = true;
     };
   }, [job]);
+
+  // The stretch only changes with a new voiceover: refetch on its manifest, not on
+  // every progress poll.
+  const ttsArt = job ? latestArtifact(job, "tts_manifest") : undefined;
+  const ttsVersion = ttsArt ? `${ttsArt.path}?${ttsArt.size_bytes ?? ttsArt.created_at ?? ""}` : "";
+  useEffect(() => {
+    if (!job || !ttsVersion) return;
+    let cancelled = false;
+    fetchTimeWarp(job)
+      .then((segments) => {
+        if (!cancelled) setWarp(segments);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [ttsVersion]);
+
+  // The list plays against the hardsub, whose clock the stretch moved; the editor
+  // gets the source-time cues (it plays the original video).
+  const playedCues = useMemo(
+    () => (warp.length ? cues.map((cue) => ({ ...cue, start: toOutputTime(warp, cue.start), end: toOutputTime(warp, cue.end) })) : cues),
+    [cues, warp],
+  );
 
   useEffect(() => {
     activeRowRef.current?.scrollIntoView({ block: "nearest" });
@@ -181,8 +208,8 @@ export function Preview({
   function handleTimeUpdate(event: React.SyntheticEvent<HTMLVideoElement>) {
     const time = event.currentTarget.currentTime;
     let index = -1;
-    for (let i = 0; i < cues.length; i += 1) {
-      const cue = cues[i]!;
+    for (let i = 0; i < playedCues.length; i += 1) {
+      const cue = playedCues[i]!;
       if (cue.start > time) break;
       if (time < cue.end) {
         index = i;
@@ -264,9 +291,9 @@ export function Preview({
 
           {showSubs ? (
             <aside className="pv-subs" aria-label="Danh sách phụ đề">
-              <p className="pv-subs-head mono">{cues.length} dòng phụ đề</p>
+              <p className="pv-subs-head mono">{playedCues.length} dòng phụ đề</p>
               <ol>
-                {cues.map((cue, index) => (
+                {playedCues.map((cue, index) => (
                   <li
                     key={index}
                     ref={index === activeIndex ? activeRowRef : undefined}
@@ -335,6 +362,7 @@ export function Preview({
           // a re-dub rewrites the same path: version it so the editor never replays a stale voice
           voicePath={voiceArt ? `/media/${voiceArt.path}?v=${voiceArt.size_bytes ?? voiceArt.created_at ?? ""}` : ""}
           cues={cues}
+          warp={warp}
           firstRender={isReview}
           onClose={() => setEditor(false)}
           onRepack={() => {

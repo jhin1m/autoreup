@@ -106,3 +106,52 @@ def test_the_gap_level_comes_from_the_editor_or_the_app_setting(tmp_path):
     # turned off in the editor: stays off instead of falling back to the app setting
     assert _hardsub_config(settings, OverlayConfig.from_json({"gap_volume": 0})).gap_volume == 0.0
     assert OverlayConfig.from_json(OverlayConfig(gap_volume=0.6).to_json()).gap_volume == 0.6
+
+
+@needs_ffmpeg
+def test_the_warped_bed_has_the_exact_output_length(tmp_path):
+    from backend.app.dubbing.time_warp import TimeWarp, WarpSegment
+    from backend.app.services.audio import warp_audio
+
+    source = tmp_path / "source.wav"
+    _render(source, "sine=f=440:sample_rate=48000", 10.0)  # not the mix rate: pieces resample first
+    warp = TimeWarp([WarpSegment(1.0, 1.5, 1.111), WarpSegment(4.0, 0.7, 1.05), WarpSegment(8.2, 2.5, 1.1)])
+    out = warp_audio(source, warp, tmp_path / "bed.flac", tmp_path / "pieces")
+    assert len(_decode(out)) == pytest.approx(warp.to_output(10.0) * 44100, abs=44)  # ±1 ms
+    assert not list((tmp_path / "pieces").glob("*.wav"))  # pieces cleaned up
+
+
+@needs_ffmpeg
+def test_the_gap_envelope_follows_the_stretched_picture(tmp_path, monkeypatch):
+    from backend.app.dubbing.time_warp import TimeWarp, WarpSegment
+
+    video = tmp_path / "source.wav"
+    voice = tmp_path / "voice.wav"
+    _render(video, "sine=f=440:sample_rate=44100", 10.0)
+    _render(voice, "anullsrc=r=44100", 11.0)
+    probs = np.zeros(int(10.0 / 0.032), dtype=np.float32)
+    probs[int(6.0 / 0.032):int(7.0 / 0.032)] = 1.0  # source speech 6-7s
+    monkeypatch.setattr(onset, "_speech_probs", lambda path: (probs, 0.032))
+
+    plain = render_gap_gain(video, voice, tmp_path / "a.wav", bed=0.4, gap=1.0)
+    warp = TimeWarp([WarpSegment(1.0, 2.0, 1.5)])  # +1s before the speech
+    warped = render_gap_gain(video, voice, tmp_path / "b.wav", bed=0.4, gap=1.0, warp=warp)
+    assert warped["gaps"] == plain["gaps"] == 2
+    assert warped["seconds"] - plain["seconds"] == pytest.approx(1.0, abs=0.15)
+
+
+@needs_ffmpeg
+def test_the_warped_bed_has_no_silence_at_the_joins(tmp_path):
+    from backend.app.dubbing.time_warp import TimeWarp, WarpSegment
+    from backend.app.services.audio import warp_audio
+
+    source = tmp_path / "source.m4a"  # AAC, like real sources: an input -t cut its pieces short
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=440:duration=12",
+                    "-c:a", "aac", "-b:a", "192k", str(source)], check=True)
+    warp = TimeWarp([WarpSegment(1.3, 1.7, 1.111), WarpSegment(5.05, 2.2, 1.08), WarpSegment(9.4, 1.1, 1.1)])
+    samples = _decode(warp_audio(source, warp, tmp_path / "bed.flac", tmp_path / "pieces"))
+    window = int(0.002 * 44100)
+    loud = np.abs(samples[: len(samples) // window * window]).reshape(-1, window).max(axis=1)
+    tone_end = int(warp.to_output(11.9) / 0.002)  # the AAC container runs a little past the tone
+    assert loud[5:tone_end].min() > 0.05  # every 2 ms of the bed carries the tone (peak 1/8)
+    assert not (tmp_path / "pieces").exists()

@@ -14,8 +14,12 @@ import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from backend.app.dubbing.time_warp import TimeWarp
 
 
 def run_command(args: list[str]) -> list[str]:
@@ -151,10 +155,13 @@ def gap_gain_envelope(gaps: list[tuple[float, float]], duration: float, bed: flo
     return envelope
 
 
-def render_gap_gain(video: Path, voice_track: Path, output_path: Path, bed: float, gap: float) -> dict | None:
+def render_gap_gain(video: Path, voice_track: Path, output_path: Path, bed: float, gap: float, warp: "TimeWarp | None" = None) -> dict | None:
     """Write the bed's gain envelope (mono 16-bit wav at ``GAIN_RATE``) for
     ``dub_mix_filter(bed_gain=...)``. ``None`` = no boost: the source VAD is missing
-    (never boost blind — the gaps could hold the original voice) or nothing qualifies."""
+    (never boost blind — the gaps could hold the original voice) or nothing qualifies.
+
+    ``warp`` (a ``TimeWarp``): the bed and the voice track play in the stretched
+    output time, so the source VAD regions and the duration are mapped into it."""
     import wave
 
     from backend.app.dubbing.onset import _regions_from_probs, _speech_probs
@@ -163,7 +170,11 @@ def render_gap_gain(video: Path, voice_track: Path, output_path: Path, bed: floa
     if packed is None:
         return None
     duration = probe_duration(video)
-    gaps = speech_gaps(_regions_from_probs(*packed) + voice_regions(voice_track), duration)
+    source = _regions_from_probs(*packed)
+    if warp:
+        source = [(warp.to_output(start), warp.to_output(end)) for start, end in source]
+        duration = warp.to_output(duration)
+    gaps = speech_gaps(source + voice_regions(voice_track), duration)
     if not gaps:
         return None
     # hold the last level past the bed's end: amultiply stops at the shorter input
@@ -175,6 +186,57 @@ def render_gap_gain(video: Path, voice_track: Path, output_path: Path, bed: floa
         out.setframerate(GAIN_RATE)
         out.writeframes((np.clip(envelope, 0.0, 1.0) * 32767).astype("<i2").tobytes())
     return {"gaps": len(gaps), "seconds": round(float(sum(end - start for start, end in gaps)), 1)}
+
+
+def warp_audio(video: Path, warp: "TimeWarp", output_path: Path, work_dir: Path) -> Path:
+    """The source audio stretched like the picture (``TimeWarp``), as one flac.
+
+    The track is cut into pieces — each stretch segment and the plain spans between
+    them — each slowed by its factor and padded/cut to its exact OUTPUT sample count
+    (so rounding never drifts the bed against the picture), then concatenated.
+
+    Each piece READS past its end and ``atrim`` cuts it: an input ``-t`` drops up to an
+    AAC frame off the tail and ``apad`` filled that with zeros — measured 4-24 ms of
+    silence at every join. ``work_dir`` is scratch space for the pieces, removed after."""
+    duration = probe_duration(video)
+    pieces: list[tuple[float, float, float]] = []
+    cursor = 0.0
+    for segment in warp.segments:
+        if segment.start >= duration:
+            break
+        if segment.start > cursor:
+            pieces.append((cursor, segment.start - cursor, 1.0))
+        length = min(segment.length, duration - segment.start)
+        pieces.append((segment.start, length, segment.factor))
+        cursor = segment.start + length
+    if duration > cursor:
+        pieces.append((cursor, duration - cursor, 1.0))
+
+    work_dir = Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    paths = [work_dir / f"bed{index:05d}.wav" for index in range(len(pieces))]
+
+    def render_piece(index: int) -> None:
+        start, length, factor = pieces[index]
+        samples = int(round(length * factor * _MIX_RATE))
+        tempo = f",{atempo_chain(1.0 / factor)}" if factor != 1.0 else ""
+        run_command([
+            "ffmpeg", "-y", "-v", "error", "-ss", f"{start:.6f}", "-t", f"{length + 0.1:.6f}", "-i", str(video), "-vn",
+            "-af", f"aresample={_MIX_RATE}{tempo},apad,atrim=end_sample={samples}",
+            "-ar", str(_MIX_RATE), "-ac", "2", str(paths[index]),
+        ])
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(render_piece, range(len(pieces))))
+        concat = work_dir / "bed_concat.txt"
+        concat.write_text("".join(f"file '{path.resolve().as_posix()}'\n" for path in paths), encoding="utf-8")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        run_command(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat),
+                     "-c:a", "flac", str(output_path)])
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)  # pieces: ~635 MB of PCM per hour
+    return output_path
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
