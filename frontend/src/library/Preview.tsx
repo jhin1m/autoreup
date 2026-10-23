@@ -188,6 +188,9 @@ export function Preview({
   const isReview = episode.dub_state === "review";
   // A failed or stopped dub resumes in place: finished steps and translated parts stay.
   const canResume = !isDubbed && !isReview && !isRunning && Boolean(episode.dub_job_id);
+  // Stopped or failed at the render: the voiced dub is all there, so the overlay stays
+  // editable instead of "Dịch tiếp" being the only way back into the render.
+  const canEditRender = canResume && !!job?.stages.some((stage) => stage.name === "voiceover" && stage.status === "succeeded");
   const [stopping, setStopping] = useState(false);
   useEffect(() => setStopping(false), [episode.dub_state]);
   // Dubbed but the final video was never rendered (or the render failed): say so and
@@ -327,7 +330,7 @@ export function Preview({
                 Tải video
               </a>
             ) : null}
-            {(isDubbed || isReview) && job ? (
+            {(isDubbed || isReview || canEditRender) && job ? (
               <button
                 className={isReview ? "primary" : "ghost"}
                 onClick={() => setEditor(true)}
