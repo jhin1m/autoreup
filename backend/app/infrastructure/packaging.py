@@ -1,5 +1,7 @@
 import shutil
 import subprocess
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,7 +24,7 @@ MIME_BY_KIND = {
 }
 
 
-def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packages_dir: Path, root_data_dir: Path, voice_track: Path | None = None, bed_volume: float = 0.55, duck: bool = True, carve_db: float = -3.0, hardsub: bool = False, hardsub_config=None, warp: "TimeWarp | None" = None) -> tuple[list[Artifact], list[str]]:
+def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packages_dir: Path, root_data_dir: Path, voice_track: Path | None = None, bed_volume: float = 0.55, duck: bool = True, carve_db: float = -3.0, hardsub: bool = False, hardsub_config=None, warp: "TimeWarp | None" = None, cancel: threading.Event | None = None, report: Callable[[dict], None] | None = None) -> tuple[list[Artifact], list[str]]:
     packages_dir.mkdir(parents=True, exist_ok=True)
     stem = subtitle_json.stem.replace(".final", "")
     vtt_path = packages_dir / f"{stem}.vtt"
@@ -47,7 +49,7 @@ def package_outputs(video: Path, subtitle_json: Path, subtitle_srt: Path, packag
 
         # A failed render fails the stage: the episode must not read "dubbed" with no
         # video. Every earlier stage is kept, so a retry only re-runs this render.
-        summary = build_hardsub(video, cues, voice_track, hardsub_path, packages_dir / f"{stem}.hswork", hardsub_config, warp=warp)
+        summary = build_hardsub(video, cues, voice_track, hardsub_path, packages_dir / f"{stem}.hswork", hardsub_config, warp=warp, cancel=cancel, report=report)
         logs.append(f"hardsub: {summary}")
         artifacts.append(_artifact(ArtifactKind.hardsub_mp4, hardsub_path, root_data_dir))
     elif shutil.which("ffmpeg"):

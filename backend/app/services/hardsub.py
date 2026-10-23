@@ -15,11 +15,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import tempfile
+import threading
+from collections.abc import Callable
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from backend.app.infrastructure.ffmpeg_progress import run_ffmpeg_progress
 from backend.app.services.audio import run_command
 
 if TYPE_CHECKING:
@@ -263,7 +266,7 @@ def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubCon
     ])
 
 
-def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: int, caption_cy: int, output: Path, config: HardsubConfig) -> None:
+def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: int, caption_cy: int, output: Path, config: HardsubConfig, cancel: threading.Event | None = None) -> None:
     """Render each cue to a transparent full-frame PNG and concat (held for each cue's
     duration, with transparent gaps) into one alpha overlay video."""
     from PIL import Image, ImageDraw, ImageFont
@@ -311,7 +314,7 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     run_command([
         "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat),
         "-fps_mode", "vfr", "-c:v", "qtrle", "-pix_fmt", "argb", str(output),
-    ])
+    ], cancel=cancel)
 
 
 def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int, geom: "OverlayGeometry | None" = None) -> list[tuple[int, int, int, int, str, float]]:
@@ -376,12 +379,25 @@ def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], con
     return ";".join(parts) + ";[v" + str(len(regions)) + "]null[cov];"
 
 
-def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, output: Path, work_dir: Path, config: HardsubConfig | None = None, warp: "TimeWarp | None" = None) -> dict:
+def _output_seconds(video: Path, warp: "TimeWarp | None") -> float:
+    """How long the render comes out (the source, stretched by ``warp``); 0 if unknown."""
+    from backend.app.services.audio import probe_duration
+
+    try:
+        seconds = probe_duration(video)
+    except (RuntimeError, ValueError):
+        return 0.0
+    return warp.to_output(seconds) if warp else seconds
+
+
+def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, output: Path, work_dir: Path, config: HardsubConfig | None = None, warp: "TimeWarp | None" = None, cancel: threading.Event | None = None, report: Callable[[dict], None] | None = None) -> dict:
     """Produce a hardsubbed MP4: cover the original sub band, burn the VI sub, mux the
     dubbed audio (original as a quiet bed under the VI voice). Returns a small summary.
 
     ``warp`` (a ``TimeWarp``) slows the picture and the original audio where the dub
-    needed more time; ``cues`` and ``voice_track`` must already be in that output time."""
+    needed more time; ``cues`` and ``voice_track`` must already be in that output time.
+    Setting ``cancel`` kills the render in flight; ``report`` gets its live progress
+    (see run_ffmpeg_progress), which also kills a render that stops advancing."""
     config = config or HardsubConfig()
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -416,7 +432,7 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
 
     overlay_mov = work_dir / "vi_overlay.mov"
     caption_cy = overlay_caption_cy if overlay_caption_cy is not None else geometry.caption_cy
-    _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, caption_cy, overlay_mov, config)
+    _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, caption_cy, overlay_mov, config, cancel)
 
     has_voice = voice_track is not None and Path(voice_track).exists()
     inputs: list[str] = []
@@ -468,7 +484,7 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         amap = ["-map", "0:a:0?"]
 
     try:
-        run_command([
+        run_ffmpeg_progress([
             "ffmpeg", "-y", "-v", "error", *inputs,
             "-filter_complex", video_graph + audio_graph,
             "-map", "[vo]", *amap,
@@ -476,7 +492,7 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
             # Fixed audio params so a compilation can concat hardsubs with `-c copy`.
             "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
             str(output),
-        ])
+        ], _output_seconds(video, warp), report=report, cancel=cancel)
     finally:
         (work_dir / "bed_warped.flac").unlink(missing_ok=True)  # ~1 GB per hour of episode
     return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues), "gap_boost": gap_boost}

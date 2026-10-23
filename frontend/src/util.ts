@@ -136,6 +136,7 @@ export function formatProgress(p: DubProgress): string {
     if (p.eta) parts.push(`còn ${formatDuration(p.eta)}`);
   } else if (p.total) {
     parts.push(`${p.done ?? 0}/${p.total}${p.unit ? ` ${p.unit}` : ""}`);
+    if (p.eta) parts.push(`còn ${formatDuration(p.eta)}`);
   }
   if (p.sessions) parts.push(`${p.sessions} phiên đang chạy`);
   return parts.join(" · ");

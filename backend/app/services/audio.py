@@ -18,12 +18,19 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from backend.app.infrastructure.process import run_command as run_cancelable
+
 if TYPE_CHECKING:
     from backend.app.dubbing.time_warp import TimeWarp
 
 
-def run_command(args: list[str]) -> list[str]:
-    completed = subprocess.run(args, text=True, capture_output=True, check=False)
+def run_command(args: list[str], cancel: threading.Event | None = None) -> list[str]:
+    """Run ffmpeg/ffprobe and return its output lines. ``cancel`` (the user stopped the
+    job) kills the command at once instead of letting an hour-long render finish."""
+    if cancel is not None:
+        return run_cancelable(args, cwd=Path.cwd(), cancel=cancel)
+    # no stdin: ffmpeg would otherwise read keys from (and put in raw mode) the server's terminal
+    completed = subprocess.run(args, text=True, capture_output=True, check=False, stdin=subprocess.DEVNULL)
     logs: list[str] = []
     if completed.stdout.strip():
         logs.extend(completed.stdout.strip().splitlines())

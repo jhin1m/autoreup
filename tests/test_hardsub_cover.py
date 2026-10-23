@@ -1,5 +1,7 @@
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,7 @@ def test_a_failed_render_fails_the_package_instead_of_passing_without_a_video(mo
 def _captured_hardsub(monkeypatch, tmp_path, warp, config=None, gap=False):
     """Run build_hardsub with ffmpeg/detection stubbed out; return the final command."""
     calls = []
-    monkeypatch.setattr(hardsub, "run_command", lambda args: calls.append(args) or [])
+    monkeypatch.setattr(hardsub, "run_ffmpeg_progress", lambda args, total, report=None, cancel=None: calls.append(args) or [])
     monkeypatch.setattr(hardsub, "detect_sub_band", lambda video, cfg: None)
     monkeypatch.setattr(hardsub, "_build_overlay_video", lambda *args, **kwargs: None)
     import backend.app.services.audio as audio
@@ -93,8 +95,8 @@ def test_package_maps_cues_into_the_stretched_time(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_build(video, cues, voice, output, work, config, warp=None):
-        seen["cues"], seen["warp"] = cues, warp
+    def fake_build(video, cues, voice, output, work, config, warp=None, cancel=None, report=None):
+        seen["cues"], seen["warp"], seen["cancel"] = cues, warp, cancel
         return {}
 
     monkeypatch.setattr(hardsub, "build_hardsub", fake_build)
@@ -106,9 +108,11 @@ def test_package_maps_cues_into_the_stretched_time(monkeypatch, tmp_path):
     voice = data / "voice.m4a"
     voice.write_bytes(b"x")
     warp = TimeWarp([WarpSegment(1.0, 2.0, 1.25)])  # +0.5s
-    package_outputs(Path("v.mp4"), subtitle, data / "ep.srt", data / "packages", data, voice_track=voice, warp=warp)
+    stop = threading.Event()
+    package_outputs(Path("v.mp4"), subtitle, data / "ep.srt", data / "packages", data, voice_track=voice, warp=warp, cancel=stop)
     assert [(c["start"], c["end"]) for c in seen["cues"]] == [(0.5, 1.625), (4.5, 5.5)]
     assert seen["warp"] is warp
+    assert seen["cancel"] is stop  # the Stop button reaches the render
     assert json.loads(subtitle.read_text())[1]["start"] == 4.0  # the editor's file stays in source time
     assert "00:00:04.500" in (data / "packages" / "ep.vi.display.vtt").read_text()
 
@@ -144,3 +148,16 @@ def test_a_stretched_render_runs_as_long_as_the_warp_says(tmp_path):
     assert abs(stream_duration("a:0") - total) <= 0.05
     assert abs(probe_duration(out) - total) <= 0.1
     assert not (tmp_path / "work" / "bed_warped.flac").exists()
+
+
+def test_stopping_the_job_kills_the_render_at_once():
+    # the render ran as a plain subprocess.run: Stop waited out an hour-long ffmpeg
+    from backend.app.infrastructure.process import ProcessError
+    from backend.app.services.audio import run_command
+
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    started = time.monotonic()
+    with pytest.raises(ProcessError, match="canceled"):
+        run_command(["sleep", "30"], cancel=stop)
+    assert time.monotonic() - started < 5

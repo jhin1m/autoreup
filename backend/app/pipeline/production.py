@@ -790,6 +790,8 @@ class PackageStage(PipelineStage):
         carve_db=settings.dub_carve_db,
             hardsub_config=hardsub_config,
             warp=warp,
+            cancel=context.cancel,
+            report=context.report,
         )
         return StageResult(name=self.name, artifacts=artifacts, logs=logs)
 
