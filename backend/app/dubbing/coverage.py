@@ -19,6 +19,7 @@ import base64
 import json
 import subprocess
 import tempfile
+import wave
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -363,13 +364,31 @@ def concat_time_to_source(spans: list[tuple[float, float, float]], t: float) -> 
     return source_start + length
 
 
-def concat_filter(ranges: list[tuple[float, float]]) -> str:
-    """ffmpeg filter that extracts and glues the ranges' AUDIO into one track."""
-    parts = []
-    for index, (start, end) in enumerate(ranges):
-        parts.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=N/SR/TB[a{index}]")
-    joined = "".join(f"[a{index}]" for index in range(len(ranges)))
-    return ";".join(parts) + f";{joined}concat=n={len(ranges)}:v=0:a=1[outa]"
+def glue_ranges_audio(video: Path, ranges: list[tuple[float, float]], output: Path) -> None:
+    """Write the ranges' AUDIO, glued in order, as one 16 kHz mono WAV.
+
+    The video's audio is decoded ONCE and the ranges are copied out by sample offset.
+    (An ffmpeg ``atrim`` per range off a shared ``[0:a]`` pushes the whole stream
+    through every branch: 1212 ranges of a 6.5h video ran for hours; this takes ~12s.)
+    Zero-length ranges are skipped, matching :func:`build_range_map`."""
+    full = output.with_name(f"{output.stem}.full.wav")
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(video), "-vn",
+         "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(full)],
+        check=True,
+    )
+    try:
+        with wave.open(str(full), "rb") as source, wave.open(str(output), "wb") as glued:
+            glued.setparams(source.getparams())
+            rate, frames = source.getframerate(), source.getnframes()
+            for start, end in ranges:
+                first = min(frames, max(0, round(start * rate)))
+                last = min(frames, max(first, round(end * rate)))
+                if last > first:
+                    source.setpos(first)
+                    glued.writeframes(source.readframes(last - first))
+    finally:
+        full.unlink(missing_ok=True)
 
 
 # --- how to get the speech the captions don't cover (measured cost model) ----------
@@ -432,13 +451,8 @@ def transcribe_ranges(
     if total <= 0.5:
         return []
     with tempfile.TemporaryDirectory() as tmp:
-        glued = Path(tmp) / "uncovered.mp3"
-        subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-i", str(video),
-             "-filter_complex", concat_filter(ranges), "-map", "[outa]",
-             "-ac", "1", "-ar", "16000", "-b:a", "64k", str(glued)],
-            check=True,
-        )
+        glued = Path(tmp) / "uncovered.wav"
+        glue_ranges_audio(video, ranges, glued)
         srt = Path(tmp) / "uncovered.srt"
         script = (scripts_dir or Path(__file__).resolve().parents[3] / "scripts") / "asr_worker_client.py"
         subprocess.run(

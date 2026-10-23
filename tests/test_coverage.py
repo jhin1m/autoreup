@@ -1,3 +1,9 @@
+import shutil
+import wave
+from array import array
+
+import pytest
+
 from backend.app.dubbing.coverage import find_gaps, find_speech_holes, filter_recovered, score_rows, speech_fraction
 
 
@@ -138,6 +144,33 @@ def test_range_map_round_trips_source_time():
     assert concat_time_to_source(spans, 2.0) == 12.0     # first range's end
     assert concat_time_to_source(spans, 3.0) == 21.0     # inside the second range
     assert concat_time_to_source(spans, 99.0) == 24.5    # clamped to the last edge
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_glue_ranges_audio_copies_each_range_in_order(tmp_path):
+    from backend.app.dubbing.coverage import build_range_map, glue_ranges_audio
+
+    rate = 16000
+    samples = array("h", (index % 30000 for index in range(rate * 6)))  # every sample tells its offset
+    source = tmp_path / "source.wav"
+    with wave.open(str(source), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(samples.tobytes())
+
+    ranges = [(0.5, 1.0), (3.0, 3.0), (2.0, 2.25), (5.5, 9.0)]  # empty range skipped; tail clamped
+    glued = tmp_path / "glued.wav"
+    glue_ranges_audio(source, ranges, glued)
+
+    with wave.open(str(glued), "rb") as result:
+        assert (result.getnchannels(), result.getframerate()) == (1, rate)
+        got = array("h", result.readframes(result.getnframes()))
+    expected = samples[8000:16000] + samples[32000:36000] + samples[88000:96000]
+    assert got == expected
+    _, total = build_range_map([(0.5, 1.0), (2.0, 2.25), (5.5, 6.0)])
+    assert len(got) == round(total * rate)
+    assert not (tmp_path / "glued.full.wav").exists()
 
 
 def test_clamp_to_ranges_drops_segments_outside_and_trims_edges():
