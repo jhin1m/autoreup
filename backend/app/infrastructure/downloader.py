@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -10,10 +12,6 @@ from uuid import uuid4
 _RETRIES = 50
 _RETRY_SLEEP_CAP = 15.0  # seconds; backoff 1, 2, 4, 8, 15, 15, ...
 _SOCKET_TIMEOUT = 15
-# Bilibili: a host whose speed stays under this floor (yt-dlp averages it per
-# connection, for 3s) is abandoned for a re-probed one; the .part file resumes.
-_BILIBILI_SPEED_FLOOR = 200 * 1024  # bytes/s
-_BILIBILI_HOST_SWITCHES = 5  # then finish on whatever host we have
 
 
 def _retry_sleep(n: int) -> float:
@@ -92,8 +90,9 @@ class YtDlpDownloader:
             # seconds instead of hanging the download.
             "socket_timeout": _SOCKET_TIMEOUT,
         }
-        if on_progress is not None:
-            options["progress_hooks"] = [_ProgressRelay(on_progress)]
+        relay = _ProgressRelay(on_progress) if on_progress is not None else None
+        if relay is not None:
+            options["progress_hooks"] = [relay]
         if cookies_file:
             options["cookiefile"] = cookies_file
         if cookie_header:
@@ -107,10 +106,10 @@ class YtDlpDownloader:
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 if urlparse(normalized).netloc.endswith("bilibili.com"):
-                    info, cdn_host = self._download_bilibili(ydl, normalized)
+                    info, cdn_host, filename = self._download_bilibili(ydl, normalized, self.videos_dir / f"{video_id}.mp4", relay)
                 else:
-                    info = ydl.extract_info(normalized, download=True)
-                filename = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
+                    info, filename = ydl.extract_info(normalized, download=True), None
+                filename = filename or Path(ydl.prepare_filename(info)).with_suffix(".mp4")
                 if not filename.exists():
                     candidates = sorted(self.videos_dir.glob(f"{video_id}.*"))
                     if not candidates:
@@ -131,23 +130,72 @@ class YtDlpDownloader:
         }
 
     @staticmethod
-    def _download_bilibili(ydl, url: str) -> tuple[dict, str | None]:
-        """Extract, move the streams to the fastest CDN host, download. When that host
-        throttles mid-download, re-extract (fresh signed URLs), re-probe without it and
-        resume the same .part file there."""
-        from yt_dlp.utils import ThrottledDownload
+    def _download_bilibili(ydl, url: str, output: Path, relay: "_ProgressRelay | None") -> tuple[dict, str | None, Path | None]:
+        """Extract, move the streams to the fastest CDN host, then fetch each stream
+        (DASH video + audio) over many connections — a range the chosen host fails to
+        serve falls back to the other probed hosts — and merge them into ``output``.
+        Streams that are not plain HTTP, or a server without range support, fall back to
+        yt-dlp's own single-connection download (the returned path is then None)."""
+        from backend.app.infrastructure import parallel_download
+        from backend.app.infrastructure.bilibili_cdn import host_variants, retarget_formats
 
-        from backend.app.infrastructure.bilibili_cdn import retarget_formats
+        raw = ydl.extract_info(url, download=False, process=False)
+        picked = retarget_formats(raw) if raw.get("_type", "video") == "video" else None
+        host, speeds = picked or (None, {})
+        info = ydl.process_ie_result(raw, download=False)
+        streams = info.get("requested_formats") or [info]
+        if any(s.get("protocol") not in {"http", "https"} or not s.get("url") for s in streams):
+            return ydl.process_ie_result(info, download=True), host, None
+        paths = []
+        try:
+            for stream in streams:
+                path = output.with_name(f"{output.stem}.f{stream['format_id']}.{stream['ext']}")
+                urls = host_variants(stream["url"], speeds)
+                parallel_download.download(urls, path, stream.get("http_headers") or {}, _byte_reporter(relay, path))
+                paths.append(path)
+        except parallel_download.RangeUnsupported:
+            return ydl.process_ie_result(info, download=True), host, None
+        _merge(paths, output)
+        return info, host, output
 
-        slow_hosts: set[str] = set()
-        for attempt in range(_BILIBILI_HOST_SWITCHES + 1):
-            raw = ydl.extract_info(url, download=False, process=False)
-            picked = retarget_formats(raw, frozenset(slow_hosts)) if raw.get("_type", "video") == "video" else None
-            host = picked[0] if picked else None
-            last_try = host is None or attempt == _BILIBILI_HOST_SWITCHES
-            ydl.params["throttledratelimit"] = None if last_try else _BILIBILI_SPEED_FLOOR
-            try:
-                return ydl.process_ie_result(raw, download=True), host
-            except ThrottledDownload:
-                slow_hosts.add(host)
-        raise AssertionError("unreachable: the last attempt runs without a speed floor")
+
+def _byte_reporter(relay: "_ProgressRelay | None", path: Path):
+    """Feed parallel-download byte counts into the yt-dlp-shaped progress relay."""
+    if relay is None:
+        return None
+
+    def report(downloaded: int, total: int, speed: float | None) -> None:
+        finished = downloaded >= total and speed is None
+        relay({
+            "status": "finished" if finished else "downloading",
+            "filename": str(path),
+            "downloaded_bytes": downloaded,
+            "total_bytes": total,
+            "speed": speed,
+            "eta": int((total - downloaded) / speed) if speed else None,
+        })
+
+    return report
+
+
+def _merge(streams: list[Path], output: Path) -> None:
+    """Mux the separately downloaded streams into one mp4 (stream copy, no re-encode)."""
+    if len(streams) == 1 and streams[0].suffix == ".mp4":
+        streams[0].replace(output)
+        return
+    if not shutil.which("ffmpeg"):
+        raise DownloadError("ffmpeg is required to merge the video and audio streams")
+    tmp = output.with_name(output.stem + ".merging.mp4")
+    command = ["ffmpeg", "-y", "-v", "error"]
+    for stream in streams:
+        command += ["-i", str(stream)]
+    for index in range(len(streams)):
+        command += ["-map", f"{index}"]
+    command += ["-c", "copy", str(tmp)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise DownloadError(f"ffmpeg merge failed: {result.stderr.strip()[-500:]}")
+    tmp.replace(output)
+    for stream in streams:
+        stream.unlink(missing_ok=True)

@@ -10,15 +10,9 @@ from backend.app.pipeline.contracts import PipelineStage, StageResult
 from backend.app.services.job_service import JobService
 
 
-class FakeThrottled(Exception):
-    pass
-
-
-def _fake_yt_dlp(captured: dict, videos_dir, hook_events: list[dict], raw_formats=None, throttle_first: int = 0):
-    """yt_dlp + yt_dlp.utils modules whose YoutubeDL records its options, fires the given
-    progress events and writes the output file — no network. The first
-    ``throttle_first`` downloads raise ThrottledDownload, recording the URLs they used."""
-    captured.setdefault("download_urls", [])
+def _fake_yt_dlp(captured: dict, videos_dir, hook_events: list[dict]):
+    """A yt_dlp module whose YoutubeDL records its options, fires the given progress
+    events and writes the output file — no network."""
 
     class FakeYDL:
         def __init__(self, options):
@@ -32,26 +26,16 @@ def _fake_yt_dlp(captured: dict, videos_dir, hook_events: list[dict], raw_format
             return False
 
         def extract_info(self, url, download, process=True):
-            raw = {"title": "t", "duration": 8666, "formats": [dict(f) for f in raw_formats or []]}
-            return self.process_ie_result(raw, download) if process else raw
-
-        def process_ie_result(self, raw, download):
-            captured["download_urls"].append(([f["url"] for f in raw["formats"]], self.params.get("throttledratelimit")))
-            if len(captured["download_urls"]) <= throttle_first:
-                raise FakeThrottled()
             for event in hook_events:
                 for hook in captured.get("progress_hooks", []):
                     hook(dict(event))
             (videos_dir / "vid.mp4").write_bytes(b"x")
-            return raw
+            return {"title": "t", "duration": 8666}
 
         def prepare_filename(self, info):
             return str(videos_dir / "vid.mp4")
 
-    return {
-        "yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYDL),
-        "yt_dlp.utils": types.SimpleNamespace(ThrottledDownload=FakeThrottled),
-    }
+    return {"yt_dlp": types.SimpleNamespace(YoutubeDL=FakeYDL)}
 
 
 def test_download_retries_a_dropped_connection_and_reports_progress(tmp_path):
@@ -62,7 +46,7 @@ def test_download_retries_a_dropped_connection_and_reports_progress(tmp_path):
     ]
     seen: list[dict] = []
     with patch.dict(sys.modules, _fake_yt_dlp(captured, tmp_path, events)):
-        YtDlpDownloader(tmp_path).download("https://www.bilibili.com/video/BV1", video_id="vid", on_progress=seen.append)
+        YtDlpDownloader(tmp_path).download("https://example.com/v", video_id="vid", on_progress=seen.append)
 
     # library yt-dlp defaults to ZERO retries; one dropped read must not fail a 2h download
     assert captured["retries"] >= 10
@@ -150,15 +134,10 @@ def test_non_bilibili_formats_are_left_alone():
     assert bilibili_cdn.retarget_formats(raw) is None
 
 
-def test_a_bilibili_host_that_throttles_mid_download_is_swapped_for_another(tmp_path):
-    captured: dict = {}
-    ali, hw = "upos-sz-mirrorali.bilivideo.com", "upos-sz-mirrorhw.bilivideo.com"
-    speeds = {AKAMAI: 40_000.0, ali: 2_400_000.0, hw: 1_600_000.0}
-    modules = _fake_yt_dlp(captured, tmp_path, [], raw_formats=_raw(AKAMAI)["formats"], throttle_first=1)
-    with patch.dict(sys.modules, modules), patch.object(bilibili_cdn, "probe_speed", side_effect=_fake_speeds(speeds)):
-        result = YtDlpDownloader(tmp_path).download("https://www.bilibili.com/video/BV1", video_id="vid")
-
-    (first_urls, first_floor), (second_urls, second_floor) = captured["download_urls"]
-    assert first_urls[0].startswith(f"https://{ali}/") and first_floor
-    assert second_urls[0].startswith(f"https://{hw}/")  # ali slowed down: never re-picked
-    assert result["cdn_host"] == hw
+def test_each_stream_can_fall_back_to_every_host_that_answered_the_probe():
+    url = f"https://{AKAMAI}/upgcxcode/26/v.m4s?deadline=1&upsig=abc"
+    speeds = {AKAMAI: 1.0, "upos-sz-mirrorali.bilivideo.com": 0.0, "upos-sz-mirrorhw.bilivideo.com": 9.0, "upos-sz-mirrorcos.bilivideo.com": 5.0}
+    assert [u.split("/")[2] for u in bilibili_cdn.host_variants(url, speeds)] == [
+        AKAMAI, "upos-sz-mirrorhw.bilivideo.com", "upos-sz-mirrorcos.bilivideo.com",  # dead host left out
+    ]
+    assert bilibili_cdn.host_variants("https://example.com/v.mp4", speeds) == ["https://example.com/v.mp4"]

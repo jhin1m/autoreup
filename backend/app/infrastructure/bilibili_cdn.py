@@ -7,8 +7,8 @@ upos-sz-mirrorali served 2.4 MB/s. The signature lives in the query string, not 
 host, so the path+query can be replayed on any ``upos-sz-mirror*`` host — the trick
 BBDown (--upos-host) and Bili23-Downloader (CDN.replace) use. Each candidate reads a
 short range deep in the file and the fastest wins; the original host stays a candidate.
-A host's speed swings over minutes (Akamai probed 6 MB/s once, 46 KB/s earlier), so the
-downloader re-probes — avoiding hosts that already slowed down — when one throttles.
+Every host also caps each connection, so the downloader fetches the streams over many
+connections at once (parallel_download); the host pick here still dodges the dead ones.
 """
 
 from __future__ import annotations
@@ -83,28 +83,25 @@ def probe_speed(url: str, client: httpx.Client, offset: int = _PROBE_OFFSET) -> 
     return got / max(time.monotonic() - start, 1e-3)
 
 
-def fastest_host(url: str, avoid: frozenset[str] = frozenset()) -> tuple[str, dict[str, float]]:
+def fastest_host(url: str) -> tuple[str, dict[str, float]]:
     """Probe ``url`` on its own host and every mirror in parallel; return the host to
-    use and the measured speeds. Keeps the original unless a mirror is clearly faster.
-    Hosts in ``avoid`` (they throttled earlier in this download) are not candidates."""
+    use and the measured speeds. Keeps the original unless a mirror is clearly faster."""
     original = urlparse(url).netloc
-    hosts = [h for h in dict.fromkeys([original, *MIRROR_HOSTS]) if h not in avoid]
-    if not hosts:
-        return original, {}
+    hosts = list(dict.fromkeys([original, *MIRROR_HOSTS]))
     pool = ThreadPoolExecutor(len(hosts), thread_name_prefix="cdn-probe")
     futures = {host: pool.submit(_probe, with_host(url, host)) for host in hosts}
     wait(futures.values(), timeout=_ROUND_SECONDS)
     pool.shutdown(wait=False, cancel_futures=True)
     speeds = {host: (f.result() if f.done() else 0.0) for host, f in futures.items()}
     best = max(hosts, key=lambda h: speeds[h])
-    if original in avoid or not speeds.get(original):
+    if not speeds.get(original):
         return (best if speeds[best] else original), speeds
     if best != original and speeds[best] > speeds[original] * _MIN_GAIN:
         return best, speeds
     return original, speeds
 
 
-def retarget_formats(ie_result: dict, avoid: frozenset[str] = frozenset()) -> tuple[str, dict[str, float]] | None:
+def retarget_formats(ie_result: dict) -> tuple[str, dict[str, float]] | None:
     """Rewrite every Bilibili stream URL in an UNPROCESSED yt-dlp result onto the
     fastest host (in place). Returns (host, speeds), or None when there was nothing
     to probe (not a single video, or no Bilibili CDN URLs)."""
@@ -112,8 +109,18 @@ def retarget_formats(ie_result: dict, avoid: frozenset[str] = frozenset()) -> tu
     if not formats:
         return None
     probe = max(formats, key=lambda f: (f.get("vcodec") not in (None, "none"), f.get("tbr") or 0))
-    host, speeds = fastest_host(probe["url"], avoid)
+    host, speeds = fastest_host(probe["url"])
     if host != urlparse(probe["url"]).netloc:
         for fmt in formats:
             fmt["url"] = with_host(fmt["url"], host)
     return host, speeds
+
+
+def host_variants(url: str, speeds: dict[str, float]) -> list[str]:
+    """``url`` on its own host first, then on every other host that answered the probe,
+    fastest first — the fallbacks for a byte range one host fails to serve."""
+    if not _is_bilibili_media(url):
+        return [url]
+    own = urlparse(url).netloc
+    others = sorted((h for h, speed in speeds.items() if speed > 0 and h != own), key=lambda h: -speeds[h])
+    return [url, *(with_host(url, h) for h in others)]
