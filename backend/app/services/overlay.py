@@ -68,6 +68,7 @@ class OverlayConfig:
     voice_volume: float = 1.0  # the dub itself (0-1)
     gap_volume: float | None = None  # original audio where nobody speaks (0-1); None = the app setting
     captions: bool = True  # burn the Vietnamese caption; off = covers and images only
+    remove_music: bool | None = None  # strip the source's music from the bed; None = the app setting
 
     def band_region(self) -> CoverRegion | None:
         for region in self.cover:
@@ -96,6 +97,7 @@ class OverlayConfig:
             "voice_volume": _volume(self.voice_volume, 1.0),
             "gap_volume": _volume(self.gap_volume),
             "captions": bool(self.captions),
+            "remove_music": None if self.remove_music is None else bool(self.remove_music),
         }
 
     @classmethod
@@ -113,6 +115,7 @@ class OverlayConfig:
             voice_volume=_volume(data.get("voice_volume"), 1.0),
             gap_volume=_volume(data.get("gap_volume")),
             captions=data.get("captions") is not False,
+            remove_music=None if data.get("remove_music") is None else bool(data["remove_music"]),
         )
 
 

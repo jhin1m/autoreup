@@ -110,6 +110,7 @@ class CoverRegionIn(BaseModel):
     strength: float = Field(default=1.0, gt=0.0, le=1.0)
     label: str = ""
     image: str = ""
+    color: str = ""
 
 
 class OverlayIn(BaseModel):
@@ -122,6 +123,8 @@ class OverlayIn(BaseModel):
     bed_volume: float | None = Field(default=None, ge=0.0, le=1.0)
     voice_volume: float = Field(default=1.0, ge=0.0, le=1.0)
     gap_volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    captions: bool = True
+    remove_music: bool | None = None
 
 
 def _overlay_context(job_id: str):
@@ -172,6 +175,7 @@ def _frame_info(video: Path) -> dict:
         "encode": _encode_info(video),
         "bed_volume": get_job_service().settings.dub_bed_volume,
         "gap_volume": get_job_service().settings.dub_gap_volume,
+        "remove_music": get_job_service().settings.dub_remove_music,
     }
 
 
@@ -207,8 +211,11 @@ def put_overlay(job_id: str, payload: OverlayIn) -> dict:
     """Persist the overlay (validated, fractions only). Re-render with /repack."""
     from backend.app.services.overlay import OverlayConfig, save_overlay
 
+    from backend.app.api.deps import get_job_service
+
     job_dir, _video = _overlay_context(job_id)
     saved = save_overlay(job_dir, job_id, OverlayConfig.from_json(payload.model_dump()))
+    get_job_service().prefetch_music(job_id)  # switched on in the editor: start the bed now
     return saved.to_json()
 
 

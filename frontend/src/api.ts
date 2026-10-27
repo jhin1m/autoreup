@@ -329,6 +329,8 @@ export type OverlayConfig = {
   gap_volume?: number | null;
   /** burn the Vietnamese caption (default on); off = covers and images only */
   captions?: boolean;
+  /** strip the source's music from the bed under the dub; null = the app setting (frame.remove_music) */
+  remove_music?: boolean | null;
 };
 
 export type BitratePreset = { value: string; label: string; hint: string; vmaf: number };
@@ -389,6 +391,8 @@ export type OverlayFrame = {
   bed_volume?: number;
   /** the app's default level for the original audio where nobody speaks */
   gap_volume?: number;
+  /** the app's default for removing the source's music from the bed */
+  remove_music?: boolean;
 };
 
 export type OverlayState = OverlayConfig & { frame?: OverlayFrame };

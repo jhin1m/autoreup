@@ -391,6 +391,19 @@ class JobService:
         manifest.progress = None
         manifest.touch()
         self.save(manifest)
+        self.prefetch_music(manifest.job_id)
+
+    def prefetch_music(self, job_id: str) -> None:
+        """With music removal on for this episode, build the music-free bed in the
+        background while the user reviews it, so the render does not wait for it."""
+        from backend.app.infrastructure.packaging import has_audio_stream
+        from backend.app.services import music_removal
+        from backend.app.services.overlay import load_overlay
+
+        video = self.settings.videos_dir / f"{job_id}.mp4"
+        overlay = load_overlay(self.settings.jobs_dir / job_id, job_id)
+        if video.exists() and music_removal.wanted(self.settings, overlay) and has_audio_stream(video):
+            music_removal.prefetch(self.settings, job_id, video)
 
     def approve_render(self, job_id: str) -> JobManifest:
         """The user reviewed the overlay: run (or re-run) the package stage with it."""
@@ -431,6 +444,9 @@ class JobService:
                 else:
                     resolved.unlink(missing_ok=True)
         shutil.rmtree(self.settings.jobs_dir / job_id, ignore_errors=True)
+        from backend.app.services import music_removal
+
+        music_removal.remove(self.settings, job_id)
 
     def get(self, job_id: str) -> JobManifest:
         path = self.manifest_path(job_id)

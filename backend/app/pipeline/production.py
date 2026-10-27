@@ -57,9 +57,10 @@ from backend.app.dubbing.time_warp import TimeWarp
 from backend.app.dubbing.translate import TranslateConfig, translate
 from backend.app.dubbing.tsv_io import read_tsv, write_json, write_tsv
 from backend.app.infrastructure.downloader import YtDlpDownloader
-from backend.app.infrastructure.packaging import package_outputs
+from backend.app.infrastructure.packaging import has_audio_stream, package_outputs
 from backend.app.infrastructure.process import run_command
 from backend.app.pipeline.contracts import PipelineContext, PipelineStage, StageResult
+from backend.app.services import music_removal
 from backend.app.services.tts_engines import TtsEngine, build_engine
 from backend.app.services.tts_engines import build_capcut_client as _build_capcut_client
 from backend.app.settings import app_settings_for, chat_agent, ocr_agent, tts_binding
@@ -769,11 +770,16 @@ class PackageStage(PipelineStage):
         video = Path(context.artifacts["video"])
         overlay = _load_overlay(context)
         hardsub_config = _hardsub_config(settings, overlay)
+        if voice_track and music_removal.wanted(settings, overlay) and has_audio_stream(video):
+            # computed once per job (often already by the review-time prefetch)
+            bed = music_removal.ensure_bed(settings, context.job_id, video, cancel=context.cancel, report=context.report)
+            hardsub_config.bed_audio = str(bed)
         context.report({"step": "Ghép video, giọng và phụ đề (ffmpeg)"})
         context.log(
             f"font {Path(hardsub_config.font_path).name} · {_encode_summary(settings, video, getattr(overlay, 'bitrate', ''))}"
             f" · âm gốc {hardsub_config.bed_volume:.0%} (khi không thoại {hardsub_config.gap_volume:.0%})"
             f" · lồng tiếng {hardsub_config.voice_volume:.0%}"
+            + (" · đã bỏ nhạc gốc" if hardsub_config.bed_audio else "")
         )
         warp = context.artifacts.get("time_warp")
         if warp:

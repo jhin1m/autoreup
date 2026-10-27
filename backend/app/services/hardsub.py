@@ -56,6 +56,7 @@ class HardsubConfig:
     images_dir: str = ""  # the user's image library (services.overlay_images) for "image" regions
     duck: bool = True
     carve_db: float = -3.0
+    bed_audio: str = ""  # the bed's audio file (music removed, see music_removal); "" = the source's own audio
     # Encoder + canonical geometry (filled from Settings). See preferred_video_codec_args:
     # source-resolution behaviour so hardsub works standalone.
     video_codec_args: tuple[str, ...] = field(default_factory=preferred_video_codec_args)
@@ -511,10 +512,13 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     if has_voice:
         from backend.app.services.audio import dub_mix_filter, render_gap_gain, warp_audio
 
+        bed_source = Path(config.bed_audio) if config.bed_audio else video
         bed_label = "[0:a:0]"
         if warp:
-            bed = warp_audio(video, warp, work_dir / "bed_warped.flac", work_dir / "bed_pieces")
+            bed = warp_audio(bed_source, warp, work_dir / "bed_warped.flac", work_dir / "bed_pieces")
             bed_label = f"[{add_input(bed)}:a:0]"
+        elif config.bed_audio:
+            bed_label = f"[{add_input(bed_source)}:a:0]"
         bed_gain = None
         if config.gap_volume > config.bed_volume:
             gain_path = work_dir / "bed_gain.wav"

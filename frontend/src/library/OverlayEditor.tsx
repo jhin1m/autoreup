@@ -148,6 +148,7 @@ export function OverlayEditor({
   const bedVolume = config?.bed_volume ?? frame?.bed_volume ?? 0.18;
   const voiceVolume = config?.voice_volume ?? 1;
   const gapVolume = config?.gap_volume ?? frame?.gap_volume ?? 0.7;
+  const removeMusic = config?.remove_music ?? frame?.remove_music ?? false;
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
@@ -192,8 +193,8 @@ export function OverlayEditor({
     setPreview("");
   }
 
-  /** Mix levels change only the sound: keep the rendered preview frame. */
-  function patchVolume(next: Partial<Pick<OverlayConfig, "bed_volume" | "voice_volume" | "gap_volume">>) {
+  /** Mix levels and the music switch change only the sound: keep the rendered preview frame. */
+  function patchVolume(next: Partial<Pick<OverlayConfig, "bed_volume" | "voice_volume" | "gap_volume" | "remove_music">>) {
     setConfig((current) => (current ? { ...current, ...next } : current));
   }
 
@@ -557,6 +558,18 @@ export function OverlayEditor({
             {voicePath ? (
               <div className="ov-group">
                 <p className="mono tiny">Âm lượng bản render</p>
+                <div className="seg-toggle" role="group" aria-label="Nhạc trong âm gốc">
+                  <button className={removeMusic ? "" : "on"} onClick={() => patchVolume({ remove_music: false })}>
+                    Giữ nhạc gốc
+                  </button>
+                  <button
+                    className={removeMusic ? "on" : ""}
+                    onClick={() => patchVolume({ remove_music: true })}
+                    title="Tách nhạc khỏi âm gốc (giữ thoại gốc và tiếng động) để tránh bản quyền nhạc. Chạy nền sau khi lưu, ~4 phút cho 1 giờ video; chỉ nghe được trong bản render"
+                  >
+                    Bỏ nhạc gốc
+                  </button>
+                </div>
                 <label className="ov-field" title="Âm thanh gốc (nhạc, tiếng động) giữ làm nền; khi có giọng, bản render còn tự hạ nền xuống thêm">
                   <span>Âm gốc {Math.round(bedVolume * 100)}%</span>
                   <input

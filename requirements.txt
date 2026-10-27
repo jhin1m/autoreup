@@ -28,4 +28,8 @@ vieneu==3.8.3
 #   pip install "mlx-qwen3-asr[aligner]==0.4.4"   # backend=qwen (preferred by auto)
 #   pip install mlx-whisper==0.4.3                # backend=local
 #
+# Optional: "remove the source's music" (services/music_removal.py) runs Bandit v2 on
+# PyTorch (MPS on Apple Silicon); imported only when an episode turns it on:
+#   pip install torch
+#
 # Optional: font for the burned subtitle (default ships in backend/app/assets/fonts).

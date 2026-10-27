@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     tts_pitch_shift: float = 1.0
     dub_bed_volume: float = 0.18  # quiet bed under the dub; the sidechain ducks it further while the voice speaks
     dub_gap_volume: float = 0.7  # original audio where nobody speaks (source VAD + dub); <= bed = off
+    dub_remove_music: bool = False  # bed = source minus its music (services/music_removal); the editor overrides per episode
     dub_duck: bool = True
     dub_carve_db: float = -3.0  # original audio kept as a quiet bed under the VI voice (was 0.38)
     # Hardsub: cover the original burned-in subtitle (OCR/cv2-detected band) + burn VI
