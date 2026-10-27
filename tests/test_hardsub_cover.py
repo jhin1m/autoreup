@@ -12,10 +12,11 @@ from backend.app.services.hardsub import HardsubConfig, _build_cover_chain
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+@pytest.mark.parametrize("mode", ["blur", "darken", "solid", "frost", "pixelate"])
 @pytest.mark.parametrize("height", [2, 3, 4, 40, 41, 74, 80, 81])
-def test_a_cover_box_of_any_height_renders(height):
+def test_a_cover_box_of_any_height_renders(height, mode):
     # an 80px subtitle band used to ask for chroma radius 20 and kill the whole render
-    chain = _build_cover_chain([(0, 900, 1920, height, "blur", 1.0)], HardsubConfig(blur=20))
+    chain = _build_cover_chain([(0, 900, 1920, height, mode, 1.0, "#123456")], HardsubConfig(blur=20))
     completed = subprocess.run(
         ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=1920x1080", "-frames:v", "1",
          "-filter_complex", f"[0:v]format=yuv420p[src];{chain.replace('[0:v]', '[src]', 1)}[cov]null[out]",

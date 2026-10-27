@@ -76,4 +76,14 @@ def save_image(settings: Settings, filename: str, data: bytes) -> dict:
     return {"name": name, "width": image.width, "height": image.height}
 
 
-__all__ = ["ImageUploadError", "images_dir", "list_images", "resolve_image", "save_image"]
+def delete_image(settings: Settings, name: str) -> bool:
+    """Remove ``name`` from the library; False when there is no such file. Episodes
+    that still place it render without it (see hardsub._paint_layer)."""
+    path = resolve_image(images_dir(settings), name)
+    if path is None:
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+
+__all__ = ["ImageUploadError", "delete_image", "images_dir", "list_images", "resolve_image", "save_image"]

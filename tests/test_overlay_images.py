@@ -13,7 +13,7 @@ from backend.app.pipeline.production import _hardsub_config
 from backend.app.services.audio import ffmpeg_available
 from backend.app.services.hardsub import _cover_regions, build_hardsub, render_overlay_frame
 from backend.app.services.overlay import CoverRegion, OverlayConfig
-from backend.app.services.overlay_images import ImageUploadError, images_dir, list_images, resolve_image, save_image
+from backend.app.services.overlay_images import ImageUploadError, delete_image, images_dir, list_images, resolve_image, save_image
 
 needs_ffmpeg = pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not installed")
 
@@ -79,6 +79,20 @@ def test_the_editor_uploads_and_lists_images(tmp_path, monkeypatch):
     assert listing["base"] == "/media/overlay_images" and listing["images"][0]["name"] == response.json()["name"]
     bad = client.post("/api/v1/settings/images", files={"file": ("x.png", b"nope", "image/png")})
     assert bad.status_code == 400 and "ảnh" in bad.json()["detail"]
+
+
+def test_an_image_can_be_deleted_from_the_library(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(settings_endpoint, "get_settings", lambda: settings)
+    client = TestClient(create_app())
+    name = save_image(settings, "logo.png", _png())["name"]
+    assert client.delete(f"/api/v1/settings/images/{name}").json() == {"deleted": name}
+    assert list_images(settings) == []
+    assert client.delete(f"/api/v1/settings/images/{name}").status_code == 404
+    # only a bare file name inside the library can be deleted
+    (tmp_path / "data" / "keep.png").write_bytes(_png())
+    assert not delete_image(settings, "../keep.png")
+    assert (tmp_path / "data" / "keep.png").exists()
 
 
 def _image_overlay(settings, strength=1.0, image=None) -> OverlayConfig:

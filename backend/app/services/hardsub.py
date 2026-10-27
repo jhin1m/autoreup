@@ -170,7 +170,7 @@ def overlay_geometry(src_width: int, src_height: int, band: tuple[int, int, int,
 
 def render_caption_png(text: str, path: Path, width: int, height: int, baseline_y: int, font, config: HardsubConfig, base=None) -> None:
     """One full-frame transparent PNG with the caption on its fixed baseline, drawn over
-    ``base`` (the stamp layer) when given."""
+    ``base`` (the paint layer) when given."""
     from PIL import Image, ImageDraw
 
     img = base.copy() if base is not None else Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -182,16 +182,20 @@ def render_caption_png(text: str, path: Path, width: int, height: int, baseline_
     img.save(path)
 
 
-def _stamp_layer(config: HardsubConfig, width: int, height: int):
-    """The user's images (overlay regions with mode "image") on one transparent
-    full-frame RGBA layer — each fitted inside its box (aspect kept, centred) at the
-    region's opacity — or None when there are none.
+# Regions drawn with PIL on the caption layer rather than by an ffmpeg cover filter.
+PAINTED_MODES = ("image", "gradient")
 
-    The layer rides on the caption overlay, so the images sit above the covers (one can
-    hide the original channel logo) and below the Vietnamese caption, with no extra
-    ffmpeg input."""
+
+def _paint_layer(config: HardsubConfig, width: int, height: int):
+    """The painted regions on one transparent full-frame RGBA layer, or None when
+    there are none: the user's images (fitted inside the box, aspect kept, centred, at
+    the region's opacity) and colour gradients.
+
+    The layer rides on the caption overlay, so these sit above the ffmpeg covers (an
+    image can hide the original channel logo) and below the Vietnamese caption, with
+    no extra ffmpeg input."""
     overlay = getattr(config, "overlay", None)
-    regions = [region.normalized() for region in (overlay.cover if overlay is not None else []) if region.mode == "image"]
+    regions = [region.normalized() for region in (overlay.cover if overlay is not None else []) if region.mode in PAINTED_MODES]
     if not regions:
         return None
     from PIL import Image
@@ -200,23 +204,43 @@ def _stamp_layer(config: HardsubConfig, width: int, height: int):
 
     layer = None
     for region in regions:
-        path = resolve_image(config.images_dir, region.image)
-        if path is None:
-            continue  # gone from the library: render without it rather than fail
         box_x, box_y = round(region.x * width), round(region.y * height)
         box_w, box_h = max(1, round(region.w * width)), max(1, round(region.h * height))
-        with Image.open(path) as source:
-            image = source.convert("RGBA")
-        scale = min(box_w / image.width, box_h / image.height)
-        image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
-        if region.strength < 1.0:
-            image.putalpha(image.getchannel("A").point(lambda alpha: round(alpha * region.strength)))
+        if region.mode == "gradient":
+            image = _gradient(region, box_w, box_h)
+            x, y = box_x, box_y
+        else:
+            path = resolve_image(config.images_dir, region.image)
+            if path is None:
+                continue  # gone from the library: render without it rather than fail
+            with Image.open(path) as source:
+                image = source.convert("RGBA")
+            scale = min(box_w / image.width, box_h / image.height)
+            image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+            if region.strength < 1.0:
+                image.putalpha(image.getchannel("A").point(lambda alpha: round(alpha * region.strength)))
+            x = min(box_x + (box_w - image.width) // 2, width - image.width)
+            y = min(box_y + (box_h - image.height) // 2, height - image.height)
         if layer is None:
             layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        x = min(box_x + (box_w - image.width) // 2, width - image.width)
-        y = min(box_y + (box_h - image.height) // 2, height - image.height)
         layer.alpha_composite(image, (max(0, x), max(0, y)))
     return layer
+
+
+def _gradient(region, width: int, height: int):
+    """The region's colour fading out vertically: full (x strength) at the edge nearer
+    the top or bottom of the frame, clear at the opposite edge — a shade under a bottom
+    caption band, or under a top bar."""
+    from PIL import Image
+
+    color = region.fill_color()
+    rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+    ramp = Image.linear_gradient("L").resize((width, height))  # 0 at the top, 255 at the bottom
+    if region.y + region.h / 2 < 0.5:
+        ramp = ramp.transpose(Image.FLIP_TOP_BOTTOM)
+    image = Image.new("RGBA", (width, height), (*rgb, 255))
+    image.putalpha(ramp.point(lambda alpha: round(alpha * region.strength)))
+    return image
 
 
 def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubConfig, caption: str = "") -> None:
@@ -237,6 +261,8 @@ def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubCon
     fraction = config.overlay.caption_cy_fraction() if getattr(config, "overlay", None) is not None else None
     caption_cy = round(fraction * geometry.out_height) if fraction is not None else geometry.caption_cy
 
+    if not _captions_on(config):
+        caption = ""
     regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
     cover = _build_cover_chain(regions, config)
     filters = [part for part in (
@@ -246,7 +272,7 @@ def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubCon
     graph = f"[0:v]{','.join(filters)}[scaled];" + cover.replace("[0:v]", "[scaled]")
 
     inputs = ["-ss", f"{max(0.0, t):.3f}", "-i", str(video)]
-    stamp = _stamp_layer(config, geometry.out_width, geometry.out_height)
+    stamp = _paint_layer(config, geometry.out_width, geometry.out_height)
     if caption.strip() or stamp is not None:
         with tempfile.TemporaryDirectory() as tmp:
             font = ImageFont.truetype(config.font_path, config.font_size)
@@ -274,7 +300,7 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     sub_dir.mkdir(parents=True, exist_ok=True)
     font = ImageFont.truetype(config.font_path, config.font_size)
     # the user's images stay on screen the whole video: under every caption and in the gaps
-    stamp = _stamp_layer(config, width, height)
+    stamp = _paint_layer(config, width, height)
     blank = sub_dir / "blank.png"
     (stamp if stamp is not None else Image.new("RGBA", (width, height), (0, 0, 0, 0))).save(blank)
 
@@ -317,8 +343,14 @@ def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: in
     ], cancel=cancel)
 
 
-def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int, geom: "OverlayGeometry | None" = None) -> list[tuple[int, int, int, int, str, float]]:
-    """Cover regions in OUTPUT pixels: (x, y, w, h, mode, strength).
+def _captions_on(config: HardsubConfig) -> bool:
+    """False when the episode's overlay turned the Vietnamese caption off."""
+    overlay = getattr(config, "overlay", None)
+    return overlay is None or overlay.captions
+
+
+def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int, geom: "OverlayGeometry | None" = None) -> list[tuple[int, int, int, int, str, float, str]]:
+    """Cover regions in OUTPUT pixels: (x, y, w, h, mode, strength, colour).
 
     The cover lives in the SAME space as the caption (the canonical output frame), so
     an editor preview of the output cannot disagree with the render — for a portrait
@@ -328,22 +360,22 @@ def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int,
     overlay = getattr(config, "overlay", None)
     if overlay is not None:
         regions = []
-        for region in overlay.cover:
-            if region.mode == "image":
-                continue  # stamped on the caption layer (_stamp_layer), not a cover
+        for region in (item.normalized() for item in overlay.cover):
+            if region.mode in PAINTED_MODES:
+                continue  # drawn on the caption layer (_paint_layer), not a cover
             x = int(region.x * out_width)
             y = int(region.y * out_height)
             w = max(2, int(region.w * out_width)) - (int(region.w * out_width) % 2)
             h = max(2, int(region.h * out_height)) - (int(region.h * out_height) % 2)
-            regions.append((x, y, min(w, out_width - x), min(h, out_height - y), region.mode, region.strength))
+            regions.append((x, y, min(w, out_width - x), min(h, out_height - y), region.mode, region.strength, region.fill_color()))
         return regions
     if band is not None and geom is not None:
         scale = geom.scale or 1.0
         by = max(0, int(band[0] * scale) + geom.pad_y)
         bh = max(2, int(band[1] * scale))
-        return [(0, by, out_width, min(bh, out_height - by), "blur", 1.0)]
+        return [(0, by, out_width, min(bh, out_height - by), "blur", 1.0, "")]
     if band is not None:
-        return [(0, band[0], out_width, band[1], "blur", 1.0)]
+        return [(0, band[0], out_width, band[1], "blur", 1.0, "")]
     return []
 
 
@@ -355,28 +387,42 @@ def _blur_radii(blur: int, w: int, h: int) -> tuple[int, int]:
     return max(0, min(blur, half - 1)), max(0, min(blur, (half - 1) // 2))
 
 
-def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float]], config: HardsubConfig) -> str:
+def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float, str]], config: HardsubConfig) -> str:
     """ffmpeg chain: apply every cover region to the incoming frame in turn."""
     if not regions:
         return "[0:v]copy[cov];"
     parts = ["[0:v]null[v0]"]
-    for index, (x, y, w, h, mode, strength) in enumerate(regions):
+    for index, (x, y, w, h, mode, strength, color) in enumerate(regions):
         label = f"v{index + 1}"
         if mode == "solid":
-            box = f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1.0:t=fill"
-            parts.append(f"[v{index}]{box}[{label}]")
-            continue
-        luma_r, chroma_r = _blur_radii(max(1, round(config.blur * max(0.2, strength))), w, h)
-        if mode == "darken":
-            box = f"boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{min(1.0, config.darken * strength):.2f}"
+            box = _tint(color or "#000000", strength)
+        elif mode == "pixelate":
+            # mosaic: shrink the box to a few blocks, blow it back up without smoothing
+            block = max(2, round(min(w, h) / 4 * strength))
+            box = f"scale={max(1, w // block)}:{max(1, h // block)}:flags=area,scale={w}:{h}:flags=neighbor"
         else:
-            box = f"boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2,eq=brightness=-{min(1.0, config.darken * 0.35 * strength):.2f}"
+            luma_r, chroma_r = _blur_radii(max(1, round(config.blur * max(0.2, strength))), w, h)
+            blur = f"boxblur={luma_r}:2:{chroma_r}:2,boxblur={luma_r}:2:{chroma_r}:2"
+            if mode == "darken":
+                box = f"{blur},eq=brightness=-{min(1.0, config.darken * strength):.2f}"
+            elif mode == "frost":
+                # frosted glass: the blur under a light wash of the chosen colour
+                box = f"{blur},{_tint(color or '#ffffff', 0.45)}"
+            else:
+                box = f"{blur},eq=brightness=-{min(1.0, config.darken * 0.35 * strength):.2f}"
         parts.append(
             f"[v{index}]split=2[b{index}][t{index}];"
             f"[t{index}]crop={w}:{h}:{x}:{y},{box}[c{index}];"
             f"[b{index}][c{index}]overlay={x}:{y}[{label}]"
         )
     return ";".join(parts) + ";[v" + str(len(regions)) + "]null[cov];"
+
+
+def _tint(color: str, opacity: float) -> str:
+    """Fill the cropped box with ``color`` ("#rrggbb") at ``opacity``. Drawn in RGB:
+    drawbox blends YUV planes one by one, so half-opaque red over black came out at
+    203 instead of ~128. ffmpeg wants "0xrrggbb" (a bare "#" starts a graph comment)."""
+    return f"format=rgb24,drawbox=x=0:y=0:w=iw:h=ih:color=0x{color.lstrip('#')}@{opacity:.2f}:t=fill"
 
 
 def _output_seconds(video: Path, warp: "TimeWarp | None") -> float:
@@ -432,7 +478,8 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
 
     overlay_mov = work_dir / "vi_overlay.mov"
     caption_cy = overlay_caption_cy if overlay_caption_cy is not None else geometry.caption_cy
-    _build_overlay_video(cues, work_dir / "cues", geometry.out_width, geometry.out_height, caption_cy, overlay_mov, config, cancel)
+    burned = cues if _captions_on(config) else []
+    _build_overlay_video(burned, work_dir / "cues", geometry.out_width, geometry.out_height, caption_cy, overlay_mov, config, cancel)
 
     has_voice = voice_track is not None and Path(voice_track).exists()
     inputs: list[str] = []
@@ -495,4 +542,4 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         ], _output_seconds(video, warp), report=report, cancel=cancel)
     finally:
         (work_dir / "bed_warped.flac").unlink(missing_ok=True)  # ~1 GB per hour of episode
-    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(cues), "gap_boost": gap_boost}
+    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(burned), "gap_boost": gap_boost}

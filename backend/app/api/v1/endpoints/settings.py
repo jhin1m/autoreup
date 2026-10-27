@@ -230,6 +230,16 @@ async def upload_overlay_image(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@router.delete("/images/{name}")
+def delete_overlay_image(name: str) -> dict:
+    """Remove an image from the library (renders that still place it skip it)."""
+    from backend.app.services.overlay_images import delete_image
+
+    if not delete_image(get_settings(), name):
+        raise HTTPException(status_code=404, detail="không có ảnh này")
+    return {"deleted": name}
+
+
 @router.get("/fonts/file")
 def font_file(path: str) -> Response:
     """One offered font's file, so the overlay editor previews the caption in it."""

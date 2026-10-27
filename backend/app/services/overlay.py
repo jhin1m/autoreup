@@ -12,10 +12,14 @@ not produce different-looking output than a 1080p one).
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-COVER_MODES = ("blur", "darken", "solid", "image")
+COVER_MODES = ("blur", "darken", "solid", "frost", "pixelate", "gradient", "image")
+# Modes painted in a colour the user picks; "" in a region means this default.
+COLOR_DEFAULTS = {"solid": "#000000", "frost": "#ffffff", "gradient": "#000000"}
+_HEX_COLOR = re.compile(r"#[0-9a-f]{6}")
 
 
 @dataclass(slots=True)
@@ -27,10 +31,11 @@ class CoverRegion:
     y: float
     w: float
     h: float
-    mode: str = "blur"        # blur | darken | solid | image
-    strength: float = 1.0     # blur: radius scale; darken/solid/image: 0..1 opacity
+    mode: str = "blur"        # one of COVER_MODES
+    strength: float = 1.0     # blur/darken/frost: radius scale; pixelate: block size; solid/gradient/image: 0..1 opacity
     label: str = ""           # "band" | "logo" | free text
     image: str = ""           # mode "image": the library file name (fitted inside the box)
+    color: str = ""           # solid/frost/gradient: "#rrggbb"; "" = COLOR_DEFAULTS[mode]
 
     def normalized(self) -> "CoverRegion":
         x = min(max(float(self.x), 0.0), 1.0)
@@ -39,8 +44,14 @@ class CoverRegion:
         h = min(max(float(self.h), 0.01), 1.0 - y)
         mode = self.mode if self.mode in COVER_MODES else "blur"
         image = Path(str(self.image or "")).name if mode == "image" else ""
+        color = str(self.color or "").strip().lower()
+        color = color if mode in COLOR_DEFAULTS and _HEX_COLOR.fullmatch(color) else ""
         return CoverRegion(round(x, 4), round(y, 4), round(w, 4), round(h, 4), mode,
-                           round(min(max(float(self.strength), 0.05), 1.0), 3), self.label, image)
+                           round(min(max(float(self.strength), 0.05), 1.0), 3), self.label, image, color)
+
+    def fill_color(self) -> str:
+        """The colour this region paints with ("" for modes that paint none)."""
+        return self.color or COLOR_DEFAULTS.get(self.mode, "")
 
 
 @dataclass(slots=True)
@@ -56,6 +67,7 @@ class OverlayConfig:
     bed_volume: float | None = None  # original audio under the dub (0-1); None = the app setting
     voice_volume: float = 1.0  # the dub itself (0-1)
     gap_volume: float | None = None  # original audio where nobody speaks (0-1); None = the app setting
+    captions: bool = True  # burn the Vietnamese caption; off = covers and images only
 
     def band_region(self) -> CoverRegion | None:
         for region in self.cover:
@@ -83,6 +95,7 @@ class OverlayConfig:
             "bed_volume": _volume(self.bed_volume),
             "voice_volume": _volume(self.voice_volume, 1.0),
             "gap_volume": _volume(self.gap_volume),
+            "captions": bool(self.captions),
         }
 
     @classmethod
@@ -99,6 +112,7 @@ class OverlayConfig:
             bed_volume=_volume(data.get("bed_volume")),
             voice_volume=_volume(data.get("voice_volume"), 1.0),
             gap_volume=_volume(data.get("gap_volume")),
+            captions=data.get("captions") is not False,
         )
 
 
@@ -165,4 +179,4 @@ def default_overlay(video: Path) -> OverlayConfig:
     )
 
 
-__all__ = ["COVER_MODES", "CoverRegion", "OverlayConfig", "default_overlay", "load_overlay", "overlay_path", "save_overlay"]
+__all__ = ["COLOR_DEFAULTS", "COVER_MODES", "CoverRegion", "OverlayConfig", "default_overlay", "load_overlay", "overlay_path", "save_overlay"]

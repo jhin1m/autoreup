@@ -5,11 +5,20 @@ import { useToast } from "../toast";
 import { toOutputTime, warpFactorAt } from "../util";
 import type { WarpSegment } from "../util";
 
-const MODES: { id: string; label: string }[] = [
-  { id: "blur", label: "Làm mờ" },
-  { id: "darken", label: "Tối đi" },
-  { id: "solid", label: "Đen đặc" },
+const MODES: { id: string; label: string; hint: string }[] = [
+  { id: "blur", label: "Làm mờ", hint: "Nhoè vùng này đi, vẫn thấy màu hình phía sau" },
+  { id: "darken", label: "Mờ tối", hint: "Nhoè rồi tối đi — hợp với chữ sáng màu" },
+  { id: "frost", label: "Kính mờ", hint: "Nhoè dưới một lớp màu nhạt (mặc định trắng)" },
+  { id: "pixelate", label: "Khảm ô vuông", hint: "Vỡ thành ô vuông lớn, như che mặt/biển số" },
+  { id: "solid", label: "Màu đặc", hint: "Phủ kín một màu, độ đậm chỉnh được" },
+  { id: "gradient", label: "Dải màu mờ dần", hint: "Đậm ở mép khung gần nhất (trên/dưới), nhạt dần vào giữa" },
 ];
+
+/** Must match services.overlay.COLOR_DEFAULTS: the colour a region paints when it names none. */
+const COLOR_DEFAULTS: Record<string, string> = { solid: "#000000", frost: "#ffffff", gradient: "#000000" };
+
+/** Modes whose strength is an opacity (the rest scale the blur / block size). */
+const OPACITY_MODES = ["solid", "gradient", "image"];
 
 type Handle = "move" | "se" | "caption" | null;
 
@@ -44,7 +53,7 @@ export function OverlayEditor({
   onClose: () => void;
   onRepack: () => void;
 }) {
-  const { toast } = useToast();
+  const { toast, confirm } = useToast();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const voiceRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -116,7 +125,7 @@ export function OverlayEditor({
         setConfig(cfg);
         setSelected(cfg.cover.length ? 0 : -1);
       })
-      .catch(() => setConfig({ caption_mode: "band", caption_y: null, caption_scale: 1, cover: [] }));
+      .catch(() => setConfig({ caption_mode: "band", caption_y: null, caption_scale: 1, cover: [], captions: true }));
   }, [jobId]);
 
   // The video is only a moving picture inside the OUTPUT frame: the canvas carries the
@@ -240,6 +249,27 @@ export function OverlayEditor({
     }
   }
 
+  /** Delete from the shared library; this episode's boxes using it go too (every
+   *  other episode just renders without it). */
+  async function deleteImage(image: OverlayImage) {
+    if (!(await confirm("Xoá ảnh này khỏi thư viện? Các tập khác đang dùng ảnh này sẽ render không có nó."))) return;
+    try {
+      await api.deleteOverlayImage(image.name);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Không xoá được ảnh", "error");
+      return;
+    }
+    setImages((list) => list.filter((item) => item.name !== image.name));
+    setConfig((current) => {
+      if (!current) return current;
+      const uses = (region: CoverRegion) => region.mode === "image" && region.image === image.name;
+      if (!current.cover.some(uses)) return current;
+      setSelected(-1);
+      return { ...current, cover: current.cover.filter((region) => !uses(region)) };
+    });
+    setPreview("");
+  }
+
   function removeRegion(index: number) {
     setConfig((current) => {
       if (!current) return current;
@@ -319,12 +349,13 @@ export function OverlayEditor({
   }
 
   const active = selected >= 0 && config ? config.cover[selected] : undefined;
+  const captionsOn = config?.captions !== false;
 
   async function previewFrame() {
     if (!config) return;
     setBusy("preview");
     try {
-      const url = await api.previewOverlayFrame(jobId, config, t, captionText);
+      const url = await api.previewOverlayFrame(jobId, config, t, captionsOn ? captionText : "");
       setPreview((old) => {
         if (old) URL.revokeObjectURL(old);
         return url;
@@ -429,7 +460,7 @@ export function OverlayEditor({
                 />
                 <div
                   className={`ov-box ${index === selected ? "on" : ""} ${region.mode}`}
-                  style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` }}
+                  style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%`, ...fillStyle(region) }}
                   onPointerDown={(event) => onPointerDown(event, index, "move")}
                   title={region.label || region.mode}
                 >
@@ -447,18 +478,20 @@ export function OverlayEditor({
               </div>
             ))}
             {/* the caption follows the frame: drag it (or the band box) and it moves */}
-            <div
-              className="ov-caption"
-              style={{
-                top: `${(captionFraction * 100).toFixed(2)}%`,
-                fontSize: `${captionFontPx.toFixed(1)}px`,
-                fontFamily: captionFamily ? `"${captionFamily}", sans-serif` : undefined,
-              }}
-              onPointerDown={startCaptionDrag}
-              title="Kéo để đặt vị trí phụ đề Việt"
-            >
-              <span className="ov-caption-text">{captionText || "(không có phụ đề ở giây này)"}</span>
-            </div>
+            {captionsOn ? (
+              <div
+                className="ov-caption"
+                style={{
+                  top: `${(captionFraction * 100).toFixed(2)}%`,
+                  fontSize: `${captionFontPx.toFixed(1)}px`,
+                  fontFamily: captionFamily ? `"${captionFamily}", sans-serif` : undefined,
+                }}
+                onPointerDown={startCaptionDrag}
+                title="Kéo để đặt vị trí phụ đề Việt"
+              >
+                <span className="ov-caption-text">{captionText || "(không có phụ đề ở giây này)"}</span>
+              </div>
+            ) : null}
           </div>
 
           <aside className="ov-side">
@@ -615,15 +648,18 @@ export function OverlayEditor({
               {images.length ? (
                 <div className="ov-library" role="list" aria-label="Ảnh đã tải lên">
                   {images.map((image) => (
-                    <button
-                      key={image.name}
-                      role="listitem"
-                      className={active?.mode === "image" && active.image === image.name ? "on" : ""}
-                      onClick={() => (active?.mode === "image" ? patchRegion(selected, { image: image.name }) : addImage(image))}
-                      title={active?.mode === "image" ? "Đổi ảnh của hộp đang chọn" : "Chèn ảnh này"}
-                    >
-                      <img src={`${imageBase}/${image.name}`} alt={image.name} loading="lazy" />
-                    </button>
+                    <div key={image.name} role="listitem" className="ov-thumb">
+                      <button
+                        className={active?.mode === "image" && active.image === image.name ? "on" : ""}
+                        onClick={() => (active?.mode === "image" ? patchRegion(selected, { image: image.name }) : addImage(image))}
+                        title={active?.mode === "image" ? "Đổi ảnh của hộp đang chọn" : "Chèn ảnh này"}
+                      >
+                        <img src={`${imageBase}/${image.name}`} alt={image.name} loading="lazy" />
+                      </button>
+                      <button className="ov-thumb-del" onClick={() => void deleteImage(image)} title="Xoá ảnh khỏi thư viện" aria-label={`Xoá ${image.name}`}>
+                        ✕
+                      </button>
+                    </div>
                   ))}
                 </div>
               ) : null}
@@ -635,20 +671,32 @@ export function OverlayEditor({
                 {active.mode === "image" ? (
                   <p className="mono tiny">Ảnh nằm gọn trong hộp, giữ đúng tỉ lệ. Bấm ảnh ở thư viện phía trên để đổi.</p>
                 ) : (
-                  <label className="ov-field">
-                    <span>Cách che</span>
-                    <select value={active.mode} onChange={(event) => patchRegion(selected, { mode: event.target.value })}>
-                      {MODES.map((mode) => (
-                        <option key={mode.id} value={mode.id}>
-                          {mode.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <>
+                    <label className="ov-field" title={MODES.find((mode) => mode.id === active.mode)?.hint}>
+                      <span>Cách che</span>
+                      <select value={active.mode} onChange={(event) => patchRegion(selected, { mode: event.target.value })}>
+                        {MODES.map((mode) => (
+                          <option key={mode.id} value={mode.id} title={mode.hint}>
+                            {mode.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {active.mode in COLOR_DEFAULTS ? (
+                      <label className="ov-field ov-color">
+                        <span>Màu</span>
+                        <input
+                          type="color"
+                          value={active.color || COLOR_DEFAULTS[active.mode]}
+                          onChange={(event) => patchRegion(selected, { color: event.target.value })}
+                        />
+                      </label>
+                    ) : null}
+                  </>
                 )}
                 <label className="ov-field">
                   <span>
-                    {active.mode === "image" ? "Độ đậm" : "Cường độ"} {active.strength.toFixed(2)}
+                    {OPACITY_MODES.includes(active.mode) ? "Độ đậm" : "Cường độ"} {active.strength.toFixed(2)}
                   </span>
                   <input
                     type="range"
@@ -704,58 +752,76 @@ export function OverlayEditor({
 
             <div className="ov-group">
               <p className="mono tiny">Phụ đề Việt</p>
-              <div className="seg-toggle">
-                <button
-                  className={config?.caption_mode === "band" ? "on" : ""}
-                  onClick={() => patch({ caption_mode: "band" })}
-                  title="Đặt phụ đề Việt đúng chỗ phụ đề gốc đã bị che"
-                >
-                  Đè lên phụ đề gốc
+              <div className="seg-toggle" role="group" aria-label="Phụ đề Việt trên video">
+                <button className={captionsOn ? "on" : ""} onClick={() => patch({ captions: true })}>
+                  Hiện phụ đề
                 </button>
-                <button className={config?.caption_mode === "manual" ? "on" : ""} onClick={() => patch({ caption_mode: "manual" })}>
-                  Tự đặt
+                <button
+                  className={captionsOn ? "" : "on"}
+                  onClick={() => patch({ captions: false })}
+                  title="Không burn phụ đề Việt vào video — vẫn giữ vùng che, ảnh chèn và lồng tiếng"
+                >
+                  Tắt phụ đề
                 </button>
               </div>
-              <label className="ov-field">
-                <span>Vị trí dọc {Math.round((config?.caption_y ?? 0.88) * 100)}%</span>
-                <input
-                  type="range"
-                  min={0.3}
-                  max={0.98}
-                  step={0.01}
-                  value={config?.caption_y ?? 0.88}
-                  onChange={(event) => patch({ caption_y: Number(event.target.value), caption_mode: "manual" })}
-                />
-              </label>
-              <label className="ov-field">
-                <span>Font chữ</span>
-                <select value={config?.font ?? ""} onChange={(event) => patch({ font: event.target.value })}>
-                  <option value="">Mặc định ({fontName(fonts, defaultFont)})</option>
-                  {(["app", "user", "system"] as const).map((source) => {
-                    const group = fonts.filter((font) => font.source === source);
-                    return group.length ? (
-                      <optgroup key={source} label={FONT_SOURCES[source]}>
-                        {group.map((font) => (
-                          <option key={font.path} value={font.path}>
-                            {font.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ) : null;
-                  })}
-                </select>
-              </label>
-              <label className="ov-field">
-                <span>Cỡ chữ ×{(config?.caption_scale ?? 1).toFixed(2)}</span>
-                <input
-                  type="range"
-                  min={0.6}
-                  max={1.8}
-                  step={0.05}
-                  value={config?.caption_scale ?? 1}
-                  onChange={(event) => patch({ caption_scale: Number(event.target.value) })}
-                />
-              </label>
+              {captionsOn ? (
+                <>
+                  <div className="seg-toggle">
+                    <button
+                      className={config?.caption_mode === "band" ? "on" : ""}
+                      onClick={() => patch({ caption_mode: "band" })}
+                      title="Đặt phụ đề Việt đúng chỗ phụ đề gốc đã bị che"
+                    >
+                      Đè lên phụ đề gốc
+                    </button>
+                    <button className={config?.caption_mode === "manual" ? "on" : ""} onClick={() => patch({ caption_mode: "manual" })}>
+                      Tự đặt
+                    </button>
+                  </div>
+                  <label className="ov-field">
+                    <span>Vị trí dọc {Math.round((config?.caption_y ?? 0.88) * 100)}%</span>
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={0.98}
+                      step={0.01}
+                      value={config?.caption_y ?? 0.88}
+                      onChange={(event) => patch({ caption_y: Number(event.target.value), caption_mode: "manual" })}
+                    />
+                  </label>
+                  <label className="ov-field">
+                    <span>Font chữ</span>
+                    <select value={config?.font ?? ""} onChange={(event) => patch({ font: event.target.value })}>
+                      <option value="">Mặc định ({fontName(fonts, defaultFont)})</option>
+                      {(["app", "user", "system"] as const).map((source) => {
+                        const group = fonts.filter((font) => font.source === source);
+                        return group.length ? (
+                          <optgroup key={source} label={FONT_SOURCES[source]}>
+                            {group.map((font) => (
+                              <option key={font.path} value={font.path}>
+                                {font.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null;
+                      })}
+                    </select>
+                  </label>
+                  <label className="ov-field">
+                    <span>Cỡ chữ ×{(config?.caption_scale ?? 1).toFixed(2)}</span>
+                    <input
+                      type="range"
+                      min={0.6}
+                      max={1.8}
+                      step={0.05}
+                      value={config?.caption_scale ?? 1}
+                      onChange={(event) => patch({ caption_scale: Number(event.target.value) })}
+                    />
+                  </label>
+                </>
+              ) : (
+                <p className="mono tiny">Video sẽ không có phụ đề Việt.</p>
+              )}
             </div>
           </aside>
         </div>
@@ -846,6 +912,19 @@ const FONT_SOURCES = { app: "Font của app", user: "Font bạn đã cài", syst
 
 function fontName(fonts: FontInfo[], path: string): string {
   return fonts.find((font) => font.path === path)?.name ?? (path.split("/").pop() ?? "").replace(/\.(ttf|otf)$/i, "");
+}
+
+/** The canvas paints the colour modes the way the render will, never fully opaque so the
+ *  text being covered stays visible while lining the box up (blur/pixel modes keep their
+ *  outline tint: the real look is in “Xem thử khung hình”). */
+function fillStyle(region: CoverRegion): React.CSSProperties {
+  const color = region.color || COLOR_DEFAULTS[region.mode];
+  if (!color) return {};
+  const alpha = (opacity: number) => `${color}${Math.round(opacity * 255).toString(16).padStart(2, "0")}`;
+  if (region.mode === "solid") return { background: alpha(Math.min(region.strength, 0.8)) };
+  if (region.mode === "frost") return { background: alpha(0.45) };
+  const toward = region.y + region.h / 2 < 0.5 ? "to top" : "to bottom";
+  return { background: `linear-gradient(${toward}, ${alpha(0)}, ${alpha(Math.min(region.strength, 0.8))})` };
 }
 
 const REGION_NAMES: Record<string, string> = { band: "phụ đề gốc", logo: "logo", text: "vùng chữ", image: "ảnh" };

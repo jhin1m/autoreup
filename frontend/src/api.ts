@@ -302,6 +302,8 @@ export type CoverRegion = {
   label: string;
   /** mode "image": the library file name (fetchOverlayImages) */
   image?: string;
+  /** solid/frost/gradient: "#rrggbb"; "" = the mode's default colour */
+  color?: string;
 };
 
 export type OverlayConfig = {
@@ -319,6 +321,8 @@ export type OverlayConfig = {
   voice_volume?: number;
   /** original audio where nobody speaks (0-1); null = the app setting (frame.gap_volume) */
   gap_volume?: number | null;
+  /** burn the Vietnamese caption (default on); off = covers and images only */
+  captions?: boolean;
 };
 
 export type BitratePreset = { value: string; label: string; hint: string; vmaf: number };
@@ -356,6 +360,11 @@ export async function uploadOverlayImage(file: File): Promise<OverlayImage> {
     throw new Error(typeof detail === "string" ? detail : "Không tải ảnh lên được");
   }
   return (await response.json()) as OverlayImage;
+}
+
+/** Remove an image from the shared library (episodes still placing it render without it). */
+export async function deleteOverlayImage(name: string): Promise<void> {
+  await ok(await fetch(`/api/v1/settings/images/${encodeURIComponent(name)}`, { method: "DELETE" }), "Không xoá được ảnh");
 }
 
 export function fontFileUrl(path: string): string {
