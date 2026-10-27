@@ -206,6 +206,13 @@ export function Preview({
       setError(String(err));
     }
   }
+  async function openFolder() {
+    try {
+      await api.openEpisodeFolder(episode.id);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
   const showSubs = isDubbed && dubbed && !!dubArt && cues.length > 0 && !fellBackToSource;
 
   function handleTimeUpdate(event: React.SyntheticEvent<HTMLVideoElement>) {
@@ -329,6 +336,11 @@ export function Preview({
               <a className="ghost" href={api.artifactUrl(episode.dub_job_id ?? "", "hardsub_mp4")} download>
                 Tải video
               </a>
+            ) : null}
+            {(isDubbed && dubArt) || isReview ? (
+              <button className="ghost" onClick={openFolder} title="Gom video, giọng, phụ đề, ảnh và thông tin tập vào một thư mục rồi mở nó">
+                Mở thư mục
+              </button>
             ) : null}
             {(isDubbed || isReview || canEditRender) && job ? (
               <button

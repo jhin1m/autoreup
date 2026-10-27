@@ -248,6 +248,12 @@ export async function deleteEpisodeDub(episodeId: string): Promise<void> {
   await ok(await fetch(`${LIB}/episodes/${episodeId}/dub`, { method: "DELETE" }), "Không xóa được bản dịch");
 }
 
+/** Gather the episode's video, voice, subtitle, stills and info into one folder and open it in Finder. */
+export async function openEpisodeFolder(episodeId: string): Promise<string> {
+  const response = await ok(await fetch(`${LIB}/episodes/${episodeId}/open-folder`, { method: "POST" }), "Không mở được thư mục");
+  return ((await response.json()) as { path: string }).path;
+}
+
 export async function listExports(seriesId: string): Promise<Export[]> {
   const response = await ok(await fetch(`${LIB}/series/${seriesId}/exports`), "Không tải được bản ghép");
   return (await response.json()) as Export[];

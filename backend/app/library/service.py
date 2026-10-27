@@ -15,6 +15,7 @@ from backend.app.core.config import Settings
 from backend.app.domain.artifacts import ArtifactKind
 from backend.app.domain.jobs import JobInput, JobState, StageStatus
 from backend.app.agents import AgentConfig, complete
+from backend.app.library import outputs
 from backend.app.library.db import LibraryDB
 from backend.app.library.grouping import Group, cluster_into_series, episode_number, show_tags
 from backend.app.library.models import DubState, Episode, Export, ExportState, Series
@@ -84,6 +85,7 @@ class LibraryService:
                     self.jobs.delete(ep.dub_job_id)
                 except Exception:
                     pass
+            outputs.remove(self.settings, series.title, ep.id)
         for export in self.store.list_exports(series_id):
             self._remove_export_file(export)
         return self.store.delete_series(series_id)
@@ -343,8 +345,28 @@ class LibraryService:
                 self.jobs.delete(ep.dub_job_id)
             except Exception:
                 pass
+        series = self.store.get_series(ep.series_id, with_sources=False)
+        if series:
+            outputs.remove(self.settings, series.title, ep.id)
         self.store.set_episode_dub(episode_id, None, DubState.none)
         return True
+
+    def open_episode_folder(self, episode_id: str) -> Path:
+        """Gather the episode's deliverables into data/outputs/<series>/<tập> (fresh, so an
+        episode rendered before this folder existed gets one too) and show it in Finder."""
+        ep = self.store.get_episode(episode_id)
+        series = self.store.get_series(ep.series_id, with_sources=False) if ep else None
+        if not ep or not series:
+            raise LibraryError("Tập không tồn tại")
+        try:
+            manifest = self.jobs.get(ep.dub_job_id) if ep.dub_job_id else None
+        except Exception:
+            manifest = None
+        folder = outputs.gather(self.settings, manifest, outputs.library_info(series.title, ep)) if manifest else None
+        if folder is None:
+            raise LibraryError("Tập này chưa lồng tiếng xong")
+        _reveal(folder)
+        return folder
 
     # ----- exports --------------------------------------------------------
     def create_export(self, series_id: str, title: str, description: str, hashtags: list[str], episode_job_ids: list[str]) -> Export:
@@ -602,6 +624,18 @@ def _match_group(series_title: str, known_ids: set[str], groups: list[Group]) ->
         return best
     title = (series_title or "").strip()
     return next((g for g in groups if g.title and (g.title in title or title in g.title)), None)
+
+
+def _reveal(folder: Path) -> None:
+    """Open a folder in the OS file manager (the app runs on the user's own machine)."""
+    import sys
+
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(folder)])
+    elif sys.platform == "win32":
+        subprocess.Popen(["explorer", str(folder)])
+    elif shutil.which("xdg-open"):
+        subprocess.Popen(["xdg-open", str(folder)])
 
 
 def _concat_videos(inputs: list[Path], output: Path, work_dir: Path, settings) -> None:

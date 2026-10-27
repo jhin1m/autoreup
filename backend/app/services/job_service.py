@@ -1,4 +1,5 @@
 import json
+import logging
 import queue
 import shutil
 import threading
@@ -14,6 +15,9 @@ from backend.app.domain.jobs import JobInput, JobManifest, JobState, PipelineCon
 from backend.app.pipeline.production import ProductionPipeline
 from backend.app.settings import SettingsStore, strip_secrets
 from backend.app.studio.providers import extract_url
+
+
+logger = logging.getLogger(__name__)
 
 
 class JobNotFoundError(KeyError):
@@ -300,6 +304,7 @@ class JobService:
             manifest.state = JobState.succeeded
             manifest.touch()
             self.save(manifest)
+            self._gather_outputs(manifest)
         except Exception as exc:
             if cancel.is_set():
                 # the stage stopped because the user asked; what it wrote stays for a resume
@@ -313,6 +318,16 @@ class JobService:
             manifest.error = str(exc)
             manifest.touch()
             self.save(manifest)
+
+    def _gather_outputs(self, manifest: JobManifest) -> None:
+        """Copy the finished episode into its readable folder (data/outputs/<series>/<tập>).
+        Best-effort: the render already succeeded, a failed gather must not undo that."""
+        from backend.app.library.outputs import gather_job
+
+        try:
+            gather_job(self.settings, manifest)
+        except Exception:
+            logger.exception("gathering outputs of job %s failed", manifest.job_id)
 
     def _progress_publisher(self, manifest: JobManifest, record: StageRecord) -> Callable[[dict, bool], None]:
         """A stage's progress callback: put the latest live state on ``manifest`` and save

@@ -151,6 +151,16 @@ def delete_episode_dub(episode_id: str) -> None:
         raise HTTPException(status_code=404, detail="Tập không tồn tại")
 
 
+@router.post("/episodes/{episode_id}/open-folder")
+def open_episode_folder(episode_id: str) -> dict:
+    """Gather the episode into its readable output folder and open it in Finder."""
+    try:
+        folder = get_library_service().open_episode_folder(episode_id)
+    except LibraryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"path": str(folder)}
+
+
 # ----- exports ------------------------------------------------------------
 @router.post("/series/{series_id}/suggest-export")
 def suggest_export(series_id: str, request: SuggestExportRequest) -> dict:

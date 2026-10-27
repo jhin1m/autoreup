@@ -82,6 +82,7 @@ export(id, series_id, title, description, hashtags json,
 - `export.state ∈ {draft, rendering, done, failed}`.
 - JobManifest có `series_id`, `source_video_id`; job xong → cập nhật `episode.dub_state/dub_job_id`.
 - Render export: chuẩn hoá từng tập (re-encode spec chung) rồi nối; output `data/exports/<series>/<export_id>.mp4`.
+- **Thư mục tập** `data/outputs/<series>/<Tập NN | tiêu đề>/` (`backend/app/library/outputs.py`): job succeeded → gom `video.mp4` + `voice.m4a` (hardlink), `phu-de.vi.srt` (thời gian OUTPUT), `khung-hinh/01..08.jpg` (từ video gốc; mất gốc thì từ bản render), `thong-tin.md` (thông tin, nhân vật từ glossary, prompt gợi ý title/description/thumbnail, lời thoại có mốc giờ output). File `.autoreup` giữ episode id (job id với video lẻ → bộ `Video lẻ`); trùng tên tập → thêm hậu tố id. Render lại ghi đè đúng thư mục; xoá bản dịch/bộ chỉ xoá file của app, giữ file người dùng tự thêm. `POST /library/episodes/{id}/open-folder` gom lại rồi mở Finder (nút "Mở thư mục").
 
 ## 6. Jobs
 
