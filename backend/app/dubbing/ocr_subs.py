@@ -64,6 +64,18 @@ class OcrExtractConfig:
     ocr_pad_frac: float = 0.18
 
 
+def text_mask(gray: "np.ndarray", kernel: int = 5) -> "np.ndarray":
+    """1 where a pixel looks like caption text: bright (>=195) and next to a dark outline
+    (<=85, dilated by ``kernel``). Ignores flat bright areas (sky, white walls) that a
+    plain brightness threshold would take for text."""
+    import cv2
+    import numpy as np
+
+    bright = (gray >= 195).astype(np.uint8)
+    dark = cv2.dilate((gray <= 85).astype(np.uint8), np.ones((kernel, kernel), np.uint8))
+    return bright & dark
+
+
 def ocr_coverage(segments: list[AsrSegment], duration: float) -> float:
     """Fraction of the video's runtime covered by OCR-derived speech segments."""
     if duration <= 0:
@@ -197,7 +209,6 @@ def extract_ocr_segments(
     recognizer = recognizer or vision_recognizer(config)
     if recognizer is None:
         return None
-    import cv2
     import numpy as np
 
     band_y, band_h, width, height = band
@@ -226,9 +237,7 @@ def extract_ocr_segments(
 
     def mask_col(frame: "np.ndarray") -> tuple["np.ndarray", bool]:
         """Normalized text-mask column profile (not raw pixels) and whether the band is empty."""
-        bright = (frame >= 195).astype(np.uint8)
-        dark = cv2.dilate((frame <= 85).astype(np.uint8), np.ones((5, 5), np.uint8))
-        text = (bright & dark)[:, x0:x1]
+        text = text_mask(frame)[:, x0:x1]
         col = text.sum(axis=0).astype(np.float32)
         norm = np.linalg.norm(col)
         return (col / norm if norm > 0 else col), float(text.sum()) < empty_floor

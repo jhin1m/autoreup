@@ -14,6 +14,7 @@ sub video -> mux the dubbed audio. Falls back gracefully if the band isn't found
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import shutil
 import tempfile
 import threading
 from collections.abc import Callable
@@ -265,33 +266,53 @@ def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubCon
     if not _captions_on(config):
         caption = ""
     regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
-    cover = _build_cover_chain(regions, config)
     filters = [part for part in (
         config.scale_filter,
         "hflip" if _mirror_on(config) else "",
         f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
     ) if part] or ["null"]
-    graph = f"[0:v]{','.join(filters)}[scaled];" + cover.replace("[0:v]", "[scaled]")
 
     inputs = ["-ss", f"{max(0.0, t):.3f}", "-i", str(video)]
     stamp = _paint_layer(config, geometry.out_width, geometry.out_height)
-    if caption.strip() or stamp is not None:
-        with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp:
+        # A smart region shows what the render does at ``t``: blurred around the caption
+        # when one is on screen, untouched when none is. A per-frame approximation: the
+        # render's fade, rolls and gap bridging, and its whole-video fallback when the
+        # episode has no text in the box at all, are not shown.
+        from backend.app.services.smart_cover import frame_text_extent, mask_png
+
+        kept: list[tuple[int, int, int, int, str, float, str]] = []
+        masks: dict[int, str] = {}
+        for region in regions:
+            if region[4] == "smart":
+                try:
+                    extent = frame_text_extent(video, t, region[:4], _detect_filters(config))
+                except RuntimeError:
+                    extent = ()  # unreadable: a plain blur, as the render falls back to
+                if extent is None:
+                    continue
+                if extent:
+                    path = Path(tmp) / f"mask{len(kept)}.png"
+                    mask_png(extent, region[2], region[3]).save(path)
+                    inputs += ["-i", str(path)]
+                    masks[len(kept)] = f"[{inputs.count('-i') - 1}:v]"
+            kept.append(region)
+        cover = _build_cover_chain(kept, config, masks)
+        graph = f"[0:v]{','.join(filters)}[scaled];" + cover.replace("[0:v]", "[scaled]")
+        out_label = "[cov]"
+        if caption.strip() or stamp is not None:
             font = ImageFont.truetype(config.font_path, config.font_size)
             ascent, descent = font.getmetrics()
             png = Path(tmp) / "caption.png"
             render_caption_png(caption, png, geometry.out_width, geometry.out_height,
                                caption_cy + (ascent - descent) // 2, font, config, base=stamp)
-            graph += "[cov][1:v]overlay=0:0[vo]"
-            run_command([
-                "ffmpeg", "-y", "-v", "error", *inputs, "-i", str(png),
-                "-filter_complex", graph, "-map", "[vo]", "-frames:v", "1", "-q:v", "3", str(output),
-            ])
-        return
-    run_command([
-        "ffmpeg", "-y", "-v", "error", *inputs,
-        "-filter_complex", graph, "-map", "[cov]", "-frames:v", "1", "-q:v", "3", str(output),
-    ])
+            inputs += ["-i", str(png)]
+            graph += f"[cov][{inputs.count('-i') - 1}:v]overlay=0:0[vo]"
+            out_label = "[vo]"
+        run_command([
+            "ffmpeg", "-y", "-v", "error", *inputs,
+            "-filter_complex", graph, "-map", out_label, "-frames:v", "1", "-q:v", "3", str(output),
+        ])
 
 
 def _build_overlay_video(cues: list[dict], sub_dir: Path, width: int, height: int, caption_cy: int, output: Path, config: HardsubConfig, cancel: threading.Event | None = None) -> None:
@@ -377,7 +398,12 @@ def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int,
             y = int(region.y * out_height)
             w = max(2, int(region.w * out_width)) - (int(region.w * out_width) % 2)
             h = max(2, int(region.h * out_height)) - (int(region.h * out_height) % 2)
-            regions.append((x, y, min(w, out_width - x), min(h, out_height - y), region.mode, region.strength, region.fill_color()))
+            w, h = min(w, out_width - x), min(h, out_height - y)
+            if region.mode == "smart":
+                # its detection frames, mask and crop must agree to the pixel, and an odd
+                # crop snaps down to even (measured 101x61 -> 100x60) under yuv420p
+                w, h = max(2, w - w % 2), max(2, h - h % 2)
+            regions.append((x, y, w, h, region.mode, region.strength, region.fill_color()))
         return regions
     if band is not None and geom is not None:
         scale = geom.scale or 1.0
@@ -397,10 +423,16 @@ def _blur_radii(blur: int, w: int, h: int) -> tuple[int, int]:
     return max(0, min(blur, half - 1)), max(0, min(blur, (half - 1) // 2))
 
 
-def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float, str]], config: HardsubConfig) -> str:
-    """ffmpeg chain: apply every cover region to the incoming frame in turn."""
+def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float, str]], config: HardsubConfig, masks: dict[int, str] | None = None) -> str:
+    """ffmpeg chain: apply every cover region to the incoming frame in turn.
+
+    ``masks`` maps a "smart" region's index to the ffmpeg label of its gray mask
+    (services.smart_cover): the blurred, grained box is alpha-merged through it so the
+    blur shows only around the caption while it is on screen. A smart region without a
+    mask (detection found nothing or failed) is a plain blur — never left uncovered."""
     if not regions:
         return "[0:v]copy[cov];"
+    masks = masks or {}
     parts = ["[0:v]null[v0]"]
     for index, (x, y, w, h, mode, strength, color) in enumerate(regions):
         label = f"v{index + 1}"
@@ -420,6 +452,18 @@ def _build_cover_chain(regions: list[tuple[int, int, int, int, str, float, str]]
                 box = f"{blur},{_tint(color or '#ffffff', 0.45)}"
             else:
                 box = f"{blur},eq=brightness=-{min(1.0, config.darken * 0.35 * strength):.2f}"
+        if mode == "smart" and index in masks:
+            from backend.app.services.smart_cover import SmartCoverConfig
+
+            # the plain blur, grained to keep the source's texture, shown through the mask
+            parts.append(
+                f"[v{index}]split=2[b{index}][t{index}];"
+                f"[t{index}]crop={w}:{h}:{x}:{y},{box},noise=alls={SmartCoverConfig().grain}:allf=t,format=yuva420p[c{index}];"
+                f"{masks[index]}format=gray,scale={w}:{h}[m{index}];"
+                f"[c{index}][m{index}]alphamerge[a{index}];"
+                f"[b{index}][a{index}]overlay={x}:{y}:eof_action=pass[{label}]"
+            )
+            continue
         parts.append(
             f"[v{index}]split=2[b{index}][t{index}];"
             f"[t{index}]crop={w}:{h}:{x}:{y},{box}[c{index}];"
@@ -433,6 +477,46 @@ def _tint(color: str, opacity: float) -> str:
     drawbox blends YUV planes one by one, so half-opaque red over black came out at
     203 instead of ~128. ffmpeg wants "0xrrggbb" (a bare "#" starts a graph comment)."""
     return f"format=rgb24,drawbox=x=0:y=0:w=iw:h=ih:color=0x{color.lstrip('#')}@{opacity:.2f}:t=fill"
+
+
+def _detect_filters(config: HardsubConfig) -> list[str]:
+    """The picture filters a smart region's detection runs through: the same output
+    space the covers are drawn in (scale/pad, mirror), on the source timeline (no warp)."""
+    return [part for part in (config.scale_filter, "hflip" if _mirror_on(config) else "") if part]
+
+
+def _smart_masks(video: Path, regions: list[tuple[int, int, int, int, str, float, str]], config: HardsubConfig, warp: "TimeWarp | None", work_dir: Path, cancel: threading.Event | None = None) -> tuple[dict[int, Path], list[dict]]:
+    """A mask video per "smart" region (index -> path) and per-region stats for the
+    summary. A region whose detection fails or finds no text gets no mask: the cover
+    chain then blurs it for the whole video (``fallback`` in its stats)."""
+    from backend.app.services.smart_cover import build_mask_video, detect_text_spans
+
+    masks: dict[int, Path] = {}
+    stats: list[dict] = []
+    total = 0.0
+    for index, (x, y, w, h, mode, _strength, _color) in enumerate(regions):
+        if mode != "smart":
+            continue
+        path = work_dir / f"mask{index}.mkv"
+        try:
+            spans = detect_text_spans(video, (x, y, w, h), _detect_filters(config), cancel=cancel)
+            if spans:
+                if warp:
+                    for span in spans:
+                        span.start, span.end = warp.to_output(span.start), warp.to_output(span.end)
+                total = total or _output_seconds(video, warp) or spans[-1].end
+                build_mask_video(spans, w, h, total, work_dir / f"m{index}", path, cancel=cancel)
+        except Exception as exc:  # noqa: BLE001 - a failed detection/mask degrades to a plain blur
+            if cancel is not None and cancel.is_set():
+                raise  # the user stopped the job
+            stats.append({"region": index, "spans": 0, "fallback": f"smart cover failed: {exc}"[:200]})
+            continue
+        if not spans:
+            stats.append({"region": index, "spans": 0, "fallback": "no text found"})
+            continue
+        masks[index] = path
+        stats.append({"region": index, "spans": len(spans), "covered_s": round(sum(s.end - s.start for s in spans), 1)})
+    return masks, stats
 
 
 def _output_seconds(video: Path, warp: "TimeWarp | None") -> float:
@@ -504,7 +588,8 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     voice_label = f"[{add_input(voice_track)}:a:0]" if has_voice else ""
 
     regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
-    cover = _build_cover_chain(regions, config)
+    masks, smart = _smart_masks(video, regions, config, warp, work_dir / "smart", cancel)
+    cover = _build_cover_chain(regions, config, {index: f"[{add_input(path)}:v]" for index, path in masks.items()})
     # Order: scale/pad to the canonical OUTPUT first (and mirror there), then cover +
     # caption in that space.
     # Everything the editor draws is output-space, so what it shows is what gets burned
@@ -557,4 +642,8 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
         ], _output_seconds(video, warp), report=report, cancel=cancel)
     finally:
         (work_dir / "bed_warped.flac").unlink(missing_ok=True)  # ~1 GB per hour of episode
-    return {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(burned), "gap_boost": gap_boost}
+        shutil.rmtree(work_dir / "smart", ignore_errors=True)  # masks: ~500 MB per hour per smart region
+    summary = {"covered": band is not None, "band": band, "caption_cy": caption_cy, "cues": len(burned), "gap_boost": gap_boost}
+    if smart:
+        summary["smart"] = smart
+    return summary

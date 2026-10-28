@@ -16,7 +16,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-COVER_MODES = ("blur", "darken", "solid", "frost", "pixelate", "gradient", "image")
+# "smart" blurs only while (and only around where) caption text shows — services.smart_cover
+COVER_MODES = ("blur", "darken", "solid", "frost", "pixelate", "gradient", "image", "smart")
 # Modes painted in a colour the user picks; "" in a region means this default.
 COLOR_DEFAULTS = {"solid": "#000000", "frost": "#ffffff", "gradient": "#000000"}
 _HEX_COLOR = re.compile(r"#[0-9a-f]{6}")
@@ -32,7 +33,7 @@ class CoverRegion:
     w: float
     h: float
     mode: str = "blur"        # one of COVER_MODES
-    strength: float = 1.0     # blur/darken/frost: radius scale; pixelate: block size; solid/gradient/image: 0..1 opacity
+    strength: float = 1.0     # blur/darken/frost/smart: radius scale; pixelate: block size; solid/gradient/image: 0..1 opacity
     label: str = ""           # "band" | "logo" | free text
     image: str = ""           # mode "image": the library file name (fitted inside the box)
     color: str = ""           # solid/frost/gradient: "#rrggbb"; "" = COLOR_DEFAULTS[mode]

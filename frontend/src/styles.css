@@ -2027,6 +2027,9 @@ select.lib-input { cursor: pointer; }
   background: #f0b23c1f;
   cursor: move;
 }
+.ov-box.smart {
+  border-style: dashed;
+}
 .ov-box.darken {
   border-color: #7fd1ff;
   background: #7fd1ff1f;
