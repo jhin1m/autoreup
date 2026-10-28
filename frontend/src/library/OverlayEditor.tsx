@@ -7,7 +7,7 @@ import type { WarpSegment } from "../util";
 
 const MODES: { id: string; label: string; hint: string }[] = [
   { id: "blur", label: "Làm mờ", hint: "Nhoè vùng này đi, vẫn thấy màu hình phía sau" },
-  { id: "smart", label: "Mờ thông minh", hint: "Chỉ nhoè quanh chữ, lúc chữ đang hiện — hết chữ thì hình sạch" },
+  { id: "smart", label: "Mờ thông minh", hint: "Chỉ che quanh chữ, lúc chữ đang hiện, cỡ theo từng câu, tô bằng màu xung quanh — hết chữ thì hình sạch" },
   { id: "darken", label: "Mờ tối", hint: "Nhoè rồi tối đi — hợp với chữ sáng màu" },
   { id: "frost", label: "Kính mờ", hint: "Nhoè dưới một lớp màu nhạt (mặc định trắng)" },
   { id: "pixelate", label: "Khảm ô vuông", hint: "Vỡ thành ô vuông lớn, như che mặt/biển số" },

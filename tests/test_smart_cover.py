@@ -11,7 +11,8 @@ from backend.app.pipeline.production import _hardsub_config
 from backend.app.services.audio import ffmpeg_available
 from backend.app.services.hardsub import _build_cover_chain, build_hardsub, render_overlay_frame
 from backend.app.services.overlay import CoverRegion, OverlayConfig
-from backend.app.services.smart_cover import SmartCoverConfig, _extent, _Run, _smooth, detect_text_spans, mask_png
+from backend.app.dubbing.ocr_subs import text_mask
+from backend.app.services.smart_cover import SmartCoverConfig, _extent, _frame_hits, _Run, _smooth, detect_text_spans, fade_margins, mask_png
 
 needs_ffmpeg = pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not installed")
 
@@ -38,7 +39,7 @@ def test_flicker_gaps_merge_short_runs_drop_and_rolls_pad():
     assert len(spans) == 1
     assert spans[0].start == pytest.approx(1.0 - config.pre_roll)
     assert spans[0].end == pytest.approx(3.0 + config.post_roll)
-    assert (spans[0].x0, spans[0].x1) == (35, 65)  # widened by half a box height each side
+    assert (spans[0].x0, spans[0].x1) == (38, 62)  # widened by a quarter box height each side
 
 
 def test_rolls_never_leave_the_video():
@@ -60,6 +61,55 @@ def test_a_short_clear_between_two_captions_is_bridged_so_the_blur_does_not_flic
     assert len(spans) == 2
 
 
+def test_back_to_back_captions_keep_their_own_widths_and_the_handover_covers_both():
+    config = SmartCoverConfig(x_pad_frac=0)
+    # a short caption, then straight away a long one: one detection run split in two
+    runs = [_run(10, 30, [(40, 60, 20)]), _run(30, 60, [(20, 80, 30)])]
+    spans = _smooth(runs, 100, 100, 10, config)
+    assert [(s.x0, s.x1) for s in spans] == [(40, 60), (20, 80), (20, 80)][:len(spans)]
+    assert (spans[0].start, spans[0].x0, spans[0].x1) == (pytest.approx(1.0 - config.pre_roll), 40, 60)
+    assert (spans[-1].x0, spans[-1].x1) == (20, 80) and spans[-1].end == pytest.approx(6.0 + config.post_roll)
+    # the long caption's cover starts with its own pre-roll, before the short one is gone
+    assert spans[0].end == pytest.approx(3.0 - config.pre_roll)
+    assert all(a.end == b.start for a, b in zip(spans, spans[1:]))  # never a gap in the cover
+    # the same width after a flicker gap is still one caption
+    same = _smooth([_run(10, 20, [(40, 60, 10)]), _run(22, 30, [(41, 61, 8)])], 100, 100, 10, config)
+    assert len(same) == 1
+
+
+def _caption_frame(caption: tuple[int, int] | None, watermark: bool = False, scenery: bool = False) -> np.ndarray:
+    """A 60x320 gray box: white glyph-like bars with a black outline at columns
+    ``caption``, a channel watermark at the right edge in the same rows, and/or sparse
+    bright-on-dark specks (cutlery, food) along the top and bottom."""
+    gray = np.full((60, 320), 110, dtype=np.uint8)
+
+    def text(x0: int, x1: int) -> None:
+        gray[16:44, x0:x1] = 0
+        for x in range(x0 + 3, x1 - 3, 9):
+            gray[19:41, x:x + 4] = 255
+
+    if caption:
+        text(*caption)
+    if watermark:
+        text(262, 318)
+    if scenery:
+        for x in range(4, 316, 23):
+            gray[2:5, x:x + 3] = 0
+            gray[3, x + 1] = 255
+            gray[55:58, x:x + 3] = 0
+            gray[56, x + 1] = 255
+    return gray
+
+
+def test_a_frame_counts_only_the_centred_caption_not_a_watermark_or_scenery():
+    config = SmartCoverConfig()
+    assert text_mask(_caption_frame(None, watermark=True)).sum() > config.min_text_h2 * 60 * 60  # it does look like text
+    assert _frame_hits(_caption_frame(None, watermark=True), config)[0] is False
+    has_text, cols = _frame_hits(_caption_frame((100, 190), watermark=True, scenery=True), config)
+    lit = np.nonzero(cols)[0]
+    assert has_text and lit.min() >= 95 and lit.max() <= 195
+
+
 def test_a_corner_watermark_does_not_stretch_the_caption_cover():
     config = SmartCoverConfig(x_pad_frac=0)
     cols = _run(0, 10, [(2, 20, 10), (40, 60, 10)]).cols  # watermark at the edge, caption in the middle
@@ -68,12 +118,27 @@ def test_a_corner_watermark_does_not_stretch_the_caption_cover():
     assert _extent(off_centre, 10, 100, 10, config) == (2, 20)
 
 
-def test_the_mask_is_white_over_the_caption_and_fades_at_the_edges():
-    mask = np.asarray(mask_png((20, 80), 100, 60))
-    assert mask[30, 50] == 255
-    assert mask[30, 2] == 0 and mask[30, 98] == 0
-    assert 0 < mask[30, 20] < 255  # feathered edge
+def test_the_mask_is_white_over_the_caption_and_fades_out_beyond_it_and_at_the_edges():
+    config = SmartCoverConfig()
+    mask = np.asarray(mask_png((80, 120), 200, 60, config)).astype(int)
+    assert mask[30, 80] == 255 and mask[30, 119] == 255  # the whole caption, fully covered
+    fade = config.fade_x_frac * 60
+    assert mask[30, int(80 - fade) - 1] == 0 and mask[30, int(120 + fade) + 1] == 0
+    row = mask[30, 120:int(120 + fade) + 1]
+    assert (np.diff(row) <= 0).all() and 0 < row[len(row) // 2] < 255  # a ramp, not a step
     assert not np.asarray(mask_png(None, 100, 60)).any()
+
+
+def test_the_cover_fades_out_past_the_box_above_and_below_but_covers_all_of_it():
+    config = SmartCoverConfig()
+    assert fade_margins(100, 60, 240, config) == (30, 30)
+    assert fade_margins(10, 60, 240, config) == (10, 30) and fade_margins(170, 60, 240, config) == (30, 10)  # the frame ends first
+    mask = np.asarray(mask_png((80, 120), 200, 60, config, margins=(30, 10))).astype(int)
+    assert mask.shape == (100, 200)
+    assert (mask[30:90, 100] == 255).all()  # every row of the box, fully covered
+    column = mask[:, 100]
+    assert column[0] < 20 and column[99] < 60 and 0 < column[15] < 255  # ramps outside it
+    assert (np.diff(column[:31]) >= 0).all() and (np.diff(column[89:]) <= 0).all()
 
 
 def test_plain_modes_keep_their_chain_and_a_smart_region_alpha_merges_through_its_mask():
@@ -84,6 +149,7 @@ def test_plain_modes_keep_their_chain_and_a_smart_region_alpha_merges_through_it
     assert plain.split(";[v1]")[0] == _build_cover_chain(regions[:1], config).split(";[v1]")[0]
     smart = _build_cover_chain(regions, config, {1: "[3:v]"})
     assert "[3:v]format=gray" in smart and "alphamerge" in smart and "noise=" in smart
+    assert "delogo=x=1:y=1:w=318:h=58" in smart  # filled from the box's border, not blurred
 
 
 def _settings(tmp_path) -> Settings:
@@ -211,16 +277,13 @@ def _caption_area(video: Path, frame: int, tmp_path: Path) -> np.ndarray:
 def test_the_first_frame_of_a_caption_is_already_covered(tmp_path):
     # first shown on frame 32 (1.0667 s at 30 fps): one source frame after a 10 fps
     # detection sample, between two ms-rounded mask timestamps — the cover's worst lag.
-    # Measured against a plain blur (the fully covered look): 0.15 s of pre-roll left a
-    # quarter of the caption showing (mean diff 16 vs ~5 of grain once fully covered).
+    # Covered = no caption-like pixels (bright next to a dark outline) left where it is.
     video = _caption_at(tmp_path, 1.066)
-    covered = {}
-    for mode in ("smart", "blur"):
-        out = tmp_path / f"{mode}.mp4"
-        build_hardsub(video, [], None, out, tmp_path / f"work_{mode}", _config(tmp_path, CoverRegion(x=0.0, y=0.7, w=1.0, h=0.25, mode=mode)))
-        covered[mode] = _caption_area(out, 32, tmp_path)
-    assert np.abs(_caption_area(video, 32, tmp_path) - covered["blur"]).mean() > 40  # the caption is there
-    assert np.abs(covered["smart"] - covered["blur"]).mean() < 8
+    out = tmp_path / "smart.mp4"
+    build_hardsub(video, [], None, out, tmp_path / "work", _config(tmp_path, SMART))
+    shown = text_mask(_caption_area(video, 32, tmp_path).astype(np.uint8)).sum()
+    assert shown > 400  # the caption is there
+    assert text_mask(_caption_area(out, 32, tmp_path).astype(np.uint8)).sum() < shown * 0.02
 
 
 @needs_ffmpeg
