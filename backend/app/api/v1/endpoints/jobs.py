@@ -125,6 +125,7 @@ class OverlayIn(BaseModel):
     gap_volume: float | None = Field(default=None, ge=0.0, le=1.0)
     captions: bool = True
     remove_music: bool | None = None
+    mirror: bool = False
 
 
 def _overlay_context(job_id: str):

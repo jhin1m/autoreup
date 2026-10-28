@@ -268,6 +268,7 @@ def render_overlay_frame(video: Path, output: Path, t: float, config: HardsubCon
     cover = _build_cover_chain(regions, config)
     filters = [part for part in (
         config.scale_filter,
+        "hflip" if _mirror_on(config) else "",
         f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
     ) if part] or ["null"]
     graph = f"[0:v]{','.join(filters)}[scaled];" + cover.replace("[0:v]", "[scaled]")
@@ -348,6 +349,14 @@ def _captions_on(config: HardsubConfig) -> bool:
     """False when the episode's overlay turned the Vietnamese caption off."""
     overlay = getattr(config, "overlay", None)
     return overlay is None or overlay.captions
+
+
+def _mirror_on(config: HardsubConfig) -> bool:
+    """True when the episode's overlay flips the picture left-right. The flip runs in
+    OUTPUT space before the covers (the editor shows the mirrored picture, so its boxes
+    sit on the mirrored frame); the caption and the user's images are not flipped."""
+    overlay = getattr(config, "overlay", None)
+    return overlay is not None and overlay.mirror
 
 
 def _cover_regions(band, config: HardsubConfig, out_width: int, out_height: int, geom: "OverlayGeometry | None" = None) -> list[tuple[int, int, int, int, str, float, str]]:
@@ -496,7 +505,8 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
 
     regions = _cover_regions(band, config, geometry.out_width, geometry.out_height, geometry)
     cover = _build_cover_chain(regions, config)
-    # Order: scale/pad to the canonical OUTPUT first, then cover + caption in that space.
+    # Order: scale/pad to the canonical OUTPUT first (and mirror there), then cover +
+    # caption in that space.
     # Everything the editor draws is output-space, so what it shows is what gets burned
     # (and a 4K source can no longer shrink the caption — measured 58px -> 29px before).
     # The stretch re-times frames, so the output needs a constant rate again: the
@@ -504,6 +514,7 @@ def build_hardsub(video: Path, cues: list[dict], voice_track: Path | None, outpu
     picture_filters = [part for part in (
         warp.setpts_filter() if warp else "",
         config.scale_filter or (f"fps={Fraction(src_fps).limit_denominator(1001)}" if warp else ""),
+        "hflip" if _mirror_on(config) else "",
         f"cas={config.sharpen:.2f}" if config.sharpen > 0 else "",
     ) if part] or ["null"]
     video_graph = f"[0:v]{','.join(picture_filters)}[scaled];" + cover.replace("[0:v]", "[scaled]") + f"[cov][1:v]overlay=0:0[vo]"

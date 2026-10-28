@@ -2278,6 +2278,9 @@ select.lib-input { cursor: pointer; }
   object-fit: contain;
   background: #000;
 }
+.ov-canvas video.mirrored {
+  transform: scaleX(-1);
+}
 .ov-source-area {
   position: absolute;
   border: 1px dashed #ffffff55;

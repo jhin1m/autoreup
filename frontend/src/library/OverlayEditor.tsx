@@ -17,6 +17,9 @@ const MODES: { id: string; label: string; hint: string }[] = [
 /** Must match services.overlay.COLOR_DEFAULTS: the colour a region paints when it names none. */
 const COLOR_DEFAULTS: Record<string, string> = { solid: "#000000", frost: "#ffffff", gradient: "#000000" };
 
+/** Modes drawn over the picture rather than hiding something in it (services.hardsub.PAINTED_MODES). */
+const PAINTED_MODES = ["image", "gradient"];
+
 /** Modes whose strength is an opacity (the rest scale the blur / block size). */
 const OPACITY_MODES = ["solid", "gradient", "image"];
 
@@ -351,6 +354,18 @@ export function OverlayEditor({
 
   const active = selected >= 0 && config ? config.cover[selected] : undefined;
   const captionsOn = config?.captions !== false;
+  const mirrored = config?.mirror === true;
+
+  /** Flip the picture. The covers hide things in the picture (a logo, the original
+   *  subtitle), which now sit on the other side, so they follow it; the user's images
+   *  and gradients are added on top and stay where they were placed. */
+  function setMirror(next: boolean) {
+    if (!config || next === mirrored) return;
+    const cover = config.cover.map((region) =>
+      PAINTED_MODES.includes(region.mode) ? region : { ...region, x: round4(1 - region.x - region.w) },
+    );
+    patch({ mirror: next, cover });
+  }
 
   async function previewFrame() {
     if (!config) return;
@@ -424,6 +439,7 @@ export function OverlayEditor({
             <video
               ref={videoRef}
               src={videoPath}
+              className={mirrored ? "mirrored" : undefined}
               playsInline
               preload="metadata"
               onLoadedMetadata={() => {
@@ -610,6 +626,22 @@ export function OverlayEditor({
                 </label>
               </div>
             ) : null}
+
+            <div className="ov-group">
+              <p className="mono tiny">Hình</p>
+              <div className="seg-toggle" role="group" aria-label="Lật hình">
+                <button className={mirrored ? "" : "on"} onClick={() => setMirror(false)}>
+                  Hình gốc
+                </button>
+                <button
+                  className={mirrored ? "on" : ""}
+                  onClick={() => setMirror(true)}
+                  title="Lật trái-phải như soi gương. Vùng che lật theo; phụ đề Việt và ảnh chèn giữ nguyên"
+                >
+                  Lật gương
+                </button>
+              </div>
+            </div>
 
             <div className="ov-group">
               <p className="mono tiny">Vùng che &amp; ảnh chèn ({config?.cover.length ?? 0})</p>

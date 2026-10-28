@@ -107,3 +107,24 @@ def test_a_render_with_captions_off_burns_no_text(tmp_path):
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "0.5", "-i", str(out), "-frames:v", "1", str(frame)], check=True)
     image = Image.open(frame).convert("RGB")
     assert max(max(image.getpixel((x, y))) for x in range(40, 280, 2) for y in range(100, 140, 2)) < 40
+
+
+def test_the_picture_is_not_mirrored_unless_asked():
+    assert OverlayConfig.from_json({}).mirror is False
+    assert OverlayConfig.from_json({"mirror": "yes"}).mirror is False
+    assert OverlayConfig.from_json(OverlayConfig(mirror=True).to_json()).mirror is True
+
+
+@needs_ffmpeg
+def test_a_mirrored_render_flips_the_picture_but_not_the_cover(tmp_path):
+    # red on the left half, blue on the right; a black box over the top-left corner
+    source = "color=c=red:s=320x240:d=1.5,drawbox=x=160:y=0:w=160:h=240:color=blue:t=fill"
+    video, frame = tmp_path / "v.mp4", tmp_path / "frame.png"
+    _video(video, source)
+    box = CoverRegion(x=0.0, y=0.0, w=0.25, h=0.25, mode="solid", color="#000000")
+    overlay = OverlayConfig(caption_mode="manual", caption_y=0.5, cover=[box], captions=False, mirror=True)
+    render_overlay_frame(video, frame, 0.5, _hardsub_config(_settings(tmp_path), overlay))
+    image = Image.open(frame).convert("RGB")
+    assert image.getpixel((80, 180))[2] > 200  # left is now blue
+    assert image.getpixel((240, 180))[0] > 200  # right is now red
+    assert max(image.getpixel((20, 20))) < 40  # the box stays where it was drawn

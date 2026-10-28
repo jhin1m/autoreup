@@ -69,6 +69,7 @@ class OverlayConfig:
     gap_volume: float | None = None  # original audio where nobody speaks (0-1); None = the app setting
     captions: bool = True  # burn the Vietnamese caption; off = covers and images only
     remove_music: bool | None = None  # strip the source's music from the bed; None = the app setting
+    mirror: bool = False  # flip the picture left-right (a mirror image); covers/captions/images are not flipped
 
     def band_region(self) -> CoverRegion | None:
         for region in self.cover:
@@ -98,6 +99,7 @@ class OverlayConfig:
             "gap_volume": _volume(self.gap_volume),
             "captions": bool(self.captions),
             "remove_music": None if self.remove_music is None else bool(self.remove_music),
+            "mirror": bool(self.mirror),
         }
 
     @classmethod
@@ -116,6 +118,7 @@ class OverlayConfig:
             gap_volume=_volume(data.get("gap_volume")),
             captions=data.get("captions") is not False,
             remove_music=None if data.get("remove_music") is None else bool(data["remove_music"]),
+            mirror=data.get("mirror") is True,
         )
 
 

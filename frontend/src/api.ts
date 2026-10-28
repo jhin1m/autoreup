@@ -331,6 +331,8 @@ export type OverlayConfig = {
   captions?: boolean;
   /** strip the source's music from the bed under the dub; null = the app setting (frame.remove_music) */
   remove_music?: boolean | null;
+  /** flip the picture left-right (mirror image); covers, caption and images are not flipped */
+  mirror?: boolean;
 };
 
 export type BitratePreset = { value: string; label: string; hint: string; vmaf: number };
